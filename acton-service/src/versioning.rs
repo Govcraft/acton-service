@@ -468,25 +468,24 @@ impl VersionedApiBuilder {
     /// plus automatic health and readiness endpoints at /health and /ready.
     /// This is the ONLY public way to create `VersionedRoutes`.
     ///
-    /// The health and readiness endpoints are automatically included and cannot be disabled.
+    /// Returns VersionedRoutes::WithState since health handlers require AppState.
     pub fn build_routes(self) -> crate::service_builder::VersionedRoutes {
-        use axum::http::StatusCode;
-        use axum::response::IntoResponse;
         use axum::routing::get;
+        use axum::Router;
 
-        async fn health() -> impl IntoResponse {
-            (StatusCode::OK, "healthy")
-        }
+        // Get versioned routes (Router<()>)
+        let versioned_router = self.build();
 
-        async fn readiness() -> impl IntoResponse {
-            (StatusCode::OK, "ready")
-        }
+        // Create a new Router<AppState> and add health routes
+        let health_router: Router<crate::state::AppState> = Router::new()
+            .route("/health", get(crate::health::health))
+            .route("/ready", get(crate::health::readiness));
 
-        let router = self.build()
-            .route("/health", get(health))
-            .route("/ready", get(readiness));
+        // Use fallback_service to include the versioned routes
+        // This preserves both the health routes and the versioned API routes
+        let router_with_health = health_router.fallback_service(versioned_router);
 
-        crate::service_builder::VersionedRoutes::from_router(router)
+        crate::service_builder::VersionedRoutes::from_router_with_state(router_with_health)
     }
 
     /// Get the number of versions registered
