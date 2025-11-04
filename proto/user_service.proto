@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package user;
+
+// User service for managing users
+service UserService {
+  // Create a new user
+  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+
+  // Get a user by ID
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+
+  // List all users
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+}
+
+// Request to create a user
+message CreateUserRequest {
+  string name = 1;
+  string email = 2;
+}
+
+// Response after creating a user
+message CreateUserResponse {
+  User user = 1;
+}
+
+// Request to get a user by ID
+message GetUserRequest {
+  string user_id = 1;
+}
+
+// Response containing a user
+message GetUserResponse {
+  User user = 1;
+}
+
+// Request to list users
+message ListUsersRequest {
+  int32 limit = 1;
+  int32 offset = 2;
+}
+
+// Response containing list of users
+message ListUsersResponse {
+  repeated User users = 1;
+  int32 total = 2;
+}
+
+// User model
+message User {
+  string id = 1;
+  string name = 2;
+  string email = 3;
+  string created_at = 4;
+}
