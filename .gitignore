@@ -1,0 +1,47 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# Debug and release builds
+debug/
+release/
+
+# Ignore all hidden directories (except .git which git handles specially)
+.*/
+
+# But allow specific hidden files if needed (uncomment as needed)
+# !.github/
+# !.vscode/
+
+# Ignore all markdown files
+*.md
+
+# Exception: Allow specific markdown files
+!README.md
+# Add more exceptions here as needed, for example:
+# !CONTRIBUTING.md
+# !LICENSE.md
+
+# IDE and Editor files
+*.swp
+*.swo
+*~
+.DS_Store
+.idea/
+*.iml
+
+# Configuration files that might contain secrets
+config.toml
+*.local.toml
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini

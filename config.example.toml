@@ -1,0 +1,145 @@
+# Example configuration file for acton-service microservices
+# Copy this to config.toml and customize for your service
+
+[service]
+name = "my-service"
+port = 8080
+log_level = "info"  # trace, debug, info, warn, error
+timeout_secs = 30
+environment = "dev"  # dev, staging, production
+
+[jwt]
+public_key_path = "./keys/jwt-public.pem"
+algorithm = "RS256"  # RS256, ES256, HS256
+issuer = "https://auth.mydomain.com"
+audience = "api.mydomain.com"
+
+[rate_limit]
+# Redis-based global rate limiting
+per_user_rpm = 200      # Requests per minute per user
+per_client_rpm = 1000   # Requests per minute per API client
+window_secs = 60
+
+# ============================================================================
+# MIDDLEWARE CONFIGURATION
+# ============================================================================
+
+[middleware]
+# Request body size limit (in MB)
+body_limit_mb = 10
+
+# Enable panic recovery (convert panics to 500 responses)
+catch_panic = true
+
+# Enable response compression (gzip, br, deflate, zstd)
+compression = true
+
+# CORS mode: "permissive", "restrictive", or "disabled"
+cors_mode = "permissive"
+
+# ----------------------------------------------------------------------------
+# Request Tracking (Request IDs, Header Propagation, Distributed Tracing)
+# ----------------------------------------------------------------------------
+[middleware.request_tracking]
+# Generate and propagate request IDs for distributed tracing
+request_id_enabled = true
+request_id_header = "x-request-id"
+
+# Propagate headers between microservices (x-request-id, x-trace-id, etc.)
+propagate_headers = true
+
+# Mask sensitive headers in logs (authorization, cookie, x-api-key, etc.)
+mask_sensitive_headers = true
+
+# ----------------------------------------------------------------------------
+# Resilience (Circuit Breaker, Retry, Bulkhead)
+# Requires feature: resilience
+# ----------------------------------------------------------------------------
+[middleware.resilience]
+# Circuit breaker configuration
+circuit_breaker_enabled = true
+circuit_breaker_threshold = 0.5      # 50% failure rate opens circuit
+circuit_breaker_min_requests = 10    # Minimum requests before calculating
+circuit_breaker_wait_secs = 30       # Wait before attempting to close
+
+# Retry configuration
+retry_enabled = true
+retry_max_attempts = 3
+retry_base_delay_ms = 100           # Initial delay (exponential backoff)
+retry_max_delay_ms = 10000          # Maximum delay (10 seconds)
+
+# Bulkhead configuration (concurrency limiting)
+bulkhead_enabled = true
+bulkhead_max_concurrent = 100       # Max concurrent requests
+bulkhead_max_queued = 200           # Max queued requests
+
+# ----------------------------------------------------------------------------
+# HTTP Metrics (OpenTelemetry)
+# Requires feature: otel-metrics
+# ----------------------------------------------------------------------------
+[middleware.metrics]
+enabled = true
+
+# Include dimensions in metrics
+include_path = true
+include_method = true
+include_status = true
+
+# Latency histogram buckets (in milliseconds)
+latency_buckets_ms = [5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0, 10000.0]
+
+# ----------------------------------------------------------------------------
+# Local Rate Limiting (Governor)
+# Requires feature: governor
+# In-memory rate limiting as fallback when Redis is unavailable
+# ----------------------------------------------------------------------------
+[middleware.governor]
+enabled = true
+requests_per_period = 100    # Max requests per period
+period_secs = 60             # Time period in seconds (60 = per minute)
+burst_size = 10              # Allow temporary bursts
+
+# ============================================================================
+# DATABASE CONFIGURATION (Optional)
+# ============================================================================
+[database]
+url = "postgres://user:password@ysql.ysql-cluster.svc.cluster.local:5433/users_db"
+max_connections = 50
+min_connections = 5
+connection_timeout_secs = 10
+max_retries = 5
+retry_delay_secs = 2
+optional = false      # Service can start without DB if true
+lazy_init = true      # Initialize connection in background
+
+# ============================================================================
+# REDIS CONFIGURATION (Optional)
+# ============================================================================
+[redis]
+url = "redis://redis.redis-cluster.svc.cluster.local:6379"
+max_connections = 20
+connection_timeout_secs = 10
+max_retries = 5
+retry_delay_secs = 2
+optional = false      # Service can start without Redis if true
+lazy_init = true      # Initialize connection in background
+
+# ============================================================================
+# NATS CONFIGURATION (Optional)
+# ============================================================================
+[nats]
+url = "nats://nats.nats-cluster.svc.cluster.local:4222"
+name = "my-service"
+max_reconnects = 10
+max_retries = 5
+retry_delay_secs = 2
+optional = false      # Service can start without NATS if true
+lazy_init = true      # Initialize connection in background
+
+# ============================================================================
+# OPENTELEMETRY CONFIGURATION (Optional)
+# ============================================================================
+[otlp]
+endpoint = "http://otel-collector:4317"
+service_name = "my-service"
+enabled = true
