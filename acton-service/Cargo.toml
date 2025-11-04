@@ -90,3 +90,13 @@ otel-metrics = ["dep:tower-otel-http-metrics", "observability"]
 governor = ["dep:tower_governor"]
 openapi = ["dep:utoipa", "dep:utoipa-swagger-ui"]
 full = ["http", "grpc", "database", "cache", "events", "observability", "resilience", "otel-metrics", "governor", "openapi"]
+
+[[example]]
+name = "simple-api"
+path = "examples/simple-api.rs"
+required-features = ["http"]
+
+[[example]]
+name = "users-api"
+path = "examples/users-api.rs"
+required-features = ["http"]

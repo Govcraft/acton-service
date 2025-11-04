@@ -1,10 +1,8 @@
 [workspace]
 members = [
-    "acton-service",
-    "examples/users-api",
-    "examples/backend-service",
-    "examples/api-gateway",
+    "acton-service"
 ]
+default-members = ["acton-service"]
 resolver = "2"
 
 [workspace.package]

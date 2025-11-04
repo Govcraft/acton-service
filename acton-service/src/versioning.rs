@@ -464,13 +464,29 @@ impl VersionedApiBuilder {
 
     /// Build versioned routes (opaque VersionedRoutes type)
     ///
-    /// This creates a `VersionedRoutes` with all your versioned business routes.
+    /// This creates a `VersionedRoutes` with all your versioned business routes
+    /// plus automatic health and readiness endpoints at /health and /ready.
     /// This is the ONLY public way to create `VersionedRoutes`.
     ///
-    /// Use with ServiceBuilder for automatic health/readiness endpoints,
-    /// or with manual Router construction where you add your own.
+    /// The health and readiness endpoints are automatically included and cannot be disabled.
     pub fn build_routes(self) -> crate::service_builder::VersionedRoutes {
-        crate::service_builder::VersionedRoutes::from_router(self.build())
+        use axum::http::StatusCode;
+        use axum::response::IntoResponse;
+        use axum::routing::get;
+
+        async fn health() -> impl IntoResponse {
+            (StatusCode::OK, "healthy")
+        }
+
+        async fn readiness() -> impl IntoResponse {
+            (StatusCode::OK, "ready")
+        }
+
+        let router = self.build()
+            .route("/health", get(health))
+            .route("/ready", get(readiness));
+
+        crate::service_builder::VersionedRoutes::from_router(router)
     }
 
     /// Get the number of versions registered

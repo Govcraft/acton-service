@@ -144,15 +144,19 @@ impl ServiceBuilder {
     }
     /// Build the service
     ///
+    /// Automatically:
+    /// - Loads configuration (Config::load() or uses provided/default)
+    /// - Initializes tracing with the loaded config
+    ///
     /// Uses defaults for any fields not set:
-    /// - config: Config::default()
+    /// - config: Config::load() (falls back to Config::default() if load fails)
     /// - routes: VersionedRoutes::default() (health + readiness only)
     /// - state: AppState::default()
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// // Minimal - uses all defaults
+    /// // Minimal - loads config and initializes tracing automatically
     /// let service = ServiceBuilder::new().build();
     ///
     /// // With custom routes
@@ -168,7 +172,19 @@ impl ServiceBuilder {
     ///     .build();
     /// ```
     pub fn build(self) -> ActonService {
-        let config = self.config.unwrap_or_default();
+        // Load config if not provided
+        let config = self.config.unwrap_or_else(|| {
+            Config::load().unwrap_or_else(|e| {
+                eprintln!("Warning: Failed to load config: {}, using defaults", e);
+                Config::default()
+            })
+        });
+
+        // Initialize tracing with the loaded config
+        if let Err(e) = crate::observability::init_tracing(&config) {
+            eprintln!("Warning: Failed to initialize tracing: {}", e);
+        }
+
         let routes = self.routes.unwrap_or_default();
         let _state = self.state.unwrap_or_default();  // State not needed since routes are stateless
 
