@@ -1,0 +1,92 @@
+[package]
+name = "acton-service"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Production-ready Rust microservice framework with dual-protocol support (HTTP + gRPC)"
+
+[dependencies]
+# Async runtime
+tokio = { workspace = true }
+
+# HTTP framework
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+
+# Tower resilience and middleware (optional)
+tower-resilience = { workspace = true, optional = true }
+tower-otel-http-metrics = { workspace = true, optional = true }
+tower_governor = { workspace = true, optional = true }
+
+# gRPC framework (optional)
+tonic = { workspace = true, optional = true }
+prost = { workspace = true, optional = true }
+
+# Database (optional)
+sqlx = { workspace = true, optional = true }
+
+# Redis (optional)
+redis = { workspace = true, optional = true }
+deadpool-redis = { workspace = true, optional = true }
+
+# NATS (optional)
+async-nats = { workspace = true, optional = true }
+
+# JWT
+jsonwebtoken = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Configuration
+figment = { workspace = true }
+
+# Tracing
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+opentelemetry = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Time
+chrono = { workspace = true }
+
+# UUID
+uuid = { workspace = true }
+
+# HTTP client
+reqwest = { workspace = true }
+
+# Async utilities
+futures = { workspace = true }
+async-trait = { workspace = true }
+
+# HTTP types
+http = { workspace = true }
+
+# Other dependencies
+xdg = "3.0.0"
+utoipa = { version = "5.4.0", features = ["axum_extras"], optional = true }
+utoipa-swagger-ui = { version = "9.0.2", features = ["axum"], optional = true }
+
+[features]
+default = ["http", "observability"]
+http = []
+grpc = ["dep:tonic", "dep:prost"]
+database = ["dep:sqlx"]
+cache = ["dep:redis", "dep:deadpool-redis"]
+events = ["dep:async-nats"]
+observability = ["dep:opentelemetry", "dep:opentelemetry-otlp", "dep:opentelemetry_sdk", "dep:tracing-opentelemetry"]
+resilience = ["dep:tower-resilience"]
+otel-metrics = ["dep:tower-otel-http-metrics", "observability"]
+governor = ["dep:tower_governor"]
+openapi = ["dep:utoipa", "dep:utoipa-swagger-ui"]
+full = ["http", "grpc", "database", "cache", "events", "observability", "resilience", "otel-metrics", "governor", "openapi"]
