@@ -9,6 +9,7 @@ description = "Production-ready Rust microservice framework with dual-protocol s
 [dependencies]
 # Async runtime
 tokio = { workspace = true }
+tokio-stream = { workspace = true, optional = true }
 
 # HTTP framework
 axum = { workspace = true }
@@ -23,6 +24,7 @@ tower_governor = { workspace = true, optional = true }
 # gRPC framework (optional)
 tonic = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
+tonic-prost = { workspace = true, optional = true }
 
 # Database (optional)
 sqlx = { workspace = true, optional = true }
@@ -80,7 +82,7 @@ utoipa-swagger-ui = { version = "9.0.2", features = ["axum"], optional = true }
 [features]
 default = ["http", "observability"]
 http = []
-grpc = ["dep:tonic", "dep:prost"]
+grpc = ["dep:tonic", "dep:prost", "dep:tonic-prost", "dep:tokio-stream"]
 database = ["dep:sqlx"]
 cache = ["dep:redis", "dep:deadpool-redis"]
 events = ["dep:async-nats"]

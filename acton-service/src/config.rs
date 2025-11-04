@@ -48,6 +48,10 @@ pub struct Config {
     /// OpenTelemetry configuration (optional)
     #[serde(default)]
     pub otlp: Option<OtlpConfig>,
+
+    /// gRPC configuration (optional)
+    #[serde(default)]
+    pub grpc: Option<GrpcConfig>,
 }
 
 /// Service-level configuration
@@ -218,6 +222,68 @@ pub struct OtlpConfig {
     /// Enable tracing
     #[serde(default = "default_true")]
     pub enabled: bool,
+}
+
+/// gRPC server configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GrpcConfig {
+    /// Enable gRPC server
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Use separate port for gRPC (if false, shares port with HTTP)
+    #[serde(default = "default_false")]
+    pub use_separate_port: bool,
+
+    /// gRPC port (only used if use_separate_port is true)
+    #[serde(default = "default_grpc_port")]
+    pub port: u16,
+
+    /// Enable gRPC reflection service
+    #[serde(default = "default_true")]
+    pub reflection_enabled: bool,
+
+    /// Enable gRPC health check service
+    #[serde(default = "default_true")]
+    pub health_check_enabled: bool,
+
+    /// Maximum message size in MB
+    #[serde(default = "default_grpc_max_message_mb")]
+    pub max_message_size_mb: usize,
+
+    /// Connection timeout in seconds
+    #[serde(default = "default_connection_timeout")]
+    pub connection_timeout_secs: u64,
+
+    /// Request timeout in seconds
+    #[serde(default = "default_timeout")]
+    pub timeout_secs: u64,
+}
+
+impl GrpcConfig {
+    /// Get the effective port (either separate port or HTTP port)
+    pub fn effective_port(&self, http_port: u16) -> u16 {
+        if self.use_separate_port {
+            self.port
+        } else {
+            http_port
+        }
+    }
+
+    /// Get max message size in bytes
+    pub fn max_message_size_bytes(&self) -> usize {
+        self.max_message_size_mb * 1024 * 1024
+    }
+
+    /// Get connection timeout as Duration
+    pub fn connection_timeout(&self) -> Duration {
+        Duration::from_secs(self.connection_timeout_secs)
+    }
+
+    /// Get request timeout as Duration
+    pub fn timeout(&self) -> Duration {
+        Duration::from_secs(self.timeout_secs)
+    }
 }
 
 /// Middleware configuration (all optional, feature-gated)
@@ -561,6 +627,15 @@ fn default_governor_burst() -> u32 {
     10
 }
 
+// gRPC default functions
+fn default_grpc_port() -> u16 {
+    9090
+}
+
+fn default_grpc_max_message_mb() -> usize {
+    4 // 4 MB
+}
+
 impl Config {
     /// Load configuration from all sources
     ///
@@ -732,6 +807,7 @@ impl Default for Config {
             redis: None,
             nats: None,
             otlp: None,
+            grpc: None,
         }
     }
 }
