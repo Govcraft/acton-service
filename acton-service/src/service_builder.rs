@@ -49,48 +49,40 @@ use axum::Router;
 
 /// Opaque wrapper around versioned routes with batteries-included health/readiness
 ///
-/// This type can ONLY be created by `VersionedApiBuilder::build_routes_with_health()`.
-/// It cannot be constructed manually, ensuring all routes:
-/// - Are versioned
-/// - Include health and readiness endpoints
+/// This type can ONLY be created by `VersionedApiBuilder::build_routes()`.
+/// It cannot be constructed manually, ensuring all routes are versioned.
+///
+/// Uses an enum to support both stateless routes (Router<()>) and stateful routes (Router<AppState>)
 #[derive(Debug)]
-pub struct VersionedRoutes {
-    pub(crate) router: Router,
+pub enum VersionedRoutes {
+    /// Routes without state (typical versioned API routes)
+    WithoutState(Router<()>),
+    /// Routes with AppState (includes health/readiness endpoints)
+    WithState(Router<AppState>),
 }
 
 impl VersionedRoutes {
-    /// Create from a router (crate-private, only accessible to VersionedApiBuilder)
-    pub(crate) fn from_router(router: Router) -> Self {
-        Self { router }
+    /// Create from a stateless router (crate-private, only accessible to VersionedApiBuilder)
+    pub(crate) fn from_router(router: Router<()>) -> Self {
+        Self::WithoutState(router)
     }
-}
 
-impl From<VersionedRoutes> for Router {
-    fn from(routes: VersionedRoutes) -> Self {
-        routes.router
+    /// Create from a stateful router (crate-private)
+    pub(crate) fn from_router_with_state(router: Router<AppState>) -> Self {
+        Self::WithState(router)
     }
 }
 
 impl Default for VersionedRoutes {
-    /// Default routes with only health and readiness endpoints
+    /// Default routes with health and readiness endpoints
     fn default() -> Self {
-        use axum::http::StatusCode;
-        use axum::response::IntoResponse;
         use axum::routing::get;
 
-        async fn health() -> impl IntoResponse {
-            (StatusCode::OK, "healthy")
-        }
+        let health_router: Router<AppState> = Router::new()
+            .route("/health", get(crate::health::health))
+            .route("/ready", get(crate::health::readiness));
 
-        async fn readiness() -> impl IntoResponse {
-            (StatusCode::OK, "ready")
-        }
-
-        Self {
-            router: Router::new()
-                .route("/health", get(health))
-                .route("/ready", get(readiness)),
-        }
+        Self::WithState(health_router)
     }
 }
 
@@ -102,7 +94,7 @@ impl Default for VersionedRoutes {
 /// - routes: Uses `VersionedRoutes::default()` (health + readiness only)
 /// - state: Uses `AppState::default()`
 ///
-/// Health and readiness endpoints are ALWAYS included (part of VersionedRoutes).
+/// Health and readiness endpoints are ALWAYS included (automatically added by ServiceBuilder).
 pub struct ServiceBuilder {
     config: Option<Config>,
     routes: Option<VersionedRoutes>,
@@ -128,10 +120,10 @@ impl ServiceBuilder {
     /// Add versioned routes to the service
     ///
     /// **IMPORTANT**: This method ONLY accepts `VersionedRoutes`, which can
-    /// only be created by `VersionedApiBuilder::build_routes_with_health()`.
+    /// only be created by `VersionedApiBuilder::build_routes()`.
     /// This makes it impossible to add unversioned routes.
     ///
-    /// If not provided, defaults to VersionedRoutes::default() (health + readiness only).
+    /// If not provided, defaults to VersionedRoutes::default() (empty routes).
     pub fn with_routes(mut self, routes: VersionedRoutes) -> Self {
         self.routes = Some(routes);
         self
@@ -186,10 +178,26 @@ impl ServiceBuilder {
         }
 
         let routes = self.routes.unwrap_or_default();
-        let _state = self.state.unwrap_or_default();  // State not needed since routes are stateless
+        let state = self.state.unwrap_or_default();
 
-        // VersionedRoutes already includes health and readiness endpoints
-        let app = Router::new().merge(routes);  // Uses From<VersionedRoutes> for Router
+        // Handle both types of versioned routes
+        let app = match routes {
+            VersionedRoutes::WithState(router) => {
+                // Health routes already added, just attach state
+                router.with_state(state)
+            }
+            VersionedRoutes::WithoutState(router) => {
+                // Add health routes and attach state
+                use axum::routing::get;
+                let health_router: Router<AppState> = Router::new()
+                    .route("/health", get(crate::health::health))
+                    .route("/ready", get(crate::health::readiness));
+
+                // Use fallback_service to include the versioned routes
+                let router_with_health = health_router.fallback_service(router);
+                router_with_health.with_state(state)
+            }
+        };
 
         let listener_addr = std::net::SocketAddr::from(([0, 0, 0, 0], config.service.port));
 
