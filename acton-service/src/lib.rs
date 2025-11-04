@@ -110,7 +110,14 @@ pub mod prelude {
     pub use crate::openapi::{OpenApiBuilder, RapiDoc, ReDoc, SwaggerUI};
 
     #[cfg(feature = "grpc")]
-    pub use crate::grpc::{GrpcServer, HealthService, Request, Response, Status, Code};
+    pub use crate::grpc::{
+        GrpcServer, HealthService, Request, Response, Status, Code,
+        request_id_interceptor, jwt_auth_interceptor, RequestIdExtension,
+        add_request_id_to_response, GrpcTracingLayer, LoggingLayer,
+    };
+
+    #[cfg(all(feature = "grpc", feature = "governor"))]
+    pub use crate::grpc::GrpcRateLimitLayer;
 
     pub use axum::{
         extract::{Path, Query, State},
