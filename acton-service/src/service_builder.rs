@@ -18,9 +18,6 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
-//!     let config = Config::load()?;
-//!     let state = AppState::builder().build().await?;
-//!
 //!     // Create versioned routes (ONLY way to create routes)
 //!     let routes = VersionedApiBuilder::new()
 //!         .with_base_path("/api")
@@ -30,13 +27,12 @@
 //!         .build_routes();  // Returns VersionedRoutes (not Router!)
 //!
 //!     // Build service with type-safe builder
+//!     // Config loading and tracing initialization happen automatically
 //!     let service = ServiceBuilder::new()
-//!         .with_config(config)
 //!         .with_routes(routes)  // Only accepts VersionedRoutes
-//!         .with_state(state)
-//!         .build();  // Returns ActonService (not Router!)
+//!         .build();  // Automatically loads config and initializes tracing
 //!
-//!     // Health and readiness are automatically included
+//!     // Health and readiness endpoints are automatically included
 //!     service.serve().await?;
 //!
 //!     Ok(())
@@ -136,32 +132,36 @@ impl ServiceBuilder {
     }
     /// Build the service
     ///
-    /// Automatically:
-    /// - Loads configuration (Config::load() or uses provided/default)
-    /// - Initializes tracing with the loaded config
+    /// Automatically handles:
+    /// - **Config loading**: Calls `Config::load()` if not provided (falls back to `Config::default()` on error)
+    /// - **Tracing initialization**: Initializes tracing with the loaded config
+    /// - **Health endpoints**: Always includes `/health` and `/ready` endpoints
     ///
     /// Uses defaults for any fields not set:
-    /// - config: Config::load() (falls back to Config::default() if load fails)
-    /// - routes: VersionedRoutes::default() (health + readiness only)
-    /// - state: AppState::default()
+    /// - config: `Config::load()` → `Config::default()` if load fails
+    /// - routes: `VersionedRoutes::default()` (health + readiness only)
+    /// - state: `AppState::default()`
     ///
-    /// # Example
+    /// # Examples
     ///
     /// ```rust,ignore
-    /// // Minimal - loads config and initializes tracing automatically
+    /// // Minimal - everything is automatic
     /// let service = ServiceBuilder::new().build();
+    /// // → Loads config, initializes tracing, adds health endpoints
     ///
-    /// // With custom routes
+    /// // With custom routes (most common)
     /// let service = ServiceBuilder::new()
     ///     .with_routes(versioned_routes)
     ///     .build();
+    /// // → Loads config, initializes tracing, adds your routes + health endpoints
     ///
-    /// // Fully configured
+    /// // Override config (e.g., for testing)
+    /// let custom_config = Config { /* ... */ };
     /// let service = ServiceBuilder::new()
-    ///     .with_config(config)
+    ///     .with_config(custom_config)
     ///     .with_routes(routes)
-    ///     .with_state(state)
     ///     .build();
+    /// // → Uses your config, initializes tracing, adds routes + health endpoints
     /// ```
     pub fn build(self) -> ActonService {
         // Load config if not provided
