@@ -46,6 +46,22 @@ impl Default for AppState {
 }
 
 impl AppState {
+    /// Create a new AppState with the given configuration
+    ///
+    /// This creates an AppState with no connection pools initialized.
+    /// For lazy initialization of connections, use `AppStateBuilder` instead.
+    pub fn new(config: Config) -> Self {
+        Self {
+            config: Arc::new(config),
+            #[cfg(feature = "database")]
+            db_pool: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "cache")]
+            redis_pool: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "events")]
+            nats_client: Arc::new(RwLock::new(None)),
+        }
+    }
+
     /// Create a new builder for AppState
     pub fn builder() -> AppStateBuilder {
         AppStateBuilder::new()

@@ -178,7 +178,7 @@ impl ServiceBuilder {
         }
 
         let routes = self.routes.unwrap_or_default();
-        let state = self.state.unwrap_or_default();
+        let state = self.state.unwrap_or_else(|| AppState::new(config.clone()));
 
         // Handle both types of versioned routes
         let app = match routes {
