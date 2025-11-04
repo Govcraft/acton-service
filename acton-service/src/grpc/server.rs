@@ -2,9 +2,11 @@
 
 use crate::config::GrpcConfig;
 use crate::error::Result;
+use crate::state::AppState;
 use std::net::SocketAddr;
 use tonic::transport::Server;
 use tonic::server::NamedService;
+// Reflection types are not used directly, we use the Builder API
 
 /// gRPC server builder
 ///
@@ -46,8 +48,12 @@ impl GrpcServer {
 /// Builder for gRPC services
 ///
 /// Allows adding multiple gRPC services that will be served together.
+/// Supports optional health check and reflection services.
 pub struct GrpcServicesBuilder {
     router: Option<tonic::transport::server::Router>,
+    reflection_enabled: bool,
+    health_enabled: bool,
+    file_descriptor_sets: Vec<&'static [u8]>,
 }
 
 impl GrpcServicesBuilder {
@@ -55,7 +61,57 @@ impl GrpcServicesBuilder {
     pub fn new() -> Self {
         Self {
             router: None,
+            reflection_enabled: false,
+            health_enabled: false,
+            file_descriptor_sets: Vec::new(),
         }
+    }
+
+    /// Enable gRPC reflection service
+    ///
+    /// This allows tools like `grpcurl` and Postman to discover available services.
+    /// Requires that file descriptor sets are registered using `add_file_descriptor_set()`.
+    ///
+    /// # Example
+    /// ```ignore
+    /// use tonic::include_file_descriptor_set;
+    ///
+    /// const FILE_DESCRIPTOR_SET: &[u8] = include_file_descriptor_set!("my_service_descriptor");
+    ///
+    /// let services = GrpcServicesBuilder::new()
+    ///     .with_reflection()
+    ///     .add_file_descriptor_set(FILE_DESCRIPTOR_SET)
+    ///     .add_service(MyServiceServer::new(my_service))
+    ///     .build();
+    /// ```
+    pub fn with_reflection(mut self) -> Self {
+        self.reflection_enabled = true;
+        self
+    }
+
+    /// Enable gRPC health check service
+    ///
+    /// Adds the standard gRPC health checking protocol to the server.
+    /// The health service will check all configured dependencies (database, Redis, NATS).
+    pub fn with_health(mut self) -> Self {
+        self.health_enabled = true;
+        self
+    }
+
+    /// Add a file descriptor set for reflection
+    ///
+    /// This is required when reflection is enabled. File descriptor sets are
+    /// generated at build time using `tonic-build`.
+    ///
+    /// # Example
+    /// ```ignore
+    /// const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("my_service_descriptor");
+    ///
+    /// builder.add_file_descriptor_set(FILE_DESCRIPTOR_SET);
+    /// ```
+    pub fn add_file_descriptor_set(mut self, file_descriptor_set: &'static [u8]) -> Self {
+        self.file_descriptor_sets.push(file_descriptor_set);
+        self
     }
 
     /// Add a gRPC service to the builder
@@ -86,8 +142,58 @@ impl GrpcServicesBuilder {
 
     /// Build the router
     ///
-    /// Returns None if no services were added
-    pub fn build(self) -> Option<tonic::transport::server::Router> {
+    /// Returns None if no services were added.
+    /// If health or reflection are enabled, they will be added automatically.
+    ///
+    /// # Arguments
+    /// * `state` - Optional AppState, required if health checks are enabled
+    pub fn build(mut self, state: Option<AppState>) -> Option<tonic::transport::server::Router> {
+        // Add health service if enabled
+        if self.health_enabled {
+            if let Some(app_state) = state.clone() {
+                let health_service = crate::grpc::HealthService::new(app_state);
+                let health_server = tonic_health::pb::health_server::HealthServer::new(health_service);
+
+                self.router = Some(match self.router {
+                    Some(router) => router.add_service(health_server),
+                    None => Server::builder().add_service(health_server),
+                });
+
+                tracing::info!("gRPC health service enabled");
+            } else {
+                tracing::warn!("Health service enabled but no AppState provided, skipping health service");
+            }
+        }
+
+        // Add reflection service if enabled
+        if self.reflection_enabled {
+            if self.file_descriptor_sets.is_empty() {
+                tracing::warn!("Reflection enabled but no file descriptor sets registered. Use add_file_descriptor_set() to register services.");
+            } else {
+                // Build the reflection service with all registered file descriptor sets
+                let mut reflection_builder = tonic_reflection::server::Builder::configure();
+
+                for file_descriptor_set in self.file_descriptor_sets {
+                    reflection_builder = reflection_builder
+                        .register_encoded_file_descriptor_set(file_descriptor_set);
+                }
+
+                match reflection_builder.build_v1() {
+                    Ok(reflection_service) => {
+                        self.router = Some(match self.router {
+                            Some(router) => router.add_service(reflection_service),
+                            None => Server::builder().add_service(reflection_service),
+                        });
+
+                        tracing::info!("gRPC reflection service enabled");
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to build reflection service: {}", e);
+                    }
+                }
+            }
+        }
+
         self.router
     }
 }

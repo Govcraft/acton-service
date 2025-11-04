@@ -61,11 +61,12 @@ pub fn add_request_id_to_response<B>(
 /// Requires a JwtAuth instance for token validation.
 ///
 /// # Example
-/// ```no_run
+/// ```ignore
 /// use acton_service::grpc::interceptors::jwt_auth_interceptor;
 /// use acton_service::middleware::JwtAuth;
+/// use std::sync::Arc;
 ///
-/// let jwt_auth = JwtAuth::new(&config.jwt)?;
+/// let jwt_auth = Arc::new(JwtAuth::new(&config.jwt)?);
 /// let interceptor = jwt_auth_interceptor(jwt_auth);
 ///
 /// let service = MyServiceServer::with_interceptor(service_impl, interceptor);
