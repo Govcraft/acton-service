@@ -1,7 +1,20 @@
-//! Simple Versioned API Example - Type-Safe Enforcement
+//! Simple Versioned API Example - Zero Configuration
 //!
-//! This example demonstrates the IMPOSSIBLE-to-bypass versioning enforcement.
-//! Try to add an unversioned route - the compiler won't let you!
+//! This example demonstrates:
+//! - IMPOSSIBLE-to-bypass versioning enforcement (type-safe at compile time)
+//! - Automatic configuration loading from environment/files
+//! - Automatic tracing/logging initialization
+//! - Automatic health and readiness endpoints
+//!
+//! Run with: cargo run --example simple-api
+//!
+//! The service runs on port 8080 by default (configurable via ACTON_SERVICE_PORT env var)
+//!
+//! Test with:
+//!   curl http://localhost:8080/health
+//!   curl http://localhost:8080/ready
+//!   curl http://localhost:8080/api/v1/hello
+//!   curl http://localhost:8080/api/v2/hello
 
 use acton_service::prelude::*;
 use axum::Json;
@@ -31,10 +44,7 @@ async fn hello_v2() -> Json<Message> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Simple configuration
-    let config = Config::default();
-
-    // Build ENFORCED versioned routes
+    // Build ENFORCED versioned routes with automatic health endpoints
     // The type system makes it IMPOSSIBLE to add unversioned routes
     let routes = VersionedApiBuilder::new()
         .with_base_path("/api")
@@ -44,21 +54,16 @@ async fn main() -> Result<()> {
         .add_version(ApiVersion::V2, |router| {
             router.route("/hello", get(hello_v2))
         })
-        .build_routes();  // Returns VersionedRoutes (opaque)
+        .build_routes(); // Returns VersionedRoutes with /health and /ready included!
 
-    info!("Starting simple versioned API");
-    info!("Try these endpoints:");
-    info!("  GET  /health (automatic)");
-    info!("  GET  /ready (automatic)");
-    info!("  GET  /api/v1/hello");
-    info!("  GET  /api/v2/hello");
-
-    // Build and serve with ServiceBuilder
-    // Health and readiness are AUTOMATIC (batteries-included)
+    // Build and serve - ZERO manual configuration required!
+    // ServiceBuilder automatically:
+    // - Loads config from environment/files (or uses defaults)
+    // - Initializes tracing/logging based on config
+    // - Includes health and readiness endpoints from routes
     ServiceBuilder::new()
-        .with_config(config)
-        .with_routes(routes)  // ONLY accepts VersionedRoutes!
-        .build()
+        .with_routes(routes) // ONLY accepts VersionedRoutes!
+        .build() // Auto-loads config and initializes tracing!
         .serve()
         .await?;
 

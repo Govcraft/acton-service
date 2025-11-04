@@ -7,6 +7,21 @@
 //! - Automatic deprecation headers
 //! - API evolution and breaking changes
 //! - Type-safe version routing
+//! - Zero manual configuration (automatic config loading and tracing)
+//!
+//! Run with: cargo run --example users-api
+//!
+//! The service runs on port 8080 by default (configurable via ACTON_SERVICE_PORT env var)
+//!
+//! Test with:
+//!   curl http://localhost:8080/health
+//!   curl http://localhost:8080/ready
+//!   curl http://localhost:8080/api/v1/users
+//!   curl http://localhost:8080/api/v1/users/1
+//!   curl -I http://localhost:8080/api/v1/users  # See deprecation headers
+//!   curl http://localhost:8080/api/v2/users
+//!   curl http://localhost:8080/api/v3/users
+//!   curl http://localhost:8080/api/v3/users/550e8400-e29b-41d4-a716-446655440000
 
 use acton_service::prelude::*;
 use axum::{extract::Path, Json};
@@ -86,17 +101,9 @@ async fn get_user_v3(Path(id): Path<String>) -> Json<UserV3> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Load configuration
-    let config = Config::load()?;
-
-    // Initialize tracing
-    init_tracing(&config)?;
-
-    info!("Starting Users API service with enforced versioning");
-
     // Create versioned API with ENFORCED versioning
     // The type system makes it IMPOSSIBLE to accidentally create unversioned routes
-    // Health and readiness endpoints are AUTOMATICALLY included
+    // Health and readiness endpoints are AUTOMATICALLY included by build_routes()
     let routes = VersionedApiBuilder::new()
         .with_base_path("/api")
         // V1: Deprecated, will be removed in December 2025
@@ -105,7 +112,7 @@ async fn main() -> Result<()> {
             |routes| {
                 routes
                     .route("/users", get(list_users_v1))
-                    .route("/users/:id", get(get_user_v1))
+                    .route("/users/{id}", get(get_user_v1))
             },
             DeprecationInfo::new(ApiVersion::V1, ApiVersion::V3)
                 .with_sunset_date("2025-12-31T23:59:59Z")
@@ -117,7 +124,7 @@ async fn main() -> Result<()> {
             |routes| {
                 routes
                     .route("/users", get(list_users_v2))
-                    .route("/users/:id", get(get_user_v2))
+                    .route("/users/{id}", get(get_user_v2))
             },
             DeprecationInfo::new(ApiVersion::V2, ApiVersion::V3)
                 .with_sunset_date("2026-06-30T23:59:59Z")
@@ -127,22 +134,19 @@ async fn main() -> Result<()> {
         .add_version(ApiVersion::V3, |routes| {
             routes
                 .route("/users", get(list_users_v3))
-                .route("/users/:id", get(get_user_v3))
+                .route("/users/{id}", get(get_user_v3))
         })
-        .build_routes();  // Returns VersionedRoutes (opaque, enforced)
+        .build_routes();  // Returns VersionedRoutes with /health and /ready included!
 
-    info!("API versions configured:");
-    info!("  - /api/v1/users (DEPRECATED - sunset: 2025-12-31)");
-    info!("  - /api/v2/users (DEPRECATED - sunset: 2026-06-30)");
-    info!("  - /api/v3/users (CURRENT)");
-
-    // Build and serve the service with batteries-included health/readiness
+    // Build and serve - ZERO manual configuration required!
+    // ServiceBuilder automatically:
+    // - Loads config from environment/files (or uses defaults)
+    // - Initializes tracing/logging based on config
+    // - Includes health and readiness endpoints from routes
     // ServiceBuilder only accepts VersionedRoutes - can't bypass versioning!
-    // Health and readiness endpoints are provided automatically by ServiceBuilder
     ServiceBuilder::new()
-        .with_config(config)
         .with_routes(routes)  // Only accepts VersionedRoutes!
-        .build()
+        .build()  // Auto-loads config and initializes tracing!
         .serve()
         .await?;
 
