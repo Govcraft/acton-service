@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package ping.v1;
+
+service PingService {
+  rpc Ping(PingRequest) returns (PongResponse);
+}
+
+message PingRequest {
+  string message = 1;
+}
+
+message PongResponse {
+  string message = 1;
+  int64 timestamp = 2;
+}

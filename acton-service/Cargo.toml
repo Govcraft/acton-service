@@ -106,3 +106,13 @@ required-features = ["http"]
 name = "users-api"
 path = "examples/users-api.rs"
 required-features = ["http"]
+
+[[example]]
+name = "ping-pong"
+path = "examples/ping-pong.rs"
+required-features = ["grpc"]
+
+[build-dependencies]
+prost-build = "0.14.1"
+tonic-build.workspace = true
+tonic-prost-build.workspace = true
