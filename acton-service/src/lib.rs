@@ -71,6 +71,9 @@ pub mod observability;
 #[cfg(feature = "openapi")]
 pub mod openapi;
 
+#[cfg(feature = "grpc")]
+pub mod grpc;
+
 /// Prelude module for convenient imports
 pub mod prelude {
     pub use crate::config::Config;
@@ -105,6 +108,9 @@ pub mod prelude {
 
     #[cfg(feature = "openapi")]
     pub use crate::openapi::{OpenApiBuilder, RapiDoc, ReDoc, SwaggerUI};
+
+    #[cfg(feature = "grpc")]
+    pub use crate::grpc::{GrpcServer, HealthService, Request, Response, Status, Code};
 
     pub use axum::{
         extract::{Path, Query, State},
