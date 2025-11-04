@@ -323,6 +323,28 @@ pub async fn readiness(State(state): State<AppState>) -> Result<impl IntoRespons
         }
     }
 
+    // Check gRPC status
+    #[cfg(feature = "grpc")]
+    if state.config().grpc.is_some() {
+        let grpc_config = state.config().grpc.as_ref().unwrap();
+
+        dependencies.insert(
+            "grpc".to_string(),
+            DependencyStatus {
+                healthy: true,
+                message: Some(if grpc_config.enabled {
+                    format!(
+                        "Enabled (health: {}, reflection: {})",
+                        grpc_config.health_check_enabled,
+                        grpc_config.reflection_enabled
+                    )
+                } else {
+                    "Disabled".to_string()
+                }),
+            },
+        );
+    }
+
     let response = ReadinessResponse {
         ready: all_ready,
         service: state.config().service.name.clone(),

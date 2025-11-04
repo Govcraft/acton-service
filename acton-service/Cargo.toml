@@ -78,11 +78,13 @@ http = { workspace = true }
 xdg = "3.0.0"
 utoipa = { version = "5.4.0", features = ["axum_extras"], optional = true }
 utoipa-swagger-ui = { version = "9.0.2", features = ["axum"], optional = true }
+tonic-health = { version = "0.14.2", optional = true }
+tonic-reflection = { version = "0.14.2", optional = true }
 
 [features]
 default = ["http", "observability"]
 http = []
-grpc = ["dep:tonic", "dep:prost", "dep:tonic-prost", "dep:tokio-stream"]
+grpc = ["dep:tonic", "dep:prost", "dep:tonic-prost", "dep:tokio-stream", "dep:tonic-health", "dep:tonic-reflection"]
 database = ["dep:sqlx"]
 cache = ["dep:redis", "dep:deadpool-redis"]
 events = ["dep:async-nats"]
@@ -92,6 +94,8 @@ otel-metrics = ["dep:tower-otel-http-metrics", "observability"]
 governor = ["dep:tower_governor"]
 openapi = ["dep:utoipa", "dep:utoipa-swagger-ui"]
 full = ["http", "grpc", "database", "cache", "events", "observability", "resilience", "otel-metrics", "governor", "openapi"]
+tonic-health = ["dep:tonic-health"]
+tonic-reflection = ["dep:tonic-reflection"]
 
 [[example]]
 name = "simple-api"

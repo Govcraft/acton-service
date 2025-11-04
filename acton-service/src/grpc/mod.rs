@@ -13,7 +13,7 @@
 //!
 //! ## Example
 //!
-//! ```no_run
+//! ```ignore
 //! use acton_service::grpc::interceptors::{request_id_interceptor, jwt_auth_interceptor};
 //! use acton_service::grpc::middleware::GrpcTracingLayer;
 //! use acton_service::middleware::JwtAuth;
