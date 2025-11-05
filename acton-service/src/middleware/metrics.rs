@@ -5,6 +5,9 @@
 
 use std::time::Duration;
 
+#[cfg(feature = "otel-metrics")]
+use tower_otel_http_metrics::HTTPMetricsLayerBuilder;
+
 /// Configuration for HTTP metrics
 #[derive(Debug, Clone)]
 pub struct MetricsConfig {
@@ -117,6 +120,81 @@ pub mod metric_labels {
     pub const SERVICE_VERSION: &str = "service.version";
 }
 
+/// Create the HTTP metrics layer
+///
+/// This function creates a Tower layer that automatically collects OpenTelemetry
+/// metrics for HTTP requests, including:
+/// - Request count
+/// - Request duration (latency)
+/// - Active requests
+/// - Request/response sizes
+///
+/// # Arguments
+/// * `config` - Metrics configuration
+///
+/// # Returns
+/// * `Some(layer)` if metrics are enabled and meter provider is available
+/// * `None` if metrics are disabled or meter provider is not initialized
+///
+/// # Example
+/// ```rust,no_run
+/// use acton_service::middleware::metrics::{MetricsConfig, create_metrics_layer};
+/// use tower::ServiceBuilder;
+///
+/// let config = MetricsConfig::new()
+///     .with_service_name("my-service");
+///
+/// let layer = create_metrics_layer(&config);
+/// # /*
+/// let app = ServiceBuilder::new()
+///     .layer(layer)
+///     .service(my_service);
+/// # */
+/// ```
+#[cfg(feature = "otel-metrics")]
+pub fn create_metrics_layer(
+    config: &MetricsConfig,
+) -> Option<tower_otel_http_metrics::HTTPMetricsLayer<
+    tower_otel_http_metrics::NoOpExtractor,
+    tower_otel_http_metrics::NoOpExtractor,
+>> {
+    if !config.enabled {
+        tracing::info!("HTTP metrics disabled in configuration");
+        return None;
+    }
+
+    // Get the global meter from the meter provider
+    let meter = crate::observability::get_meter()?;
+
+    // Build the metrics layer
+    match HTTPMetricsLayerBuilder::builder()
+        .with_meter(meter)
+        .build()
+    {
+        Ok(layer) => {
+            tracing::info!(
+                service_name = %config.service_name,
+                "HTTP metrics layer initialized"
+            );
+            Some(layer)
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                "Failed to build HTTP metrics layer"
+            );
+            None
+        }
+    }
+}
+
+/// Create the HTTP metrics layer (no-op when feature is disabled)
+#[cfg(not(feature = "otel-metrics"))]
+pub fn create_metrics_layer(_config: &MetricsConfig) -> Option<()> {
+    tracing::info!("HTTP metrics not available (otel-metrics feature disabled)");
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,5 +245,36 @@ mod tests {
     fn test_metric_labels() {
         assert_eq!(metric_labels::HTTP_METHOD, "http.method");
         assert_eq!(metric_labels::HTTP_STATUS_CODE, "http.status_code");
+    }
+
+    #[test]
+    fn test_create_metrics_layer_disabled() {
+        let config = MetricsConfig::new().with_enabled(false);
+        let layer = create_metrics_layer(&config);
+        assert!(layer.is_none(), "Should return None when metrics are disabled");
+    }
+
+    #[test]
+    #[cfg(feature = "otel-metrics")]
+    fn test_create_metrics_layer_without_meter_provider() {
+        // Without initializing the meter provider, should return None
+        let config = MetricsConfig::new().with_enabled(true);
+        let layer = create_metrics_layer(&config);
+        assert!(layer.is_none(), "Should return None when meter provider is not initialized");
+    }
+
+    #[test]
+    fn test_metrics_config_custom_buckets() {
+        let custom_buckets = vec![1.0, 5.0, 10.0];
+        let config = MetricsConfig::new()
+            .with_latency_buckets(custom_buckets.clone());
+
+        assert_eq!(config.latency_buckets, custom_buckets);
+
+        let durations = config.latency_buckets_as_duration();
+        assert_eq!(durations.len(), 3);
+        assert_eq!(durations[0], std::time::Duration::from_millis(1));
+        assert_eq!(durations[1], std::time::Duration::from_millis(5));
+        assert_eq!(durations[2], std::time::Duration::from_millis(10));
     }
 }

@@ -26,6 +26,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             out_dir
         );
 
+        // Single-port example
+        tonic_prost_build::configure()
+            .file_descriptor_set_path(format!("{}/hello_descriptor.bin", out_dir))
+            .compile_protos(&["proto/hello.proto"], &["proto"])?;
+
+        println!(
+            "cargo:warning=Compiled hello.proto -> {}/hello_descriptor.bin",
+            out_dir
+        );
+
         println!("cargo:warning=");
         println!("cargo:warning=💡 In YOUR project's build.rs, use:");
         println!("cargo:warning=   acton_service::build_utils::compile_service_protos()");
