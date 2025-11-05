@@ -126,6 +126,11 @@ name = "ping-pong"
 path = "examples/ping-pong.rs"
 required-features = ["grpc"]
 
+[[example]]
+name = "test-metrics"
+path = "examples/test-metrics.rs"
+required-features = ["otel-metrics"]
+
 [build-dependencies]
 prost-build = "0.14.1"
 tonic-build.workspace = true
