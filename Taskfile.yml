@@ -38,6 +38,35 @@ tasks:
     cmds:
       - rm -f {{.INSTALL_DIR}}/{{.CLI_NAME}}
 
+  release:
+    desc: Bump CLI version, sign, and push to remote (no publish)
+    summary: |
+      Release a new version of the CLI using cargo-release.
+
+      Usage:
+        task release -- patch   # Bump patch version (0.2.1 -> 0.2.2)
+        task release -- minor   # Bump minor version (0.2.1 -> 0.3.0)
+        task release -- major   # Bump major version (0.2.1 -> 1.0.0)
+
+      This will:
+      - Bump the version in Cargo.toml
+      - Create a signed git commit
+      - Create a signed git tag
+      - Push changes and tags to remote
+      - NOT publish to crates.io (--no-publish)
+
+      Requires:
+      - cargo-release installed (cargo install cargo-release)
+      - GPG signing configured
+    cmds:
+      - |
+        if [ -z "{{.CLI_ARGS}}" ]; then
+          echo "Error: Version level required (patch, minor, or major)"
+          echo "Usage: task release -- patch"
+          exit 1
+        fi
+      - cargo release --manifest-path {{.CLI_PATH}}/Cargo.toml --sign --no-publish -x {{.CLI_ARGS}}
+
   default:
     desc: Build and install the CLI
     cmds:
