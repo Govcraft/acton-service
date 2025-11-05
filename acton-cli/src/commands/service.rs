@@ -155,6 +155,7 @@ pub enum ServiceCommands {
 #[derive(Subcommand)]
 pub enum AddCommands {
     /// Add HTTP endpoint
+    #[command(disable_version_flag = true)]
     Endpoint {
         /// HTTP method
         #[arg(value_name = "METHOD")]
@@ -295,6 +296,7 @@ pub enum AddCommands {
     },
 
     /// Add API version
+    #[command(disable_version_flag = true)]
     Version {
         /// Version name
         #[arg(value_name = "VERSION")]
