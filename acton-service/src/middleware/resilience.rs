@@ -1,9 +1,11 @@
 //! Resilience middleware for fault tolerance and reliability
 //!
-//! This module provides circuit breaker, retry, and bulkhead patterns
-//! to ensure service stability and graceful degradation.
+//! This module provides production-ready circuit breaker, retry, and bulkhead patterns
+//! using tower-resilience to ensure service stability and graceful degradation.
 
 use std::time::Duration;
+pub use tower_resilience_bulkhead::BulkheadLayer;
+pub use tower_resilience_circuitbreaker::CircuitBreakerLayer;
 
 /// Configuration for resilience patterns
 #[derive(Debug, Clone)]
@@ -30,8 +32,8 @@ pub struct ResilienceConfig {
     pub bulkhead_enabled: bool,
     /// Maximum concurrent requests
     pub bulkhead_max_concurrent: usize,
-    /// Maximum queued requests
-    pub bulkhead_max_queued: usize,
+    /// Maximum wait time for request slot
+    pub bulkhead_max_wait: Duration,
 }
 
 impl Default for ResilienceConfig {
@@ -49,7 +51,7 @@ impl Default for ResilienceConfig {
 
             bulkhead_enabled: true,
             bulkhead_max_concurrent: 100,
-            bulkhead_max_queued: 200,
+            bulkhead_max_wait: Duration::from_secs(5),
         }
     }
 }
@@ -95,6 +97,74 @@ impl ResilienceConfig {
         self.bulkhead_max_concurrent = max;
         self
     }
+
+    /// Create circuit breaker layer from configuration
+    ///
+    /// Returns a configured circuit breaker layer that can be applied to services.
+    /// The layer monitors request failures and opens when the failure rate exceeds
+    /// the configured threshold.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use acton_service::middleware::resilience::ResilienceConfig;
+    ///
+    /// let config = ResilienceConfig::default();
+    /// if let Some(layer) = config.circuit_breaker_layer() {
+    ///     // Apply to your service
+    /// }
+    /// ```
+    pub fn circuit_breaker_layer<Req, Err>(&self) -> Option<CircuitBreakerLayer<Req, Err>>
+    where
+        Req: Clone,
+    {
+        if !self.circuit_breaker_enabled {
+            return None;
+        }
+
+        Some(
+            CircuitBreakerLayer::builder()
+                .name("acton-circuit-breaker")
+                .failure_rate_threshold(self.circuit_breaker_threshold)
+                .sliding_window_size(self.circuit_breaker_min_requests as usize)
+                .wait_duration_in_open(self.circuit_breaker_wait_duration)
+                .on_state_transition(|from, to| {
+                    tracing::warn!(
+                        from = ?from,
+                        to = ?to,
+                        "Circuit breaker state transition"
+                    );
+                })
+                .build(),
+        )
+    }
+
+    /// Create bulkhead layer from configuration
+    pub fn bulkhead_layer(&self) -> Option<BulkheadLayer> {
+        if !self.bulkhead_enabled {
+            return None;
+        }
+
+        Some(
+            BulkheadLayer::builder()
+                .name("acton-bulkhead")
+                .max_concurrent_calls(self.bulkhead_max_concurrent)
+                .max_wait_duration(Some(self.bulkhead_max_wait))
+                .on_call_permitted(|concurrent| {
+                    tracing::debug!(
+                        concurrent_requests = concurrent,
+                        "Request permitted through bulkhead"
+                    );
+                })
+                .on_call_rejected(|max| {
+                    tracing::warn!(
+                        max_concurrent = max,
+                        "Request rejected by bulkhead - max concurrent limit reached"
+                    );
+                })
+                .build(),
+        )
+    }
+
 }
 
 #[cfg(test)]
@@ -107,6 +177,8 @@ mod tests {
         assert!(config.circuit_breaker_enabled);
         assert!(config.retry_enabled);
         assert!(config.bulkhead_enabled);
+        assert_eq!(config.circuit_breaker_threshold, 0.5);
+        assert_eq!(config.bulkhead_max_concurrent, 100);
     }
 
     #[test]
@@ -123,14 +195,30 @@ mod tests {
 
     #[test]
     fn test_threshold_clamping() {
-        let config = ResilienceConfig::new()
-            .with_circuit_breaker_threshold(1.5);
-
+        let config = ResilienceConfig::new().with_circuit_breaker_threshold(1.5);
         assert_eq!(config.circuit_breaker_threshold, 1.0);
 
-        let config = ResilienceConfig::new()
-            .with_circuit_breaker_threshold(-0.5);
-
+        let config = ResilienceConfig::new().with_circuit_breaker_threshold(-0.5);
         assert_eq!(config.circuit_breaker_threshold, 0.0);
+    }
+
+    #[test]
+    fn test_circuit_breaker_layer_creation() {
+        let config = ResilienceConfig::new().with_circuit_breaker(true);
+        let layer: Option<CircuitBreakerLayer<(), ()>> = config.circuit_breaker_layer();
+        assert!(layer.is_some());
+
+        let config = ResilienceConfig::new().with_circuit_breaker(false);
+        let layer: Option<CircuitBreakerLayer<(), ()>> = config.circuit_breaker_layer();
+        assert!(layer.is_none());
+    }
+
+    #[test]
+    fn test_bulkhead_layer_creation() {
+        let config = ResilienceConfig::new().with_bulkhead(true);
+        assert!(config.bulkhead_layer().is_some());
+
+        let config = ResilienceConfig::new().with_bulkhead(false);
+        assert!(config.bulkhead_layer().is_none());
     }
 }

@@ -90,6 +90,8 @@ utoipa-swagger-ui = { version = "9.0.2", features = ["axum"], optional = true }
 tonic-health = { version = "0.14.2", optional = true }
 tonic-reflection = { version = "0.14.2", optional = true }
 once_cell = "1.21.3"
+tower-resilience-circuitbreaker = { workspace = true, optional = true }
+tower-resilience-bulkhead = { workspace = true, optional = true }
 
 [features]
 default = ["http", "observability"]
@@ -106,6 +108,8 @@ openapi = ["dep:utoipa", "dep:utoipa-swagger-ui"]
 full = ["http", "grpc", "database", "cache", "events", "observability", "resilience", "otel-metrics", "governor", "openapi"]
 tonic-health = ["dep:tonic-health"]
 tonic-reflection = ["dep:tonic-reflection"]
+tower-resilience-circuitbreaker = ["dep:tower-resilience-circuitbreaker"]
+tower-resilience-bulkhead = ["dep:tower-resilience-bulkhead"]
 
 [[example]]
 name = "simple-api"

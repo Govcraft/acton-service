@@ -67,6 +67,8 @@ dependencies = [
  "tower-http",
  "tower-otel-http-metrics",
  "tower-resilience",
+ "tower-resilience-bulkhead",
+ "tower-resilience-circuitbreaker",
  "tower_governor",
  "tracing",
  "tracing-opentelemetry",
@@ -4248,6 +4250,34 @@ version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a236f5b6ab97bd8a6d894e97d61091c43929b6b0b7f6cd8c51167bc17ce6255"
 dependencies = [
+ "tower-resilience-core",
+]
+
+[[package]]
+name = "tower-resilience-bulkhead"
+version = "0.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2c9b15e771d70a9b12318549faa7e2bb2ebe519904157d4f273112685286749"
+dependencies = [
+ "futures",
+ "thiserror 2.0.17",
+ "tokio",
+ "tower",
+ "tower-layer",
+ "tower-resilience-core",
+ "tower-service",
+]
+
+[[package]]
+name = "tower-resilience-circuitbreaker"
+version = "0.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff16e1f78dfac712d37e9332d23a4066d3fa8ccd82e8ba131a49018e594751f8"
+dependencies = [
+ "futures",
+ "thiserror 2.0.17",
+ "tokio",
+ "tower",
  "tower-resilience-core",
 ]
 

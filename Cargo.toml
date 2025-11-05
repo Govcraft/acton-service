@@ -75,6 +75,10 @@ opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic"] }
 opentelemetry_sdk = "0.31.0"
 tracing-opentelemetry = "0.32.0"
 
+# Resilience
+tower-resilience-circuitbreaker = "0.4.7"
+tower-resilience-bulkhead = "0.4.7"
+
 # Error handling
 thiserror = "2.0.17"
 anyhow = "1.0.100"
