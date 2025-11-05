@@ -230,8 +230,7 @@ fn compile_protos_with_descriptor(
     #[cfg(not(feature = "grpc"))]
     {
         let _ = (proto_paths, include_dirs, descriptor_path);
-        Err(BuildError::ProtoBuild(Box::new(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        Err(BuildError::ProtoBuild(Box::new(std::io::Error::other(
             "grpc feature not enabled",
         ))))
     }
