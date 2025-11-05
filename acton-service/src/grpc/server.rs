@@ -50,7 +50,7 @@ impl GrpcServer {
 /// Allows adding multiple gRPC services that will be served together.
 /// Supports optional health check and reflection services.
 pub struct GrpcServicesBuilder {
-    router: Option<tonic::transport::server::Router>,
+    routes: tonic::service::Routes,
     reflection_enabled: bool,
     health_enabled: bool,
     file_descriptor_sets: Vec<&'static [u8]>,
@@ -60,7 +60,7 @@ impl GrpcServicesBuilder {
     /// Create a new services builder
     pub fn new() -> Self {
         Self {
-            router: None,
+            routes: tonic::service::Routes::default(),
             reflection_enabled: false,
             health_enabled: false,
             file_descriptor_sets: Vec::new(),
@@ -118,8 +118,6 @@ impl GrpcServicesBuilder {
     ///
     /// # Example
     /// ```ignore
-    /// use tonic::transport::Server;
-    ///
     /// let services = GrpcServicesBuilder::new()
     ///     .add_service(UserServiceServer::new(user_service))
     ///     .build();
@@ -133,31 +131,24 @@ impl GrpcServicesBuilder {
         > + NamedService + Clone + Send + Sync + 'static,
         S::Future: Send + 'static,
     {
-        self.router = Some(match self.router {
-            Some(router) => router.add_service(service),
-            None => Server::builder().add_service(service),
-        });
+        self.routes = self.routes.add_service(service);
         self
     }
 
-    /// Build the router
+    /// Build the routes
     ///
-    /// Returns None if no services were added.
     /// If health or reflection are enabled, they will be added automatically.
     ///
     /// # Arguments
     /// * `state` - Optional AppState, required if health checks are enabled
-    pub fn build(mut self, state: Option<AppState>) -> Option<tonic::transport::server::Router> {
+    pub fn build(mut self, state: Option<AppState>) -> tonic::service::Routes {
         // Add health service if enabled
         if self.health_enabled {
             if let Some(app_state) = state.clone() {
                 let health_service = crate::grpc::HealthService::new(app_state);
                 let health_server = tonic_health::pb::health_server::HealthServer::new(health_service);
 
-                self.router = Some(match self.router {
-                    Some(router) => router.add_service(health_server),
-                    None => Server::builder().add_service(health_server),
-                });
+                self.routes = self.routes.add_service(health_server);
 
                 tracing::info!("gRPC health service enabled");
             } else {
@@ -180,10 +171,7 @@ impl GrpcServicesBuilder {
 
                 match reflection_builder.build_v1() {
                     Ok(reflection_service) => {
-                        self.router = Some(match self.router {
-                            Some(router) => router.add_service(reflection_service),
-                            None => Server::builder().add_service(reflection_service),
-                        });
+                        self.routes = self.routes.add_service(reflection_service);
 
                         tracing::info!("gRPC reflection service enabled");
                     }
@@ -194,7 +182,7 @@ impl GrpcServicesBuilder {
             }
         }
 
-        self.router
+        self.routes
     }
 }
 

@@ -128,7 +128,7 @@ async fn http_ping_handler(Json(req): Json<HttpPingRequest>) -> std::result::Res
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let grpc_addr = "0.0.0.0:9090".parse().unwrap();
+    let grpc_addr: std::net::SocketAddr = "0.0.0.0:9090".parse().unwrap();
 
     tracing::info!("🚀 Starting Ping-Pong Service");
     tracing::info!("   gRPC backend: {}", grpc_addr);
@@ -141,19 +141,20 @@ async fn main() -> Result<()> {
         let ping_service = PingServiceImpl::default();
 
         // Build gRPC server with health and reflection
-        let router = acton_service::grpc::server::GrpcServicesBuilder::new()
+        let routes = acton_service::grpc::server::GrpcServicesBuilder::new()
             .with_health()
             .with_reflection()
             .add_file_descriptor_set(ping::FILE_DESCRIPTOR_SET)
             .add_service(PingServiceServer::new(ping_service))
             .build(None);
 
-        if let Some(router) = router {
-            router
-                .serve(grpc_addr)
-                .await
-                .expect("gRPC server failed");
-        }
+        // Convert routes to axum router and serve
+        let grpc_app = routes.into_axum_router();
+        let listener = tokio::net::TcpListener::bind(grpc_addr).await.expect("Failed to bind gRPC listener");
+
+        axum::serve(listener, grpc_app)
+            .await
+            .expect("gRPC server failed");
     });
 
     // Wait for gRPC server to start

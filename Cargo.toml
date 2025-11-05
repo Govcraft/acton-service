@@ -70,10 +70,14 @@ figment = { version = "0.10.19", features = ["toml", "env", "json"] }
 # Tracing and observability
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
-opentelemetry = "0.31.0"
-opentelemetry-otlp = "0.31.0"
-opentelemetry_sdk = "0.31.0"
-tracing-opentelemetry = "0.32.0"
+opentelemetry = "0.30.0"
+opentelemetry-otlp = { version = "0.30.0", features = ["grpc-tonic"] }
+opentelemetry_sdk = "0.30.0"
+tracing-opentelemetry = "0.31.0"
+
+# Resilience
+tower-resilience-circuitbreaker = "0.4.7"
+tower-resilience-bulkhead = "0.4.7"
 
 # Error handling
 thiserror = "2.0.17"
