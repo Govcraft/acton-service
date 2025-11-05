@@ -60,8 +60,30 @@ lazy_init = true
         content.push_str(
 r#"[grpc]
 enabled = true
-use_separate_port = false  # Single-port mode: HTTP + gRPC on same port
-port = 9090                # Only used if use_separate_port = true
+
+# Port Configuration
+#
+# Single-port mode (default, recommended):
+#   - HTTP and gRPC share the same port (8080)
+#   - Automatic protocol detection via Content-Type header
+#   - Simpler deployment (one port to expose)
+#   - Perfect for most use cases
+#
+# Dual-port mode (advanced):
+#   - HTTP runs on port 8080
+#   - gRPC runs on separate port (9090)
+#   - Useful for network policies requiring protocol separation
+#   - Allows independent scaling of HTTP and gRPC traffic
+#   - Requires exposing both ports in deployment
+#
+# To switch to dual-port mode:
+#   1. Set use_separate_port = true
+#   2. Optionally change the gRPC port below
+#   3. Restart the service
+use_separate_port = false  # false = single-port, true = dual-port
+port = 9090                # gRPC port (only used when use_separate_port = true)
+
+# gRPC Features
 reflection_enabled = true
 health_check_enabled = true
 max_message_size_mb = 4
