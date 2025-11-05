@@ -27,6 +27,7 @@ pub fn is_available() -> bool {
 }
 
 /// Run cargo check to verify the project compiles
+#[allow(dead_code)]
 pub fn check(path: &Path) -> Result<()> {
     let output = Command::new("cargo")
         .args(["check", "--quiet"])

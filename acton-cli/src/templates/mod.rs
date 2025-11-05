@@ -3,12 +3,14 @@ pub mod cargo_toml;
 pub mod config;
 pub mod handlers;
 pub mod deployment;
+pub mod worker;
 
 use handlebars::Handlebars;
 use serde_json::json;
 use chrono::Datelike;
 
 /// Template data for service generation
+#[allow(dead_code)]
 pub struct ServiceTemplate {
     pub name: String,
     pub pascal_name: String,
@@ -26,6 +28,7 @@ pub struct ServiceTemplate {
 }
 
 impl ServiceTemplate {
+    #[allow(dead_code)]
     pub fn to_json(&self) -> serde_json::Value {
         json!({
             "name": self.name,
@@ -89,6 +92,7 @@ impl ServiceTemplate {
 }
 
 /// Get Handlebars renderer with all templates registered
+#[allow(dead_code)]
 pub fn get_renderer() -> Handlebars<'static> {
     let mut handlebars = Handlebars::new();
     handlebars.set_strict_mode(true);

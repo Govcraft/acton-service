@@ -51,6 +51,7 @@ pub fn write_file(path: &Path, content: &str) -> Result<()> {
 }
 
 /// Check if directory exists and is empty
+#[allow(dead_code)]
 pub fn is_dir_empty(path: &Path) -> Result<bool> {
     if !path.exists() {
         return Ok(true);
@@ -92,6 +93,7 @@ pub fn success(message: &str) {
 }
 
 /// Info message
+#[allow(dead_code)]
 pub fn info(message: &str) {
     println!("{} {}", "→".blue().bold(), message);
 }
@@ -102,11 +104,13 @@ pub fn warning(message: &str) {
 }
 
 /// Error message
+#[allow(dead_code)]
 pub fn error(message: &str) {
     eprintln!("{} {}", "✗".red().bold(), message);
 }
 
 /// Section header
+#[allow(dead_code)]
 pub fn section(title: &str) {
     println!("\n{}", title.bold().underline());
 }
