@@ -1,8 +1,9 @@
 [workspace]
 members = [
-    "acton-service"
+    "acton-service",
+    "acton-cli"
 ]
-default-members = ["acton-service"]
+default-members = ["acton-service", "acton-cli"]
 resolver = "2"
 
 [workspace.package]
