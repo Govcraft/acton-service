@@ -67,7 +67,7 @@ r#"    // TODO: Configure your gRPC services
     else if template.http && template.grpc {
         content.push_str(
 r#"    // Build HTTP routes
-    let routes = VersionedApiBuilder::new()
+    let http_routes = VersionedApiBuilder::new()
         .with_base_path("/api")
         .add_version(ApiVersion::V1, |router| {
             // TODO: Add your HTTP routes here
@@ -76,34 +76,22 @@ r#"    // Build HTTP routes
         })
         .build_routes();
 
-    // Start HTTP server
-    let http_handle = tokio::spawn(async move {
-        ServiceBuilder::new()
-            .with_routes(routes)
-            .build()
-            .serve()
-            .await
-    });
+    // Build gRPC services
+    // TODO: Add your gRPC service implementations
+    // Example:
+    // let grpc_routes = tonic::service::RoutesBuilder::default()
+    //     .add_service(YourServiceServer::new(YourServiceImpl::default()))
+    //     .routes();
 
-    // Start gRPC server
-    let grpc_handle = tokio::spawn(async move {
-        let addr = "0.0.0.0:9090".parse().unwrap();
-
-        // TODO: Add your gRPC services here
-        println!("gRPC server listening on {}", addr);
-
-        Ok::<(), anyhow::Error>(())
-    });
-
-    // Wait for both servers
-    tokio::select! {
-        result = http_handle => {
-            result??;
-        }
-        result = grpc_handle => {
-            result??;
-        }
-    }
+    // Single-port HTTP + gRPC (automatic protocol detection)
+    // Both protocols served on the same port (default: 8080)
+    // Set use_separate_port = true in config.toml to use separate ports
+    ServiceBuilder::new()
+        .with_routes(http_routes)
+        // .with_grpc_services(grpc_routes)  // Uncomment when you add gRPC services
+        .build()
+        .serve()
+        .await?;
 
     Ok(())
 "#
@@ -209,10 +197,12 @@ MIT
         if template.database.is_some() { "\n- PostgreSQL (for database)" } else { "" },
         template.name,
         template.name,
-        if template.http {
+        if template.http && template.grpc {
+            "- REST API available at `http://localhost:8080/api/v1`\n- gRPC service available at `localhost:8080` (single-port mode)\n- Health check: `GET /health`\n- Readiness check: `GET /ready`\n\nNote: HTTP and gRPC share the same port (8080) by default.\nSet `use_separate_port = true` in config.toml to use separate ports."
+        } else if template.http {
             "- REST API available at `http://localhost:8080/api/v1`\n- Health check: `GET /health`\n- Readiness check: `GET /ready`"
         } else {
-            "- gRPC service available at `localhost:9090`"
+            "- gRPC service available at `localhost:8080`\n- Set `use_separate_port = true` in config.toml to use port 9090"
         }
     )
 }
