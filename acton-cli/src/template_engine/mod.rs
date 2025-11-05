@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use minijinja::{Environment, Value};
+use minijinja::Environment;
 use rust_embed::Embed;
 use serde::Serialize;
 use std::fs;
@@ -116,11 +116,6 @@ impl Default for TemplateEngine {
     fn default() -> Self {
         Self::new().expect("Failed to create template engine")
     }
-}
-
-/// Helper to convert a value to JSON for template context
-pub fn to_value<T: Serialize>(value: &T) -> Value {
-    Value::from_serialize(value)
 }
 
 #[cfg(test)]

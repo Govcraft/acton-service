@@ -1,55 +1,3 @@
-pub fn generate_handlers_mod() -> String {
-r#"// Add your handler modules here
-// Example:
-// pub mod users;
-"#.to_string()
-}
-
-#[allow(dead_code)]
-pub fn generate_example_handler() -> String {
-r#"use acton_service::prelude::*;
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Serialize)]
-pub struct HealthResponse {
-    status: String,
-    version: String,
-}
-
-/// Example health check handler
-pub async fn health() -> Json<HealthResponse> {
-    Json(HealthResponse {
-        status: "healthy".to_string(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
-    })
-}
-
-// TODO: Add your handlers here
-// Example:
-//
-// #[derive(Debug, Deserialize)]
-// pub struct CreateUserRequest {
-//     username: String,
-//     email: String,
-// }
-//
-// #[derive(Debug, Serialize)]
-// pub struct User {
-//     id: String,
-//     username: String,
-//     email: String,
-// }
-//
-// pub async fn create_user(
-//     State(state): State<AppState>,
-//     Json(req): Json<CreateUserRequest>,
-// ) -> Result<Json<User>, AppError> {
-//     // TODO: Implement user creation
-//     todo!("Implement create_user handler")
-// }
-"#.to_string()
-}
-
 pub struct HandlerTemplate {
     pub function_name: String,
     pub method: String,
@@ -134,23 +82,6 @@ pub fn generate_endpoint_handler(template: &HandlerTemplate) -> String {
     result
 }
 
-/// Generate axum route registration
-#[allow(dead_code)]
-pub fn generate_route_registration(method: &str, path: &str, handler: &str, version: &str) -> String {
-    let route_method = match method.to_uppercase().as_str() {
-        "GET" => "get",
-        "POST" => "post",
-        "PUT" => "put",
-        "DELETE" => "delete",
-        "PATCH" => "patch",
-        _ => "get",
-    };
-
-    format!(
-        r#"        .route("/{}{}", routing::{}(handlers::{}))"#,
-        version, path, route_method, handler
-    )
-}
 
 fn to_pascal_case(s: &str) -> String {
     s.split('_')
