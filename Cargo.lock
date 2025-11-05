@@ -18,6 +18,7 @@ dependencies = [
  "handlebars",
  "ignore",
  "indicatif",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror 2.0.17",

@@ -45,3 +45,4 @@ duct = "0.13.7"
 
 # DateTime
 chrono = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
