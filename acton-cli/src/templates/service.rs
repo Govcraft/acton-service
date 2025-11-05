@@ -4,13 +4,12 @@ pub fn generate_main_rs(template: &ServiceTemplate) -> String {
     let mut content = String::from(
 r#"use acton_service::prelude::*;
 use anyhow::Result;
-
 "#
     );
 
     // Add handler imports
     if template.http {
-        content.push_str("mod handlers;\n");
+        content.push_str("\nmod handlers;\n");
     }
 
     if template.grpc {
@@ -72,6 +71,7 @@ r#"    // Build HTTP routes
         .with_base_path("/api")
         .add_version(ApiVersion::V1, |router| {
             // TODO: Add your HTTP routes here
+            // Example: router.route("/users", get(handlers::list_users))
             router
         })
         .build_routes();

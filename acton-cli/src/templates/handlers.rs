@@ -8,10 +8,6 @@ r#"// Add your handler modules here
 #[allow(dead_code)]
 pub fn generate_example_handler() -> String {
 r#"use acton_service::prelude::*;
-use axum::{
-    extract::State,
-    Json,
-};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
@@ -75,7 +71,7 @@ pub fn generate_endpoint_handler(template: &HandlerTemplate) -> String {
 
     let response_type = format!("{}Response", to_pascal_case(&template.function_name));
 
-    let mut imports = vec!["use axum::Json;"];
+    let mut imports = vec![];
     let mut params = vec![];
 
     if template.with_state {
@@ -100,12 +96,15 @@ pub fn generate_endpoint_handler(template: &HandlerTemplate) -> String {
 
     let mut result = String::new();
 
-    // Add imports
-    for import in imports {
-        result.push_str(import);
-        result.push('\n');
+    // Add imports only if needed
+    if !imports.is_empty() {
+        for import in imports {
+            result.push_str(import);
+            result.push('\n');
+        }
     }
-    result.push_str("use serde::{Deserialize, Serialize};\n\n");
+    result.push_str("use serde::{Deserialize, Serialize};\n");
+    result.push_str("use acton_service::prelude::Json;\n\n");
 
     // Add request struct if needed
     if template.has_request_body {
@@ -136,6 +135,7 @@ pub fn generate_endpoint_handler(template: &HandlerTemplate) -> String {
 }
 
 /// Generate axum route registration
+#[allow(dead_code)]
 pub fn generate_route_registration(method: &str, path: &str, handler: &str, version: &str) -> String {
     let route_method = match method.to_uppercase().as_str() {
         "GET" => "get",
