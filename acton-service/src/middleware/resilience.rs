@@ -105,12 +105,14 @@ impl ResilienceConfig {
     /// the configured threshold.
     ///
     /// # Example
-    /// ```no_run
+    /// ```
     /// use acton_service::middleware::resilience::ResilienceConfig;
+    /// use http::Request;
     ///
     /// let config = ResilienceConfig::default();
-    /// if let Some(layer) = config.circuit_breaker_layer() {
-    ///     // Apply to your service
+    /// // Specify types when creating the layer
+    /// if let Some(layer) = config.circuit_breaker_layer::<Request<()>, String>() {
+    ///     // Apply layer to your service
     /// }
     /// ```
     pub fn circuit_breaker_layer<Req, Err>(&self) -> Option<CircuitBreakerLayer<Req, Err>>
