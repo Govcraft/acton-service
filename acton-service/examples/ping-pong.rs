@@ -5,6 +5,28 @@
 //! - Running both HTTP (port 8080) and gRPC (port 9090) services
 //! - Using generated protobuf types
 //!
+//! ## Protocol Buffer Setup
+//!
+//! This example uses the acton-service build_utils for proto compilation.
+//!
+//! **In your own project's `build.rs`:**
+//! ```rust
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     #[cfg(feature = "grpc")]
+//!     {
+//!         // Automatically compiles all .proto files in proto/ directory
+//!         acton_service::build_utils::compile_service_protos()?;
+//!     }
+//!     Ok(())
+//! }
+//! ```
+//!
+//! **Configure proto location (optional):**
+//! ```bash
+//! # Override default proto/ directory
+//! ACTON_PROTO_DIR=../shared/protos cargo build
+//! ```
+//!
 //! Run with: cargo run --example ping-pong --features grpc
 //!
 //! Test with:

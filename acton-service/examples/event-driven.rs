@@ -5,6 +5,28 @@
 //! - **gRPC Service** (port 9090): Internal service that consumes events and handles RPC
 //! - **Event Bus**: Decouples HTTP endpoints from business logic
 //!
+//! ## Protocol Buffer Setup
+//!
+//! This example uses the acton-service build_utils for proto compilation.
+//!
+//! **In your own project's `build.rs`:**
+//! ```rust
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     #[cfg(feature = "grpc")]
+//!     {
+//!         // Automatically compiles all .proto files in proto/ directory
+//!         acton_service::build_utils::compile_service_protos()?;
+//!     }
+//!     Ok(())
+//! }
+//! ```
+//!
+//! **Configure proto location (optional):**
+//! ```bash
+//! # Override default proto/ directory
+//! ACTON_PROTO_DIR=../shared/protos cargo build
+//! ```
+//!
 //! ## Architecture Pattern
 //!
 //! ```text

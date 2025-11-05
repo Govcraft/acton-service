@@ -258,6 +258,58 @@ pub struct GrpcConfig {
     /// Request timeout in seconds
     #[serde(default = "default_timeout")]
     pub timeout_secs: u64,
+
+    /// Protocol buffer runtime configuration
+    #[serde(default)]
+    pub proto: ProtoConfig,
+}
+
+/// Protocol buffer runtime configuration
+///
+/// NOTE: This is RUNTIME configuration only. Proto compilation happens at build time.
+/// See `acton_service::build_utils` for build-time proto compilation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProtoConfig {
+    /// Proto directory reference (for documentation/tooling only, not used during compilation)
+    ///
+    /// Build-time compilation uses `ACTON_PROTO_DIR` environment variable or `proto/` convention.
+    /// This field can be used by runtime tooling (e.g., generating OpenAPI from protos).
+    #[serde(default = "default_proto_dir")]
+    pub dir: String,
+
+    /// Service registry endpoint for dynamic service registration
+    ///
+    /// Example: "consul://localhost:8500" or "etcd://localhost:2379"
+    #[serde(default)]
+    pub service_registry: Option<String>,
+
+    /// Service mesh integration endpoint
+    ///
+    /// Used for service mesh sidecar integration (Istio, Linkerd, etc.)
+    #[serde(default)]
+    pub service_mesh_endpoint: Option<String>,
+
+    /// Enable proto validation (if using buf validate or similar)
+    #[serde(default = "default_false")]
+    pub validation_enabled: bool,
+
+    /// Service metadata for discovery and registration
+    ///
+    /// Key-value pairs for service mesh/registry metadata
+    #[serde(default)]
+    pub metadata: std::collections::HashMap<String, String>,
+}
+
+impl Default for ProtoConfig {
+    fn default() -> Self {
+        Self {
+            dir: default_proto_dir(),
+            service_registry: None,
+            service_mesh_endpoint: None,
+            validation_enabled: false,
+            metadata: std::collections::HashMap::new(),
+        }
+    }
 }
 
 impl GrpcConfig {
@@ -634,6 +686,10 @@ fn default_grpc_port() -> u16 {
 
 fn default_grpc_max_message_mb() -> usize {
     4 // 4 MB
+}
+
+fn default_proto_dir() -> String {
+    "proto".to_string()
 }
 
 impl Config {

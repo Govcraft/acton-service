@@ -1,0 +1,103 @@
+//! Example build.rs for acton-service projects with gRPC
+//!
+//! Copy this file to your project's `build.rs` to enable automatic proto compilation.
+//!
+//! ## Quick Start
+//!
+//! 1. Copy this file to your project root as `build.rs`
+//! 2. Place your `.proto` files in the `proto/` directory
+//! 3. Build your project: `cargo build --features grpc`
+//!
+//! ## Directory Structure
+//!
+//! ```text
+//! my-service/
+//! ├── Cargo.toml
+//! ├── build.rs          # This file
+//! ├── proto/            # Your .proto files go here
+//! │   ├── service.proto
+//! │   └── models.proto
+//! └── src/
+//!     └── main.rs
+//! ```
+//!
+//! ## Configuration
+//!
+//! ### Using Default Convention (recommended)
+//!
+//! By default, protos are compiled from `proto/` directory:
+//!
+//! ```bash
+//! cargo build --features grpc
+//! ```
+//!
+//! ### Custom Proto Directory
+//!
+//! Override the proto directory at build time:
+//!
+//! ```bash
+//! ACTON_PROTO_DIR=../shared/protos cargo build --features grpc
+//! ```
+//!
+//! ### Using Generated Code
+//!
+//! In your Rust code, include the generated types:
+//!
+//! ```rust
+//! // Include generated protobuf code
+//! pub mod my_service {
+//!     tonic::include_proto!("myservice.v1");
+//!
+//!     // For gRPC reflection support
+//!     pub const FILE_DESCRIPTOR_SET: &[u8] =
+//!         tonic::include_file_descriptor_set!("my_service_descriptor");
+//! }
+//! ```
+//!
+//! ## Advanced Usage
+//!
+//! ### Compile from Specific Directory
+//!
+//! ```rust
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     #[cfg(feature = "grpc")]
+//!     {
+//!         acton_service::build_utils::compile_protos_from_dir("custom-proto-dir")?;
+//!     }
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ### Compile Specific Proto Files
+//!
+//! ```rust
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     #[cfg(feature = "grpc")]
+//!     {
+//!         acton_service::build_utils::compile_specific_protos(
+//!             &["proto/service.proto", "proto/models.proto"],
+//!             &["proto"],
+//!             "my_descriptor.bin"
+//!         )?;
+//!     }
+//!     Ok(())
+//! }
+//! ```
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Only compile protos when grpc feature is enabled
+    #[cfg(feature = "grpc")]
+    {
+        // Use the acton-service build utilities to compile all .proto files
+        // in the proto/ directory (or ACTON_PROTO_DIR if set)
+        acton_service::build_utils::compile_service_protos()?;
+
+        // This will:
+        // 1. Discover all .proto files in proto/ (recursively)
+        // 2. Compile them with tonic-build
+        // 3. Generate a file descriptor set for gRPC reflection
+        // 4. Name the descriptor: {crate_name}_descriptor.bin
+    }
+
+    Ok(())
+}
