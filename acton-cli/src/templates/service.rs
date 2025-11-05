@@ -12,9 +12,7 @@ use anyhow::Result;
         content.push_str("\nmod handlers;\n");
     }
 
-    if template.grpc {
-        content.push_str("mod services;\n");
-    }
+    // Note: When you add gRPC services, create src/services.rs and add: mod services;
 
     content.push_str("\n#[tokio::main]\nasync fn main() -> Result<()> {\n");
 
