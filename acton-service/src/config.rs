@@ -773,9 +773,10 @@ impl Config {
         paths.push(PathBuf::from("config.toml"));
 
         // 2. XDG config directory (~/.config/acton-service/{service_name}/config.toml)
+        // Use find_config_file instead of place_config_file to avoid creating directories
         let xdg_dirs = xdg::BaseDirectories::with_prefix("acton-service");
         let config_file_path = Path::new(service_name).join("config.toml");
-        if let Ok(path) = xdg_dirs.place_config_file(&config_file_path) {
+        if let Some(path) = xdg_dirs.find_config_file(&config_file_path) {
             paths.push(path);
         }
 

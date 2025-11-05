@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "acton-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "acton-service",
  "anyhow",
@@ -31,7 +31,7 @@ dependencies = [
 
 [[package]]
 name = "acton-service"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-nats",

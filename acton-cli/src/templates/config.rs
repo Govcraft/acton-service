@@ -69,24 +69,17 @@ metrics_enabled = true
     // Add middleware configuration
     content.push_str(
 r#"[middleware]
+# Basic middleware settings
+body_limit_mb = 10
+catch_panic = true
+compression = true
+cors_mode = "permissive"  # Options: permissive, restrictive, disabled
+
 # Request tracking
 [middleware.request_tracking]
 request_id_enabled = true
 propagate_headers = true
 mask_sensitive_headers = true
-
-# CORS
-[middleware.cors]
-mode = "permissive"  # Options: permissive, restrictive, disabled
-
-# Compression
-[middleware.compression]
-enabled = true
-
-# Request limits
-[middleware.limits]
-request_body_max_bytes = 10485760  # 10MB
-request_timeout_secs = 30
 
 "#
     );
