@@ -89,6 +89,7 @@ utoipa = { version = "5.4.0", features = ["axum_extras"], optional = true }
 utoipa-swagger-ui = { version = "9.0.2", features = ["axum"], optional = true }
 tonic-health = { version = "0.14.2", optional = true }
 tonic-reflection = { version = "0.14.2", optional = true }
+once_cell = "1.21.3"
 
 [features]
 default = ["http", "observability"]
