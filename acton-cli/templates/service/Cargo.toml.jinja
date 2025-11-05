@@ -1,0 +1,24 @@
+[package]
+name = "{{ name }}"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+acton-service = { {% if acton_service_path %}path = "{{ acton_service_path }}"{% else %}version = "0.2.1"{% endif %}{% if features|length > 0 %}, features = [{% for feature in features %}"{{ feature }}"{% if not loop.last %}, {% endif %}{% endfor %}]{% endif %} }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+tracing = "0.1"
+{% if has_database and database == "postgres" -%}
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+{% endif -%}
+{%- if has_cache and cache == "redis" -%}
+redis = { version = "0.32", features = ["tokio-comp"] }
+{% endif -%}
+{%- if grpc %}
+
+[build-dependencies]
+tonic-build = "0.14"
+{% endif -%}

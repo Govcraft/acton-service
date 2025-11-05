@@ -1,0 +1,36 @@
+{% if with_state -%}
+use axum::extract::State;
+{% endif -%}
+{%- if has_path_params -%}
+use axum::extract::Path;
+{% endif -%}
+use serde::{Deserialize, Serialize};
+use acton_service::prelude::Json;
+
+{% if has_request_body -%}
+#[derive(Debug, Deserialize)]
+pub struct {{ request_type }} {
+    // TODO: Add your fields here
+}
+
+{% endif -%}
+#[derive(Debug, Serialize)]
+pub struct {{ response_type }} {
+    // TODO: Add your fields here
+}
+
+/// {{ method }} {{ path }}
+pub async fn {{ function_name }}(
+{%- if with_state %}
+    State(state): State<AppState>,
+{%- endif %}
+{%- if has_path_params %}
+    Path(id): Path<String>,
+{%- endif %}
+{%- if has_request_body %}
+    Json(req): Json<{{ request_type }}>,
+{%- endif %}
+) -> Json<{{ response_type }}> {
+    // TODO: Implement handler logic
+    todo!("Implement {{ function_name }} handler")
+}
