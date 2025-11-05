@@ -3,6 +3,7 @@ version: '3'
 vars:
   CLI_NAME: acton
   CLI_PATH: acton-cli
+  SERVICE_PATH: acton-service
   INSTALL_DIR: '{{.HOME}}/.local/bin'
   TARGET_DIR: target/release
 
@@ -38,15 +39,15 @@ tasks:
     cmds:
       - rm -f {{.INSTALL_DIR}}/{{.CLI_NAME}}
 
-  release:
+  release-cli:
     desc: Bump CLI version, sign, and push to remote (no publish)
     summary: |
       Release a new version of the CLI using cargo-release.
 
       Usage:
-        task release -- patch   # Bump patch version (0.2.1 -> 0.2.2)
-        task release -- minor   # Bump minor version (0.2.1 -> 0.3.0)
-        task release -- major   # Bump major version (0.2.1 -> 1.0.0)
+        task release-cli -- patch   # Bump patch version (0.2.1 -> 0.2.2)
+        task release-cli -- minor   # Bump minor version (0.2.1 -> 0.3.0)
+        task release-cli -- major   # Bump major version (0.2.1 -> 1.0.0)
 
       This will:
       - Bump the version in Cargo.toml
@@ -62,10 +63,40 @@ tasks:
       - |
         if [ -z "{{.CLI_ARGS}}" ]; then
           echo "Error: Version level required (patch, minor, or major)"
-          echo "Usage: task release -- patch"
+          echo "Usage: task release-cli -- patch"
           exit 1
         fi
       - cargo release --manifest-path {{.CLI_PATH}}/Cargo.toml --sign --no-publish -x {{.CLI_ARGS}}
+
+  release-service:
+    desc: Bump acton-service version, sign, publish, and push
+    summary: |
+      Release a new version of the acton-service crate using cargo-release.
+
+      Usage:
+        task release-service -- patch   # Bump patch version (0.2.1 -> 0.2.2)
+        task release-service -- minor   # Bump minor version (0.2.1 -> 0.3.0)
+        task release-service -- major   # Bump major version (0.2.1 -> 1.0.0)
+
+      This will:
+      - Bump the version in Cargo.toml
+      - Create a signed git commit
+      - Create a signed git tag
+      - Publish to crates.io
+      - Push changes and tags to remote
+
+      Requires:
+      - cargo-release installed (cargo install cargo-release)
+      - GPG signing configured
+      - crates.io authentication (cargo login)
+    cmds:
+      - |
+        if [ -z "{{.CLI_ARGS}}" ]; then
+          echo "Error: Version level required (patch, minor, or major)"
+          echo "Usage: task release-service -- patch"
+          exit 1
+        fi
+      - cargo release --manifest-path {{.SERVICE_PATH}}/Cargo.toml --sign -x {{.CLI_ARGS}}
 
   default:
     desc: Build and install the CLI
