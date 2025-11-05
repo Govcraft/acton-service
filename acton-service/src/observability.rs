@@ -106,7 +106,7 @@ pub fn init_tracing(config: &Config) -> Result<()> {
 
 /// Initialize OpenTelemetry OTLP tracer using official SDK pattern
 #[cfg(feature = "observability")]
-fn init_otlp_tracer(
+pub(crate) fn init_otlp_tracer(
     otlp_config: &crate::config::OtlpConfig,
     service_name: &str,
 ) -> Result<SdkTracerProvider> {
@@ -203,22 +203,25 @@ mod tests {
         assert!(result.is_ok(), "Tracing initialization should succeed");
     }
 
-    #[test]
+    #[tokio::test]
     #[cfg(feature = "observability")]
-    fn test_init_tracing_with_invalid_otlp() {
-        let mut config = Config::default();
-        config.otlp = Some(crate::config::OtlpConfig {
+    async fn test_init_tracing_with_invalid_otlp() {
+        // Note: This test verifies initialization logic but can't actually call init_tracing
+        // because the global subscriber can only be set once per process.
+        // Instead, we test the OTLP tracer initialization directly.
+
+        let otlp_config = crate::config::OtlpConfig {
             endpoint: "http://invalid-endpoint:4317".to_string(),
             service_name: Some("test-service".to_string()),
             enabled: true,
-        });
+        };
 
-        // Should gracefully fall back to JSON logging even with invalid OTLP endpoint
-        let result = init_tracing(&config);
-        assert!(
-            result.is_ok(),
-            "Should gracefully handle invalid OTLP endpoint"
-        );
+        // The OTLP exporter should build successfully even with invalid endpoint
+        // It will only fail when trying to actually send spans (lazy connection)
+        let result = init_otlp_tracer(&otlp_config, "test-service");
+
+        // Should succeed - the exporter doesn't validate connectivity at build time
+        assert!(result.is_ok(), "OTLP tracer should build even with invalid endpoint (connection is lazy)");
     }
 
     #[test]
