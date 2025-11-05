@@ -74,6 +74,11 @@ pub mod openapi;
 #[cfg(feature = "grpc")]
 pub mod grpc;
 
+/// Build-time utilities for compiling protocol buffers
+///
+/// These are used in `build.rs` scripts, not at runtime.
+pub mod build_utils;
+
 /// Prelude module for convenient imports
 pub mod prelude {
     pub use crate::config::Config;

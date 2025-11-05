@@ -25,6 +25,9 @@ tower_governor = { workspace = true, optional = true }
 tonic = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
 tonic-prost = { workspace = true, optional = true }
+tonic-build = { workspace = true, optional = true }
+prost-build = { version = "0.14.1", optional = true }
+tonic-prost-build = { workspace = true, optional = true }
 
 # Database (optional)
 sqlx = { workspace = true, optional = true }
@@ -84,7 +87,7 @@ tonic-reflection = { version = "0.14.2", optional = true }
 [features]
 default = ["http", "observability"]
 http = []
-grpc = ["dep:tonic", "dep:prost", "dep:tonic-prost", "dep:tokio-stream", "dep:tonic-health", "dep:tonic-reflection"]
+grpc = ["dep:tonic", "dep:prost", "dep:tonic-prost", "dep:tonic-build", "dep:prost-build", "dep:tonic-prost-build", "dep:tokio-stream", "dep:tonic-health", "dep:tonic-reflection"]
 database = ["dep:sqlx"]
 cache = ["dep:redis", "dep:deadpool-redis"]
 events = ["dep:async-nats"]
