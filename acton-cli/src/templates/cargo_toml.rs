@@ -13,6 +13,19 @@ pub fn generate(template: &ServiceTemplate) -> String {
         )
     };
 
+    // Compile-time detection of acton-service path for local development
+    // env!("CARGO_MANIFEST_DIR") is set during compilation and baked into the binary
+    let acton_service_dep = {
+        let cli_manifest_dir = env!("CARGO_MANIFEST_DIR");
+        if cli_manifest_dir.ends_with("/acton-cli") {
+            let workspace_root = cli_manifest_dir.strip_suffix("/acton-cli").unwrap();
+            let acton_service_path = format!("{}/acton-service", workspace_root);
+            format!(r#"acton-service = {{ path = "{}"{} }}"#, acton_service_path, features_str)
+        } else {
+            format!(r#"acton-service = {{ version = "0.2.1"{} }}"#, features_str)
+        }
+    };
+
     let mut content = format!(
 r#"[package]
 name = "{}"
@@ -20,14 +33,14 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-acton-service = {{ version = "0.2.0"{} }}
+{}
 tokio = {{ version = "1", features = ["full"] }}
 serde = {{ version = "1.0", features = ["derive"] }}
 serde_json = "1.0"
 anyhow = "1.0"
 tracing = "0.1"
 "#,
-        template.name, features_str
+        template.name, acton_service_dep
     );
 
     // Add database dependencies
