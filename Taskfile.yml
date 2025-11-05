@@ -1,0 +1,44 @@
+version: '3'
+
+vars:
+  CLI_NAME: acton
+  CLI_PATH: acton-cli
+  INSTALL_DIR: '{{.HOME}}/.local/bin'
+  TARGET_DIR: target/release
+
+tasks:
+  build:
+    desc: Build the CLI in release mode
+    cmds:
+      - cargo build --manifest-path {{.CLI_PATH}}/Cargo.toml --release
+    sources:
+      - '{{.CLI_PATH}}/src/**/*.rs'
+      - '{{.CLI_PATH}}/Cargo.toml'
+    generates:
+      - '{{.TARGET_DIR}}/{{.CLI_NAME}}'
+
+  install:
+    desc: Install the CLI to ~/.local/bin
+    deps:
+      - build
+    cmds:
+      - mkdir -p {{.INSTALL_DIR}}
+      - cp {{.TARGET_DIR}}/{{.CLI_NAME}} {{.INSTALL_DIR}}/{{.CLI_NAME}}
+      - chmod +x {{.INSTALL_DIR}}/{{.CLI_NAME}}
+    status:
+      - test -f {{.INSTALL_DIR}}/{{.CLI_NAME}} && test {{.TARGET_DIR}}/{{.CLI_NAME}} -ot {{.INSTALL_DIR}}/{{.CLI_NAME}}
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - cargo clean --manifest-path {{.CLI_PATH}}/Cargo.toml
+
+  uninstall:
+    desc: Remove the CLI from ~/.local/bin
+    cmds:
+      - rm -f {{.INSTALL_DIR}}/{{.CLI_NAME}}
+
+  default:
+    desc: Build and install the CLI
+    cmds:
+      - task: install
