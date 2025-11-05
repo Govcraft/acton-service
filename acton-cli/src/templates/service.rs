@@ -258,16 +258,14 @@ pub fn generate_build_rs(template: &ServiceTemplate) -> Option<String> {
 
     Some(
 r#"fn main() -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(feature = "grpc")]
-    {
-        // Compile proto files
-        // You can customize proto compilation here
-        // Example:
-        // tonic_build::configure()
-        //     .build_server(true)
-        //     .build_client(true)
-        //     .compile(&["proto/service.proto"], &["proto"])?;
-    }
+    // Compile proto files when you're ready
+    // Uncomment and customize the code below:
+    //
+    // tonic_build::configure()
+    //     .build_server(true)
+    //     .build_client(true)
+    //     .compile(&["proto/service.proto"], &["proto"])?;
+
     Ok(())
 }
 "#.to_string()
