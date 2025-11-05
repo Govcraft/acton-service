@@ -1,6 +1,7 @@
 // Service validation logic will be implemented here
 use anyhow::Result;
 
+#[allow(dead_code)]
 pub struct ValidationResult {
     pub score: f32,
     pub passed: Vec<String>,
@@ -8,6 +9,7 @@ pub struct ValidationResult {
     pub errors: Vec<String>,
 }
 
+#[allow(dead_code)]
 pub fn validate_service(_path: &str) -> Result<ValidationResult> {
     // TODO: Implement validation logic
     Ok(ValidationResult {

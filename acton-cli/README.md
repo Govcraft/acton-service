@@ -11,13 +11,17 @@ Production-ready CLI for scaffolding and managing microservices built with the a
 - Template-based code generation
 - Git integration
 - Automatic code formatting
+- `acton service add endpoint` - Add HTTP endpoints ✨ NEW
+- `acton service add worker` - Add background workers ✨ NEW
+- `acton service generate deployment` - Generate K8s manifests ✨ NEW
 
 🚧 **Planned:**
-- `acton service add endpoint` - Add HTTP endpoints
 - `acton service add grpc` - Add gRPC services
-- `acton service add worker` - Add background workers
+- `acton service add middleware` - Add custom middleware
+- `acton service add version` - Add API versions
 - `acton service validate` - Validate service quality
-- `acton service generate deployment` - Generate K8s/Docker configs
+- `acton service generate config` - Generate configuration
+- `acton service generate proto` - Generate proto files
 - `acton service dev` - Development tools
 
 ## Installation
@@ -242,15 +246,79 @@ ls -la /tmp/test-service
 rm -rf /tmp/test-service
 ```
 
+## Command Examples
+
+### Adding HTTP Endpoints
+
+```bash
+# Add a GET endpoint
+acton service add endpoint GET /users --version v1
+
+# Add a POST endpoint with full options
+acton service add endpoint POST /users \
+    --handler create_user \
+    --model User \
+    --validate \
+    --openapi
+
+# Preview what would be generated
+acton service add endpoint GET /users/:id --dry-run
+```
+
+### Adding Background Workers
+
+```bash
+# Add a NATS worker
+acton service add worker email-worker \
+    --source nats \
+    --stream emails \
+    --subject "emails.>"
+
+# Add a Redis Stream worker
+acton service add worker notification-worker \
+    --source redis-stream \
+    --stream notifications
+
+# Preview worker generation
+acton service add worker my-worker --source nats --stream events --dry-run
+```
+
+### Generating Deployments
+
+```bash
+# Generate basic Kubernetes manifests
+acton service generate deployment
+
+# Generate with autoscaling and monitoring
+acton service generate deployment \
+    --hpa \
+    --monitoring \
+    --replicas 3
+
+# Generate complete production setup
+acton service generate deployment \
+    --namespace production \
+    --hpa \
+    --monitoring \
+    --ingress \
+    --tls \
+    --registry gcr.io/myproject \
+    --image-tag v1.0.0
+
+# Preview deployment manifests
+acton service generate deployment --dry-run
+```
+
 ## Next Steps
 
 To continue implementation:
 
-1. **Add Endpoint Command** - Generate HTTP endpoint handlers
-2. **Validate Command** - Quality checks and scoring
-3. **Generate Deployment** - Kubernetes manifests
-4. **Add Worker Command** - Background job workers
-5. **Add gRPC Command** - gRPC service generation
+1. **Add gRPC Command** - gRPC service generation
+2. **Add Middleware Command** - Custom middleware handlers
+3. **Add Version Command** - API versioning support
+4. **Validate Command** - Quality checks and scoring
+5. **Generate Config Command** - Configuration file generation
+6. **Dev Commands** - Development server, health checks, logs
 
 ## Contributing
 

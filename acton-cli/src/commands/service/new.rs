@@ -2,7 +2,7 @@ use anyhow::Result;
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm, Select};
 use indicatif::{ProgressBar, ProgressStyle};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::templates::{self, ServiceTemplate};
@@ -205,7 +205,7 @@ fn collect_interactive_config(name: &str) -> Result<ServiceConfig> {
     })
 }
 
-async fn create_project(config: &ServiceConfig, project_path: &PathBuf, no_git: bool) -> Result<()> {
+async fn create_project(config: &ServiceConfig, project_path: &Path, no_git: bool) -> Result<()> {
     let pb = ProgressBar::new(10);
     pb.set_style(
         ProgressStyle::default_bar()
@@ -318,7 +318,7 @@ async fn create_project(config: &ServiceConfig, project_path: &PathBuf, no_git: 
     Ok(())
 }
 
-fn show_dry_run(config: &ServiceConfig, project_path: &PathBuf) {
+fn show_dry_run(config: &ServiceConfig, project_path: &Path) {
     println!("\n{}", "Dry run - would generate:".bold());
     println!("\n{}", format!("Project: {}", project_path.display()).cyan());
 
@@ -365,7 +365,7 @@ fn show_dry_run(config: &ServiceConfig, project_path: &PathBuf) {
     }
 }
 
-fn show_success(config: &ServiceConfig, project_path: &PathBuf) {
+fn show_success(config: &ServiceConfig, project_path: &Path) {
     println!("\n{} {}", "✓".green().bold(), format!("Created {} service", config.name).bold());
 
     if config.http || config.grpc || config.database.is_some() {
@@ -399,5 +399,5 @@ fn show_success(config: &ServiceConfig, project_path: &PathBuf) {
 
     println!("  cargo run");
 
-    println!("\n{} {}", "📚".cyan(), "Learn more: https://docs.acton-service.dev/getting-started");
+    println!("\n{} Learn more: https://docs.acton-service.dev/getting-started", "📚".cyan());
 }
