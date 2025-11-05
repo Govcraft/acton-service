@@ -55,12 +55,31 @@ lazy_init = true
         );
     }
 
+    // Add gRPC configuration
+    if template.grpc {
+        content.push_str(
+r#"[grpc]
+enabled = true
+use_separate_port = false  # Single-port mode: HTTP + gRPC on same port
+port = 9090                # Only used if use_separate_port = true
+reflection_enabled = true
+health_check_enabled = true
+max_message_size_mb = 4
+connection_timeout_secs = 10
+timeout_secs = 30
+
+"#
+        );
+    }
+
     // Add observability configuration
     if template.observability {
         content.push_str(
-r#"[observability]
-tracing_endpoint = "http://localhost:14268/api/traces"
-metrics_enabled = true
+r#"[otlp]
+endpoint = "http://localhost:4317"
+# For production, use environment variable: ACTON_OTLP_ENDPOINT
+enabled = true
+# service_name defaults to service.name if not specified
 
 "#
         );
@@ -94,12 +113,21 @@ circuit_breaker_threshold = 0.5
 circuit_breaker_min_requests = 10
 circuit_breaker_wait_secs = 30
 
-retry_enabled = true
-retry_max_attempts = 3
-retry_base_delay_ms = 100
-
 bulkhead_enabled = true
 bulkhead_max_concurrent = 100
+
+"#
+        );
+    }
+
+    // Add metrics configuration
+    if template.observability {
+        content.push_str(
+r#"# HTTP Metrics (OpenTelemetry)
+[middleware.metrics]
+enabled = true
+export_interval_secs = 60
+# Metrics exported to OTLP endpoint above
 
 "#
         );
