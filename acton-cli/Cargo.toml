@@ -46,3 +46,5 @@ duct = "0.13.7"
 # DateTime
 chrono = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
+clap_complete = "4.5.60"
+dirs = "6.0.0"

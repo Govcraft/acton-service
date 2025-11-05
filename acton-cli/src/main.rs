@@ -7,13 +7,14 @@ mod utils;
 mod validator;
 
 use commands::service::ServiceCommands;
+use commands::setup::SetupCommands;
 
 /// acton - Production-ready Rust microservice CLI
 #[derive(Parser)]
 #[command(name = "acton")]
 #[command(version, about, long_about = None)]
 #[command(propagate_version = true)]
-struct Cli {
+pub struct Cli {
     #[command(subcommand)]
     command: Commands,
 }
@@ -23,7 +24,12 @@ enum Commands {
     /// Service management commands
     Service {
         #[command(subcommand)]
-        command: ServiceCommands,
+        command: Box<ServiceCommands>,
+    },
+    /// Setup and configuration commands
+    Setup {
+        #[command(subcommand)]
+        command: SetupCommands,
     },
 }
 
@@ -34,7 +40,8 @@ async fn main() {
 
     // Execute command
     let result = match cli.command {
-        Commands::Service { command } => commands::service::execute(command).await,
+        Commands::Service { command } => commands::service::execute(*command).await,
+        Commands::Setup { command } => commands::setup::execute(command).await,
     };
 
     // Handle result
