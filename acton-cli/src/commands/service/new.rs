@@ -404,6 +404,18 @@ fn show_success(config: &ServiceConfig, project_path: &Path) {
         }
     }
 
+    // Add gRPC port configuration info
+    if config.grpc {
+        println!("\n{}:", "Port Configuration".bold());
+        if config.http {
+            println!("  {} HTTP and gRPC share port 8080 (single-port mode)", "ℹ".cyan());
+            println!("  {} To use separate ports, edit config.toml:", "→".cyan());
+            println!("    Set use_separate_port = true (HTTP: 8080, gRPC: 9090)");
+        } else {
+            println!("  {} gRPC listening on port 9090", "ℹ".cyan());
+        }
+    }
+
     println!("\n{}:", "Next steps".bold());
     println!("  cd {}", project_path.display());
 
