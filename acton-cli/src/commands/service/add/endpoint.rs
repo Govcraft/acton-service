@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::templates::handlers::{generate_endpoint_handler, generate_route_registration, HandlerTemplate};
+use crate::templates::handlers::{generate_endpoint_handler, HandlerTemplate};
 use crate::utils::{self, format as name_format};
 
 #[allow(clippy::too_many_arguments)]
@@ -160,7 +160,7 @@ fn add_route_to_main(
     method: &str,
     path: &str,
     handler: &str,
-    version: &str,
+    _version: &str,
 ) -> Result<()> {
     let main_path = project_root.join("src").join("main.rs");
 
@@ -171,33 +171,56 @@ fn add_route_to_main(
     let main_content = fs::read_to_string(&main_path)
         .context("Failed to read main.rs")?;
 
-    // Generate the route registration line
-    let route_line = generate_route_registration(method, path, handler, version);
+    // Generate the route method (get, post, etc.)
+    let route_method = match method.to_uppercase().as_str() {
+        "GET" => "get",
+        "POST" => "post",
+        "PUT" => "put",
+        "DELETE" => "delete",
+        "PATCH" => "patch",
+        _ => "get",
+    };
 
-    // Try to find the router setup and add the route
-    // This is a simplified approach - in production, you'd want more sophisticated parsing
-    if main_content.contains(&route_line) {
+    // Check if route already exists
+    let route_check = format!("{}(handlers::{})", route_method, handler);
+    if main_content.contains(&route_check) {
         utils::warning(&format!("Route {} {} already exists in main.rs", method, path));
         return Ok(());
     }
 
     // Look for the routing setup pattern
     let new_content = if let Some(pos) = main_content.find("// TODO: Add your routes here") {
+        // Replace the TODO comment with the actual route
         let before = &main_content[..pos];
-        let after = &main_content[pos..];
+        let after_comment_start = pos;
+
+        // Find the end of the comment line
+        let remaining = &main_content[after_comment_start..];
+        let comment_end = if let Some(newline_pos) = remaining.find('\n') {
+            after_comment_start + newline_pos + 1
+        } else {
+            main_content.len()
+        };
+
+        // Find the next line with "router" to insert before it
+        let after = &main_content[comment_end..];
+        let route_line = format!("            router.route(\"{}\", {}(handlers::{}))", path, route_method, handler);
+
         format!("{}{}\n{}", before, route_line, after)
     } else if let Some(pos) = main_content.find(".route(") {
         // Find the end of the last route and add after it
-        let after = &main_content[pos + 1..];
+        let after = &main_content[pos..];
         if let Some(end_pos) = after.find(')') {
-            let route_end = pos + 1 + end_pos + 1;
+            let route_end = pos + end_pos + 1;
             let before = &main_content[..route_end];
             let after = &main_content[route_end..];
-            format!("{}\n{}{}", before, route_line, after)
+            let route_line = format!("\n            .route(\"{}\", {}(handlers::{}))", path, route_method, handler);
+            format!("{}{}{}", before, route_line, after)
         } else {
             main_content
         }
     } else {
+        let route_line = format!("router.route(\"{}\", {}(handlers::{}))", path, route_method, handler);
         utils::warning("Could not automatically add route to main.rs. Please add manually:");
         println!("\n{}", route_line);
         return Ok(());
