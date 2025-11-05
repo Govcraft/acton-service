@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use colored::Colorize;
 
 mod commands;
+mod template_engine;
 mod templates;
 mod utils;
 mod validator;

@@ -8,6 +8,7 @@ use std::io;
 use std::path::Path;
 
 use crate::Cli;
+use crate::template_engine::TemplateEngine;
 
 #[derive(Subcommand)]
 pub enum SetupCommands {
@@ -25,6 +26,16 @@ pub enum SetupCommands {
         #[arg(long)]
         show_instructions: bool,
     },
+    /// Initialize user-customizable templates in XDG config directory
+    Templates {
+        /// List all available templates
+        #[arg(long)]
+        list: bool,
+
+        /// Show the templates directory path
+        #[arg(long)]
+        show_path: bool,
+    },
 }
 
 pub async fn execute(command: SetupCommands) -> Result<()> {
@@ -34,6 +45,7 @@ pub async fn execute(command: SetupCommands) -> Result<()> {
             stdout,
             show_instructions,
         } => completions(shell, stdout, show_instructions).await,
+        SetupCommands::Templates { list, show_path } => templates(list, show_path).await,
     }
 }
 
@@ -249,4 +261,74 @@ fn display_post_install_instructions(shell: Shell, path: &Path, requires_setup: 
         }
     }
     println!();
+}
+
+/// Initialize or manage user-customizable templates
+async fn templates(list: bool, show_path: bool) -> Result<()> {
+    let engine = TemplateEngine::new()?;
+
+    if list {
+        // List all available templates
+        println!("{}", "Available templates:".bold());
+        println!();
+
+        let templates = engine.list_templates();
+        for template in templates {
+            println!("  • {}", template.cyan());
+        }
+
+        println!();
+        println!(
+            "{}",
+            format!(
+                "Total: {} templates",
+                engine.list_templates().len()
+            )
+            .dimmed()
+        );
+        return Ok(());
+    }
+
+    if show_path {
+        // Show the templates directory path
+        if let Some(config_dir) = engine.config_dir() {
+            println!("{}", "Templates directory:".bold());
+            println!("  {}", config_dir.display().to_string().cyan());
+        } else {
+            println!("{}", "Templates directory not initialized yet.".yellow());
+            println!("Run {} to initialize templates.", "acton setup templates".cyan());
+        }
+        return Ok(());
+    }
+
+    // Initialize user templates
+    println!("{}", "Initializing user templates...".bold());
+    println!();
+
+    let config_dir = engine.init_user_templates()?;
+
+    println!(
+        "{} Templates initialized successfully!",
+        "✓".green().bold()
+    );
+    println!();
+    println!("  {}", config_dir.display().to_string().cyan());
+    println!();
+    println!("{}", "What's next?".bold());
+    println!();
+    println!("  1. Templates are now available in your config directory");
+    println!("  2. Customize any template to fit your project needs");
+    println!("  3. Customized templates will be used automatically");
+    println!();
+    println!("{}", "Examples:".dimmed());
+    println!("  • Edit service/main.rs.jinja to change generated main.rs structure");
+    println!("  • Edit service/Cargo.toml.jinja to customize dependencies");
+    println!("  • Edit handlers/endpoint.rs.jinja to change handler templates");
+    println!();
+    println!(
+        "{}",
+        "Note: Templates not modified will use embedded defaults.".dimmed()
+    );
+
+    Ok(())
 }

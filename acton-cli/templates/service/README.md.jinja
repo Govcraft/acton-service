@@ -1,0 +1,105 @@
+# {{ name }}
+
+Production-ready microservice built with acton-service.
+
+## Features
+
+{% if http -%}
+- ✅ HTTP REST API with versioning
+{% endif -%}
+{%- if grpc -%}
+- ✅ gRPC service
+{% endif -%}
+{%- if has_database -%}
+- ✅ PostgreSQL database with connection pooling
+{% endif -%}
+{%- if has_cache -%}
+- ✅ Redis caching
+{% endif -%}
+{%- if has_events -%}
+- ✅ NATS event streaming
+{% endif -%}
+{%- if has_auth -%}
+- ✅ JWT authentication
+{% endif -%}
+{%- if observability -%}
+- ✅ OpenTelemetry tracing and metrics
+{% endif -%}
+{%- if resilience -%}
+- ✅ Circuit breaker and retry patterns
+{% endif -%}
+{%- if rate_limit -%}
+- ✅ Rate limiting
+{% endif -%}
+- ✅ Health and readiness endpoints
+- ✅ Graceful shutdown
+- ✅ Structured logging
+
+## Getting Started
+
+### Prerequisites
+
+- Rust 1.75 or later
+- Cargo
+{%- if has_database %}
+- PostgreSQL (for database)
+{%- endif %}
+
+### Configuration
+
+Copy `config.toml` to `config.local.toml` and update with your settings:
+
+```bash
+cp config.toml config.local.toml
+```
+
+Configuration is loaded from (highest to lowest priority):
+1. Environment variables (`ACTON_*`)
+2. `./config.local.toml` (development, not in git)
+3. `./config.toml`
+4. `~/.config/acton-service/{{ name }}/config.toml`
+5. `/etc/acton-service/{{ name }}/config.toml`
+6. Default values
+
+### Running
+
+```bash
+# Development
+cargo run
+
+# Production (optimized)
+cargo run --release
+```
+
+### Testing
+
+```bash
+# Run all tests
+cargo test
+
+# Run with coverage
+cargo tarpaulin
+```
+
+## API Documentation
+
+{% if http and grpc -%}
+- REST API available at `http://localhost:8080/api/v1`
+- gRPC service available at `localhost:8080` (single-port mode)
+- Health check: `GET /health`
+- Readiness check: `GET /ready`
+
+Note: HTTP and gRPC share the same port (8080) by default.
+Set `use_separate_port = true` in config.toml to use separate ports.
+{%- elif http -%}
+- REST API available at `http://localhost:8080/api/v1`
+- Health check: `GET /health`
+- Readiness check: `GET /ready`
+{%- else -%}
+- gRPC service available at `localhost:8080`
+- Set `use_separate_port = true` in config.toml to use port 9090
+{%- endif %}
+
+## License
+
+MIT

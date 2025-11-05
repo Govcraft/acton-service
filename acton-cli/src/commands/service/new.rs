@@ -5,6 +5,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::template_engine::TemplateEngine;
 use crate::templates::{self, ServiceTemplate};
 use crate::utils::{self, format};
 
@@ -232,6 +233,18 @@ async fn create_project(config: &ServiceConfig, project_path: &Path, no_git: boo
         openapi: config.openapi,
     };
 
+    // Initialize template engine
+    pb.set_message("Initializing template engine...");
+    let engine = TemplateEngine::new()?;
+
+    // Prepare template context
+    let mut context = template.to_json();
+    let context_obj = context.as_object_mut().unwrap();
+    context_obj.insert("acton_service_path".to_string(),
+        serde_json::Value::String(template.acton_service_path().unwrap_or_default()));
+    context_obj.insert("features".to_string(),
+        serde_json::Value::Array(template.features().iter().map(|f| serde_json::Value::String(f.clone())).collect()));
+
     pb.set_message("Creating project structure...");
     utils::create_dir_all(project_path)?;
 
@@ -242,7 +255,7 @@ async fn create_project(config: &ServiceConfig, project_path: &Path, no_git: boo
     pb.set_message("Generating Cargo.toml...");
     utils::write_file(
         &project_path.join("Cargo.toml"),
-        &templates::cargo_toml::generate(&template),
+        &engine.render("service/Cargo.toml.jinja", &context)?,
     )?;
 
     pb.set_message("Generating configuration...");
@@ -254,7 +267,7 @@ async fn create_project(config: &ServiceConfig, project_path: &Path, no_git: boo
     pb.set_message("Generating main.rs...");
     utils::write_file(
         &src_dir.join("main.rs"),
-        &templates::service::generate_main_rs(&template),
+        &engine.render("service/main.rs.jinja", &context)?,
     )?;
 
     // Generate handlers if HTTP enabled
@@ -262,16 +275,17 @@ async fn create_project(config: &ServiceConfig, project_path: &Path, no_git: boo
         pb.set_message("Generating handlers...");
         utils::write_file(
             &src_dir.join("handlers.rs"),
-            &templates::handlers::generate_handlers_mod(),
+            &engine.render("handlers/mod.rs.jinja", &context)?,
         )?;
     }
 
     // Generate build.rs if gRPC enabled
     if config.grpc {
-        if let Some(build_rs) = templates::service::generate_build_rs(&template) {
-            pb.set_message("Generating build.rs...");
-            utils::write_file(&project_path.join("build.rs"), &build_rs)?;
-        }
+        pb.set_message("Generating build.rs...");
+        utils::write_file(
+            &project_path.join("build.rs"),
+            &engine.render("service/build.rs.jinja", &context)?,
+        )?;
 
         // Create proto directory
         let proto_dir = project_path.join("proto");
@@ -281,13 +295,13 @@ async fn create_project(config: &ServiceConfig, project_path: &Path, no_git: boo
     pb.set_message("Generating .gitignore...");
     utils::write_file(
         &project_path.join(".gitignore"),
-        &templates::service::generate_gitignore(),
+        &engine.render("service/.gitignore.jinja", &context)?,
     )?;
 
     pb.set_message("Generating README.md...");
     utils::write_file(
         &project_path.join("README.md"),
-        &templates::service::generate_readme(&template),
+        &engine.render("service/README.md.jinja", &context)?,
     )?;
 
     pb.set_message("Generating Dockerfile...");

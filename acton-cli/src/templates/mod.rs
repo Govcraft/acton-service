@@ -5,11 +5,12 @@ pub mod handlers;
 pub mod deployment;
 pub mod worker;
 
-use handlebars::Handlebars;
+use serde::{Serialize, Deserialize};
 use serde_json::json;
 use chrono::Datelike;
 
 /// Template data for service generation
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct ServiceTemplate {
     pub name: String,
@@ -91,10 +92,15 @@ impl ServiceTemplate {
     }
 }
 
-/// Get Handlebars renderer with all templates registered
-#[allow(dead_code)]
-pub fn get_renderer() -> Handlebars<'static> {
-    let mut handlebars = Handlebars::new();
-    handlebars.set_strict_mode(true);
-    handlebars
+impl ServiceTemplate {
+    /// Calculate acton-service path from CLI manifest directory
+    pub fn acton_service_path(&self) -> Option<String> {
+        let cli_manifest_dir = env!("CARGO_MANIFEST_DIR");
+        if cli_manifest_dir.ends_with("/acton-cli") {
+            let workspace_root = cli_manifest_dir.strip_suffix("/acton-cli")?;
+            Some(format!("{}/acton-service", workspace_root))
+        } else {
+            None
+        }
+    }
 }
