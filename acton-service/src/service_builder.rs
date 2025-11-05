@@ -98,7 +98,7 @@ pub struct ServiceBuilder {
     routes: Option<VersionedRoutes>,
     state: Option<AppState>,
     #[cfg(feature = "grpc")]
-    grpc_services: Option<tonic::transport::server::Router>,
+    grpc_services: Option<tonic::service::Routes>,
 }
 
 impl ServiceBuilder {
@@ -159,7 +159,7 @@ impl ServiceBuilder {
     ///     .build();
     /// ```
     #[cfg(feature = "grpc")]
-    pub fn with_grpc_services(mut self, services: tonic::transport::server::Router) -> Self {
+    pub fn with_grpc_services(mut self, services: tonic::service::Routes) -> Self {
         self.grpc_services = Some(services);
         self
     }
@@ -239,7 +239,7 @@ impl ServiceBuilder {
             listener_addr,
             app,
             #[cfg(feature = "grpc")]
-            grpc_services: self.grpc_services,
+            grpc_routes: self.grpc_services,
         }
     }
 }
@@ -264,7 +264,7 @@ pub struct ActonService {
     listener_addr: std::net::SocketAddr,
     app: Router,
     #[cfg(feature = "grpc")]
-    grpc_services: Option<tonic::transport::server::Router>,
+    grpc_routes: Option<tonic::service::Routes>,
 }
 
 impl ActonService {
@@ -321,8 +321,8 @@ impl ActonService {
         {
             // Check if gRPC is enabled and services are provided
             if let Some(ref grpc_config) = self.config.grpc {
-                if grpc_config.enabled && self.grpc_services.is_some() {
-                    let grpc_services = self.grpc_services.take().unwrap();
+                if grpc_config.enabled && self.grpc_routes.is_some() {
+                    let grpc_routes = self.grpc_routes.take().unwrap();
 
                     if grpc_config.use_separate_port {
                         // Dual-port mode: HTTP and gRPC on separate ports
@@ -335,13 +335,13 @@ impl ActonService {
                         let http_listener = TcpListener::bind(&self.listener_addr).await?;
                         let grpc_listener = TcpListener::bind(&grpc_addr).await?;
 
+                        // Convert Routes to axum router for the gRPC listener
+                        let grpc_app = grpc_routes.into_axum_router();
+
                         // Spawn gRPC server on separate task
                         let grpc_handle = tokio::spawn(async move {
-                            grpc_services
-                                .serve_with_incoming_shutdown(
-                                    tokio_stream::wrappers::TcpListenerStream::new(grpc_listener),
-                                    shutdown_signal(),
-                                )
+                            axum::serve(grpc_listener, grpc_app)
+                                .with_graceful_shutdown(shutdown_signal())
                                 .await
                         });
 
@@ -360,11 +360,15 @@ impl ActonService {
 
                         let listener = TcpListener::bind(&self.listener_addr).await?;
 
-                        // TODO: Implement hybrid routing based on content-type
-                        // For now, just serve HTTP (gRPC support will be added in Phase 2)
-                        tracing::warn!("gRPC single-port mode not yet implemented, serving HTTP only");
+                        // Merge HTTP and gRPC services using Routes.into_axum_router()
+                        // The Routes type automatically handles protocol detection based on content-type
+                        // gRPC requests (content-type: application/grpc) are routed to gRPC services
+                        // All other requests are handled by the HTTP router
+                        let hybrid_service = grpc_routes
+                            .into_axum_router()
+                            .merge(self.app);
 
-                        axum::serve(listener, self.app)
+                        axum::serve(listener, hybrid_service)
                             .with_graceful_shutdown(shutdown_signal())
                             .await?;
                     }
