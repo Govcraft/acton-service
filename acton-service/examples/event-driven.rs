@@ -389,17 +389,21 @@ async fn main() -> Result<()> {
         });
 
         // Build gRPC server with health and reflection
-        let router = acton_service::grpc::server::GrpcServicesBuilder::new()
+        let routes = acton_service::grpc::server::GrpcServicesBuilder::new()
             .with_health()
             .with_reflection()
             .add_file_descriptor_set(orders::FILE_DESCRIPTOR_SET)
             .add_service(OrderServiceServer::new(order_service))
             .build(None);
 
-        if let Some(router) = router {
-            tracing::info!("✓ gRPC service listening on {}", grpc_addr);
-            router.serve(grpc_addr).await.expect("gRPC server failed");
-        }
+        // Convert routes to axum router and serve
+        tracing::info!("✓ gRPC service listening on {}", grpc_addr);
+        let grpc_app = routes.into_axum_router();
+        let listener = tokio::net::TcpListener::bind(grpc_addr).await.expect("Failed to bind gRPC listener");
+
+        axum::serve(listener, grpc_app)
+            .await
+            .expect("gRPC server failed");
     });
 
     // Wait for gRPC to start
