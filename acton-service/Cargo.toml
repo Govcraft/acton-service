@@ -4,7 +4,13 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Production-ready Rust microservice framework with dual-protocol support (HTTP + gRPC)"
+description = "Production-ready Rust microservice framework with type-enforced API versioning"
+repository = "https://github.com/govcraft/acton-service"
+homepage = "https://github.com/govcraft/acton-service"
+documentation = "https://docs.rs/acton-service"
+readme = "../README.md"
+keywords = ["microservice", "framework", "grpc", "rest", "versioning"]
+categories = ["web-programming::http-server", "asynchronous", "network-programming"]
 
 [dependencies]
 # Async runtime
