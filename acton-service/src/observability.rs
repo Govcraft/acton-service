@@ -1,30 +1,151 @@
 //! OpenTelemetry tracing and observability
-
-#[cfg(feature = "observability")]
-use tracing_subscriber::EnvFilter;
+//!
+//! This module provides comprehensive observability with:
+//! - Full OpenTelemetry integration with OTLP export
+//! - Structured JSON logging
+//! - Distributed tracing with span propagation
+//! - Graceful fallback when OTLP is not configured
 
 use crate::{config::Config, error::Result};
 
-/// Initialize tracing with OpenTelemetry
+#[cfg(feature = "observability")]
+use {
+    opentelemetry::global,
+    opentelemetry_otlp::{SpanExporter, WithExportConfig},
+    opentelemetry_sdk::{
+        propagation::TraceContextPropagator,
+        trace::SdkTracerProvider,
+        Resource,
+    },
+    tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer},
+};
+
+/// Global tracer provider for graceful shutdown
+#[cfg(feature = "observability")]
+static TRACER_PROVIDER: once_cell::sync::OnceCell<SdkTracerProvider> =
+    once_cell::sync::OnceCell::new();
+
+/// Initialize tracing with OpenTelemetry and structured logging
+///
+/// This function sets up:
+/// - OpenTelemetry OTLP exporter (if configured)
+/// - Structured JSON logging with tracing
+/// - Trace context propagation (W3C Trace Context)
+/// - Graceful fallback to JSON-only logging if OTLP fails
+///
+/// # Arguments
+/// * `config` - Service configuration containing OTLP and service details
+///
+/// # Returns
+/// * `Ok(())` on successful initialization
+/// * `Err` if tracing setup fails critically
 #[cfg(feature = "observability")]
 pub fn init_tracing(config: &Config) -> Result<()> {
     let log_level = config.service.log_level.clone();
+    let service_name = config.service.name.clone();
 
-    // For now, just use JSON formatting without OpenTelemetry
-    // Full OpenTelemetry integration can be added later with proper version compatibility
-    tracing_subscriber::fmt()
+    // Set global trace context propagator for distributed tracing
+    global::set_text_map_propagator(TraceContextPropagator::new());
+
+    // Build subscriber with JSON formatting
+    let fmt_layer = tracing_subscriber::fmt::layer()
         .json()
-        .with_env_filter(
-            EnvFilter::try_new(&log_level).unwrap_or_else(|_| EnvFilter::new("info"))
-        )
-        .init();
+        .with_filter(
+            EnvFilter::try_new(&log_level).unwrap_or_else(|_| EnvFilter::new("info")),
+        );
 
-    tracing::info!("Tracing initialized for service: {}", config.service.name);
+    // Try to initialize OpenTelemetry if configured
+    if let Some(otlp_config) = &config.otlp {
+        if otlp_config.enabled {
+            match init_otlp_tracer(otlp_config, &service_name) {
+                Ok(tracer_provider) => {
+                    // Set global tracer provider first
+                    global::set_tracer_provider(tracer_provider.clone());
+
+                    // Get tracer from global provider
+                    let tracer = global::tracer(service_name.clone());
+                    let telemetry_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+
+                    tracing_subscriber::registry()
+                        .with(fmt_layer)
+                        .with(telemetry_layer)
+                        .init();
+
+                    // Store provider for shutdown
+                    let _ = TRACER_PROVIDER.set(tracer_provider);
+
+                    tracing::info!(
+                        service = %service_name,
+                        otlp_endpoint = %otlp_config.endpoint,
+                        "OpenTelemetry tracing initialized with OTLP export"
+                    );
+
+                    return Ok(());
+                }
+                Err(e) => {
+                    // Log error but continue with JSON-only logging
+                    eprintln!(
+                        "Failed to initialize OTLP exporter (falling back to JSON logging): {}",
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    // Fallback: JSON logging only (no OTLP)
+    tracing_subscriber::registry().with(fmt_layer).init();
+
+    tracing::info!(
+        service = %service_name,
+        "Tracing initialized with JSON logging (OTLP not configured)"
+    );
 
     Ok(())
 }
 
-/// Initialize tracing without OpenTelemetry (fallback)
+/// Initialize OpenTelemetry OTLP tracer using official SDK pattern
+#[cfg(feature = "observability")]
+fn init_otlp_tracer(
+    otlp_config: &crate::config::OtlpConfig,
+    service_name: &str,
+) -> Result<SdkTracerProvider> {
+    // Use service name from OTLP config or fall back to main service name
+    let trace_service_name = otlp_config
+        .service_name
+        .as_ref()
+        .unwrap_or(&service_name.to_string())
+        .clone();
+
+    // Create resource with service metadata
+    let resource = Resource::builder()
+        .with_service_name(trace_service_name)
+        .build();
+
+    // Build OTLP span exporter with Tonic gRPC transport
+    let mut exporter_builder = SpanExporter::builder().with_tonic();
+
+    // Configure custom endpoint if provided (default is http://localhost:4317)
+    if !otlp_config.endpoint.is_empty() {
+        exporter_builder = exporter_builder.with_endpoint(&otlp_config.endpoint);
+    }
+
+    let exporter = exporter_builder
+        .build()
+        .map_err(|e| {
+            crate::error::Error::Internal(format!("Failed to build OTLP exporter: {}", e))
+        })?;
+
+    // Build tracer provider with production-ready configuration
+    let provider = SdkTracerProvider::builder()
+        .with_resource(resource)
+        .with_batch_exporter(exporter)
+        .build();
+
+    Ok(provider)
+}
+
+/// Initialize tracing without OpenTelemetry (fallback when observability feature is disabled)
 #[cfg(not(feature = "observability"))]
 pub fn init_tracing(config: &Config) -> Result<()> {
     let log_level = config.service.log_level.clone();
@@ -32,25 +153,42 @@ pub fn init_tracing(config: &Config) -> Result<()> {
     tracing_subscriber::fmt()
         .json()
         .with_env_filter(
-            EnvFilter::try_new(&log_level).unwrap_or_else(|_| EnvFilter::new("info"))
+            EnvFilter::try_new(&log_level).unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
 
-    tracing::info!("Tracing initialized for service: {}", config.service.name);
+    tracing::info!(
+        service = %config.service.name,
+        "Tracing initialized (observability feature disabled)"
+    );
 
     Ok(())
 }
 
-/// Shutdown tracing and flush spans
+/// Shutdown tracing and flush all pending spans to OTLP collector
+///
+/// This ensures all telemetry data is exported before process termination.
+/// Should be called during graceful shutdown.
 #[cfg(feature = "observability")]
 pub fn shutdown_tracing() {
+    tracing::info!("Shutting down tracing and flushing spans...");
+
+    // Shutdown the tracer provider if initialized
+    if let Some(provider) = TRACER_PROVIDER.get() {
+        if let Err(e) = provider.shutdown() {
+            eprintln!("Error during tracer provider shutdown: {}", e);
+        } else {
+            tracing::debug!("OpenTelemetry tracer provider shutdown complete");
+        }
+    }
+
     tracing::info!("Tracing shutdown complete");
 }
 
 /// Shutdown tracing (no-op without observability feature)
 #[cfg(not(feature = "observability"))]
 pub fn shutdown_tracing() {
-    tracing::info!("Tracing shutdown (no-op)");
+    tracing::info!("Tracing shutdown (observability feature disabled)");
 }
 
 #[cfg(test)]
@@ -60,7 +198,32 @@ mod tests {
     #[test]
     fn test_init_tracing_without_otlp() {
         let config = Config::default();
-        // This should not panic
-        let _ = init_tracing(&config);
+        // This should not panic and should fall back to JSON logging
+        let result = init_tracing(&config);
+        assert!(result.is_ok(), "Tracing initialization should succeed");
+    }
+
+    #[test]
+    #[cfg(feature = "observability")]
+    fn test_init_tracing_with_invalid_otlp() {
+        let mut config = Config::default();
+        config.otlp = Some(crate::config::OtlpConfig {
+            endpoint: "http://invalid-endpoint:4317".to_string(),
+            service_name: Some("test-service".to_string()),
+            enabled: true,
+        });
+
+        // Should gracefully fall back to JSON logging even with invalid OTLP endpoint
+        let result = init_tracing(&config);
+        assert!(
+            result.is_ok(),
+            "Should gracefully handle invalid OTLP endpoint"
+        );
+    }
+
+    #[test]
+    fn test_shutdown_tracing() {
+        // Should not panic
+        shutdown_tracing();
     }
 }

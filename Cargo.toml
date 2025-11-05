@@ -71,7 +71,7 @@ figment = { version = "0.10.19", features = ["toml", "env", "json"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 opentelemetry = "0.31.0"
-opentelemetry-otlp = "0.31.0"
+opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic"] }
 opentelemetry_sdk = "0.31.0"
 tracing-opentelemetry = "0.32.0"
 
