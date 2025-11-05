@@ -132,7 +132,7 @@ async fn main() -> Result<()> {
         .build_routes();
 
     // Build gRPC services
-    let hello_service = HelloServiceImpl::default();
+    let hello_service = HelloServiceImpl;
 
     let grpc_routes = acton_service::grpc::server::GrpcServicesBuilder::new()
         .with_health()

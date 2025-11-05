@@ -85,7 +85,7 @@ Building production microservices requires solving the same problems over and ov
 - **Health Checks**: Every orchestrator needs them. Every team implements them differently.
 - **Observability**: Tracing, metrics, and logging should be standard, not afterthoughts.
 - **Configuration**: Environment-based config that doesn't require boilerplate.
-- **Dual Protocols**: HTTP and gRPC on the same port (modern K8s deployments need both).
+- **Dual Protocols**: Modern K8s deployments need both HTTP and gRPC, ideally on the same port.
 
 ### The Solution
 
@@ -95,7 +95,7 @@ acton-service provides:
 2. **Automatic health endpoints** - Kubernetes-ready liveness and readiness probes ✅
 3. **Structured logging** - JSON logging with distributed request tracing ✅
 4. **Zero-config defaults** - XDG-compliant configuration with sensible defaults ✅
-5. **HTTP + gRPC support** - Run both protocols (currently on separate ports) ✅
+5. **HTTP + gRPC support** - Run both protocols on the same port with automatic protocol detection ✅
 
 Most importantly: **it's designed for teams**. Individual contributors can't accidentally break production API contracts.
 
@@ -185,7 +185,7 @@ Available middleware:
 
 ### HTTP + gRPC Support
 
-Run HTTP and gRPC services together:
+Run HTTP and gRPC services together on a single port:
 
 ```rust
 // HTTP handlers
@@ -207,9 +207,7 @@ impl my_service::MyService for MyGrpcService {
     }
 }
 
-// Serve both protocols
-// Currently on separate ports (HTTP: 8080, gRPC: 9090)
-// Single-port multiplexing coming soon
+// Serve both protocols on the same port (automatic protocol detection)
 ServiceBuilder::new()
     .with_routes(http_routes)
     .with_grpc_service(my_service::MyServiceServer::new(MyGrpcService))
@@ -218,13 +216,13 @@ ServiceBuilder::new()
     .await?;
 ```
 
-Configure gRPC port in `config.toml`:
+Configure gRPC in `config.toml`:
 
 ```toml
 [grpc]
 enabled = true
-port = 9090              # Separate port for gRPC
-use_separate_port = true # Currently required
+use_separate_port = false  # Default: single-port mode with automatic protocol detection
+# port = 9090              # Only used when use_separate_port = true
 ```
 
 ### Zero-Configuration Defaults
@@ -272,7 +270,7 @@ acton-service = { version = "0.2", features = [
 ] }
 ```
 
-**Note**: Some feature flags (like `resilience`, `otel-metrics`) are defined but not fully implemented yet. See the roadmap below.
+**Note**: All major feature flags are implemented. Some CLI commands (like advanced endpoint generation) are still in progress. See the roadmap below.
 
 Or use `full` to enable everything:
 
@@ -591,16 +589,15 @@ See the [examples directory](./acton-service/examples/) for complete migration e
 - Automatic health/readiness checks with dependency monitoring
 - Structured JSON logging with distributed request tracing
 - XDG-compliant configuration
-- HTTP + gRPC on separate ports
+- Single-port HTTP + gRPC multiplexing with automatic protocol detection
+- OpenTelemetry integration (OTLP exporter with gRPC transport)
+- Circuit breaker and bulkhead middleware (resilience patterns)
+- HTTP metrics collection (OpenTelemetry integration)
 - Core middleware (JWT, rate limiting, compression, CORS, timeouts)
 - CLI scaffolding tool with service generation
 - Database (PostgreSQL), Cache (Redis), Events (NATS) support
 
 **In Progress** 🚧
-- Single-port HTTP + gRPC multiplexing
-- OpenTelemetry integration (OTLP exporter)
-- Circuit breaker, retry, and bulkhead middleware
-- HTTP metrics collection
 - Enhanced CLI commands (add endpoint, worker, etc.)
 
 **Planned** 📋
@@ -609,6 +606,7 @@ See the [examples directory](./acton-service/examples/) for complete migration e
 - Service mesh integration
 - Observability dashboards
 - Additional database backends
+- Retry middleware patterns
 
 ## FAQ
 
@@ -626,7 +624,7 @@ A: Yes. Tower middleware works unchanged. Use `.layer()` with any tower middlewa
 
 **Q: What about REST vs gRPC?**
 
-A: Both are first-class. Run them simultaneously (currently on separate ports; single-port multiplexing coming soon), or choose one.
+A: Both are first-class. Run them simultaneously on the same port with automatic protocol detection, or choose one.
 
 **Q: How does this compare to other frameworks?**
 
