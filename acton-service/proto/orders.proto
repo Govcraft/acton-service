@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package orders.v1;
+
+// Order service for inter-service communication
+//
+// This service is designed to be called by OTHER gRPC services,
+// not directly by HTTP clients. HTTP clients should use the REST API
+// which publishes events.
+service OrderService {
+  // Get the status of an order
+  rpc GetOrderStatus (GetOrderStatusRequest) returns (GetOrderStatusResponse);
+}
+
+message GetOrderStatusRequest {
+  string order_id = 1;
+}
+
+message GetOrderStatusResponse {
+  string order_id = 1;
+  string status = 2;
+}
