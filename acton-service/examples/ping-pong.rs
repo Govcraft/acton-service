@@ -19,7 +19,7 @@
 use acton_service::prelude::*;
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use tonic::{transport::Server, Request, Response, Status};
+use tonic::{Request, Response, Status};
 
 // Include generated protobuf code
 pub mod ping {
