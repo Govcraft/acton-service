@@ -224,18 +224,17 @@ fn compile_protos_with_descriptor(
             .file_descriptor_set_path(descriptor_path)
             .compile_protos(&proto_paths, &include_dirs)
             .map_err(|e| BuildError::ProtoBuild(Box::new(e)))?;
+        Ok(())
     }
 
     #[cfg(not(feature = "grpc"))]
     {
         let _ = (proto_paths, include_dirs, descriptor_path);
-        return Err(BuildError::ProtoBuild(Box::new(std::io::Error::new(
+        Err(BuildError::ProtoBuild(Box::new(std::io::Error::new(
             std::io::ErrorKind::Other,
             "grpc feature not enabled",
-        ))));
+        ))))
     }
-
-    Ok(())
 }
 
 /// Advanced: Compile specific proto files with custom configuration
