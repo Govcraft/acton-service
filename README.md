@@ -1,18 +1,27 @@
 # acton-service
 
-**Production-grade Rust microservice framework with type-enforced API versioning**
+**Production-grade Rust microservice framework for teams shipping to production**
 
-Build microservices that can't ship unversioned APIs. The compiler won't let you.
+Build microservices with enforced best practices, dual HTTP+gRPC support, and comprehensive observability out of the box.
 
 ---
 
 ## What is this?
 
-Most microservice frameworks make API versioning optional. You *should* version your APIs, they say. But when deadlines loom, versioning gets skipped. Six months later, you're maintaining breaking changes in production.
+Building production microservices requires solving the same problems repeatedly: API versioning, health checks, observability, resilience patterns, connection pooling, and configuration management. Most frameworks leave these as optional concerns or implementation details.
 
-acton-service uses Rust's type system to make unversioned APIs **impossible**. Your service won't compile without proper versioning. It's opinionated, batteries-included, and designed for teams shipping to production.
+acton-service provides a **batteries-included, type-enforced framework** where production best practices are the default path:
 
-**Current Status**: acton-service is under active development. Core features (HTTP, versioning, health checks, observability) are production-ready. Some advanced features are in progress.
+- **Type-enforced API versioning** - Impossible to bypass, compiler-enforced versioning
+- **Dual HTTP + gRPC** - Run both protocols on the same port with automatic detection
+- **Production observability** - OpenTelemetry tracing, metrics, and structured logging built-in
+- **Resilience patterns** - Circuit breaker, retry logic, and bulkhead patterns included
+- **Zero-config defaults** - XDG-compliant configuration with sensible production defaults
+- **Kubernetes-ready** - Automatic health/readiness probes for orchestration
+
+It's opinionated, comprehensive, and designed for teams where best practices can't be optional.
+
+**Current Status**: acton-service is under active development. Core features (HTTP/gRPC, versioning, health checks, observability, resilience) are production-ready. Some advanced features are in progress.
 
 ## Quick Start
 
@@ -21,7 +30,7 @@ use acton_service::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Routes MUST be versioned - this is the only way to create them
+    // Build versioned API routes - versioning enforced by type system
     let routes = VersionedApiBuilder::new()
         .with_base_path("/api")
         .add_version(ApiVersion::V1, |router| {
@@ -32,7 +41,12 @@ async fn main() -> Result<()> {
         })
         .build_routes();
 
-    // Zero-config service startup
+    // Zero-config service startup with automatic features:
+    // - Health/readiness endpoints (/health, /ready)
+    // - OpenTelemetry tracing and metrics
+    // - Structured JSON logging
+    // - Request tracking and correlation IDs
+    // - Configuration from environment or files
     ServiceBuilder::new()
         .with_routes(routes)
         .build()
@@ -43,15 +57,24 @@ async fn main() -> Result<()> {
 
 ```bash
 cargo run
+
+# Versioned API endpoints
 curl http://localhost:8080/api/v1/hello
 curl http://localhost:8080/api/v2/hello
-curl http://localhost:8080/health  # automatic health checks
+
+# Automatic health checks (Kubernetes-ready)
+curl http://localhost:8080/health
+curl http://localhost:8080/ready
+
+# OpenTelemetry metrics automatically collected
+# Structured logs in JSON format automatically emitted
+# Request IDs automatically generated and tracked
 ```
 
-**Try to create an unversioned route? Won't compile.**
+**The type system enforces best practices:**
 
 ```rust
-// ❌ This won't compile
+// ❌ This won't compile - unversioned routes rejected at compile time
 let app = Router::new().route("/unversioned", get(handler));
 ServiceBuilder::new().with_routes(app).build();
 //                                   ^^^ expected VersionedRoutes, found Router
@@ -81,29 +104,35 @@ cd my-api && cargo run
 
 Building production microservices requires solving the same problems over and over:
 
-- **API Versioning**: Most frameworks make it optional. Teams skip it until it's too late.
-- **Health Checks**: Every orchestrator needs them. Every team implements them differently.
-- **Observability**: Tracing, metrics, and logging should be standard, not afterthoughts.
-- **Configuration**: Environment-based config that doesn't require boilerplate.
-- **Dual Protocols**: Modern K8s deployments need both HTTP and gRPC, ideally on the same port.
+- **Dual Protocols**: Modern deployments need both HTTP REST APIs and gRPC, but most frameworks make you choose one or run two separate servers
+- **Observability**: Distributed tracing, metrics collection, and structured logging should be standard, not afterthoughts assembled from scattered libraries
+- **Resilience Patterns**: Circuit breakers, retries, and bulkheads are critical for production but tedious to implement correctly
+- **Health Checks**: Every orchestrator needs them, but every team implements them differently with varying quality
+- **API Evolution**: Breaking changes slip through because versioning is optional and easily forgotten
+- **Configuration**: Production deployments need environment-based config without requiring boilerplate for every service
 
 ### The Solution
 
-acton-service provides:
+acton-service provides a **comprehensive, opinionated framework** where production concerns are handled by default:
 
-1. **Type-enforced versioning** - The compiler prevents unversioned APIs ✅
-2. **Automatic health endpoints** - Kubernetes-ready liveness and readiness probes ✅
-3. **Structured logging** - JSON logging with distributed request tracing ✅
-4. **Zero-config defaults** - XDG-compliant configuration with sensible defaults ✅
-5. **HTTP + gRPC support** - Run both protocols on the same port with automatic protocol detection ✅
+1. **Dual HTTP + gRPC** - Run both protocols on the same port with automatic protocol detection, or use separate ports ✅
+2. **Complete observability stack** - OpenTelemetry tracing, HTTP metrics, and structured JSON logging configured out of the box ✅
+3. **Production resilience patterns** - Circuit breaker, exponential backoff retry, and bulkhead middleware included ✅
+4. **Automatic health endpoints** - Kubernetes-ready liveness and readiness probes with dependency monitoring ✅
+5. **Type-enforced API versioning** - The compiler prevents unversioned APIs; impossible to bypass ✅
+6. **Zero-config defaults** - XDG-compliant configuration with sensible defaults and environment variable overrides ✅
+7. **Batteries-included middleware** - JWT auth, rate limiting, request tracking, compression, CORS, timeouts ✅
+8. **Connection pool management** - PostgreSQL, Redis, and NATS support with automatic retry and health checks ✅
 
-Most importantly: **it's designed for teams**. Individual contributors can't accidentally break production API contracts.
+Most importantly: **it's designed for teams**. The type system enforces best practices that individual contributors can't accidentally bypass.
 
 ## Core Features
 
+acton-service provides a comprehensive set of production-ready features that work together seamlessly:
+
 ### Type-Safe API Versioning
 
-Routes are versioned at compile time. The type system enforces it:
+The framework enforces API versioning at compile time through the type system:
 
 ```rust
 // Define your API versions
@@ -156,7 +185,7 @@ optional = true   # Readiness succeeds even if Redis is down
 
 ### Batteries-Included Middleware
 
-Production-ready middleware stack included:
+Production-ready middleware stack with comprehensive coverage:
 
 ```rust
 ServiceBuilder::new()
@@ -165,23 +194,46 @@ ServiceBuilder::new()
         router
             .layer(JwtAuth::new("your-secret"))
             .layer(RequestTrackingConfig::default().layer())
-            .layer(RateLimit::new(100, Duration::from_secs(60)))
+            .layer(RateLimitLayer::new(100, Duration::from_secs(60)))
+            .layer(ResilienceLayer::new()
+                .with_circuit_breaker(0.5)  // 50% failure threshold
+                .with_retry(3)               // max 3 retries
+                .with_bulkhead(100))         // max 100 concurrent requests
     })
     .build()
     .serve()
     .await?;
 ```
 
-Available middleware:
+Available middleware (all HTTP and gRPC compatible):
 
-- **JWT Authentication** - Token validation with configurable algorithms
-- **Rate Limiting** - Token bucket and sliding window strategies (governor)
-- **Request Tracking** - Request ID generation and propagation
-- **Compression** - gzip, br, deflate, zstd
+**Authentication & Authorization**
+- **JWT Authentication** - Full validation with RS256, ES256, HS256/384/512 algorithms
+- Claims structure with roles, permissions, user/client identification
+- Token revocation ready (Redis integration)
+
+**Resilience & Reliability**
+- **Circuit Breaker** - Configurable failure rate monitoring with auto-recovery
+- **Retry Logic** - Exponential backoff with configurable max attempts
+- **Bulkhead** - Concurrency limiting with wait timeouts to prevent overload
+
+**Rate Limiting**
+- **Redis-backed rate limiting** - Distributed rate limiting for multi-instance deployments
+- **Governor rate limiting** - Local in-memory limiting with per-second/minute/hour presets
+- Per-user and per-client limits via JWT claims
+
+**Observability**
+- **Request Tracking** - UUID-based request ID generation and propagation
+- **Distributed Tracing Headers** - x-request-id, x-trace-id, x-span-id, x-correlation-id
+- **OpenTelemetry Metrics** - HTTP request count, duration histograms, active requests, sizes
+- **Sensitive Header Masking** - Automatic masking in logs (authorization, cookies, API keys)
+
+**Standard HTTP Middleware**
+- **Compression** - gzip, br, deflate, zstd content encoding
 - **CORS** - Configurable cross-origin policies
 - **Timeouts** - Configurable request timeouts
 - **Body Size Limits** - Prevent oversized payloads
-- **Panic Recovery** - Graceful handling of panics
+- **Panic Recovery** - Graceful handling of panics with error logging
 
 ### HTTP + gRPC Support
 
@@ -585,54 +637,60 @@ See the [examples directory](./acton-service/examples/) for complete migration e
 ## Roadmap
 
 **Implemented** ✅
-- Type-enforced API versioning with deprecation support
-- Automatic health/readiness checks with dependency monitoring
-- Structured JSON logging with distributed request tracing
-- XDG-compliant configuration
-- Single-port HTTP + gRPC multiplexing with automatic protocol detection
-- OpenTelemetry integration (OTLP exporter with gRPC transport)
-- Circuit breaker and bulkhead middleware (resilience patterns)
-- HTTP metrics collection (OpenTelemetry integration)
-- Core middleware (JWT, rate limiting, compression, CORS, timeouts)
-- CLI scaffolding tool with service generation
-- Database (PostgreSQL), Cache (Redis), Events (NATS) support
+- **Dual Protocol Support**: Single-port HTTP + gRPC multiplexing with automatic protocol detection
+- **Complete Observability Stack**: OpenTelemetry tracing/metrics (OTLP exporter), structured JSON logging, distributed request tracing
+- **Production Resilience Patterns**: Circuit breaker, exponential backoff retry, bulkhead (concurrency limiting)
+- **Comprehensive Middleware**: JWT authentication (RS256/ES256/HS256/384/512), Redis-backed distributed rate limiting, local governor rate limiting, request tracking with correlation IDs, OpenTelemetry metrics middleware
+- **Type-Enforced API Versioning**: Compile-time enforcement with RFC 8594 deprecation headers
+- **Automatic Health Checks**: Kubernetes-ready liveness/readiness probes with dependency monitoring (database, cache, events)
+- **Connection Pool Management**: PostgreSQL (SQLx), Redis (Deadpool), NATS JetStream with automatic retry and health checks
+- **XDG-Compliant Configuration**: Multi-source config with environment variable overrides and sensible defaults
+- **OpenAPI/Swagger Support**: Multiple UI options (Swagger UI, RapiDoc, ReDoc) with multi-version documentation
+- **CLI Scaffolding Tool**: Service generation with configurable features (database, cache, events, observability)
+- **gRPC Features**: Reflection service, health checks, interceptors, middleware parity with HTTP
 
 **In Progress** 🚧
-- Enhanced CLI commands (add endpoint, worker, etc.)
+- Enhanced CLI commands (add endpoint, worker generation, deployment manifest creation)
+- Additional OpenAPI schema generation utilities
 
 **Planned** 📋
-- GraphQL support
-- WebSocket support
-- Service mesh integration
-- Observability dashboards
-- Additional database backends
-- Retry middleware patterns
+- GraphQL support with versioning integration
+- WebSocket support for real-time features
+- Service mesh integration (Istio, Linkerd)
+- Additional database backends (MySQL, MongoDB)
+- Observability dashboards and sample configurations
+- Enhanced metrics (custom business metrics, SLO tracking)
+- Advanced rate limiting strategies (sliding log, token bucket refinements)
 
 ## FAQ
 
-**Q: Why enforce versioning so strictly?**
+**Q: How does this compare to using Axum or Tonic directly?**
 
-A: API versioning is critical in production but easy to skip. Making it impossible to bypass ensures consistent team practices. The type system is the enforcement mechanism.
+A: acton-service is built on top of Axum (HTTP) and Tonic (gRPC) but adds production-ready features as defaults: type-enforced versioning, automatic health checks, observability stack, resilience patterns, and connection pool management. If you need maximum flexibility, use the underlying libraries directly. If you want production best practices enforced by the type system, use acton-service.
 
-**Q: Can I use this without versioning?**
+**Q: Can I run both HTTP and gRPC on the same port?**
 
-A: No. If you need unversioned routes, use axum directly. acton-service is opinionated about API evolution.
+A: Yes! This is a core feature. acton-service provides automatic protocol detection allowing HTTP and gRPC to share a single port, or you can configure separate ports if preferred.
 
 **Q: Does this work with existing axum middleware?**
 
-A: Yes. Tower middleware works unchanged. Use `.layer()` with any tower middleware.
+A: Yes. All Tower middleware works unchanged. Use `.layer()` with any tower middleware. The framework includes comprehensive middleware for JWT auth, rate limiting, resilience patterns, request tracking, and metrics.
 
-**Q: What about REST vs gRPC?**
+**Q: Why enforce versioning so strictly?**
 
-A: Both are first-class. Run them simultaneously on the same port with automatic protocol detection, or choose one.
+A: API versioning is critical in production but easy to skip when deadlines loom. Making it impossible to bypass via the type system ensures consistent team practices and prevents breaking changes from slipping through.
 
-**Q: How does this compare to other frameworks?**
+**Q: Can I use this without the enforced versioning?**
 
-A: acton-service is opinionated where others are flexible. We trade flexibility for safety and consistency. If you need maximum control, use axum or tonic directly.
+A: No. If you need unversioned routes, use axum directly. acton-service is opinionated about API evolution and production best practices.
 
 **Q: Is this production-ready?**
 
-A: Partially. Core features (versioning, health checks, HTTP/gRPC, database support) are production-ready and battle-tested via underlying libraries (axum, tonic, sqlx). Some advanced features (OpenTelemetry integration, resilience patterns) are in progress. Review the roadmap and test thoroughly for your use case.
+A: Core features are production-ready: HTTP/gRPC servers, type-enforced versioning, health checks, observability (OpenTelemetry tracing/metrics), resilience patterns (circuit breaker, retry, bulkhead), middleware stack, and connection pooling (PostgreSQL, Redis, NATS). The framework is built on battle-tested libraries (axum, tonic, sqlx). Some advanced CLI features are in progress. Review the roadmap and test thoroughly for your use case.
+
+**Q: What's the performance overhead?**
+
+A: Minimal. The framework is a thin abstraction layer over high-performance libraries (tokio, axum, tonic). The type-enforced patterns are compile-time checks with zero runtime cost. Middleware like circuit breakers and metrics add small overhead for production safety benefits.
 
 ## Contributing
 
