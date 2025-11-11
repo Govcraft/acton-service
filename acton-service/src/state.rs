@@ -118,6 +118,46 @@ impl AppState {
     pub fn nats_lock(&self) -> &Arc<RwLock<Option<NatsClient>>> {
         &self.nats_client
     }
+
+    /// Get pool health metrics for all configured pools
+    ///
+    /// Returns a summary of connection pool health including utilization,
+    /// availability, and connection status for database, cache, and events.
+    pub async fn pool_health(&self) -> crate::pool_health::PoolHealthSummary {
+        let mut summary = crate::pool_health::PoolHealthSummary::new();
+
+        #[cfg(feature = "database")]
+        if let Some(pool) = self.db().await {
+            if let Some(db_config) = &self.config.database {
+                summary.database = Some(crate::pool_health::DatabasePoolHealth::from_pool(
+                    &pool, db_config,
+                ));
+            }
+        }
+
+        #[cfg(feature = "cache")]
+        if let Some(pool) = self.redis().await {
+            if let Some(redis_config) = &self.config.redis {
+                summary.redis = Some(crate::pool_health::RedisPoolHealth::from_pool(
+                    &pool,
+                    redis_config,
+                ));
+            }
+        }
+
+        #[cfg(feature = "events")]
+        if let Some(client) = self.nats().await {
+            if let Some(nats_config) = &self.config.nats {
+                summary.nats = Some(crate::pool_health::NatsClientHealth::from_client(
+                    &client,
+                    nats_config,
+                ));
+            }
+        }
+
+        summary.healthy = summary.is_healthy();
+        summary
+    }
 }
 
 /// Builder for AppState

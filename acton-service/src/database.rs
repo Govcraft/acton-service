@@ -77,9 +77,59 @@ async fn try_create_pool(config: &DatabaseConfig) -> Result<PgPool> {
         .min_connections(config.min_connections)
         .acquire_timeout(Duration::from_secs(config.connection_timeout_secs))
         .connect(&config.url)
-        .await?;
+        .await
+        .map_err(|e| {
+            let url_safe = sanitize_connection_url(&config.url);
+            crate::error::Error::Internal(format!(
+                "Failed to connect to database at '{}': {}\n\n\
+                Troubleshooting:\n\
+                1. Verify database is running and accessible\n\
+                2. Check connection URL format: postgres://user:pass@host:port/database\n\
+                3. Verify network connectivity (firewall, security groups)\n\
+                4. Check credentials and database permissions\n\
+                5. Ensure max_connections ({}) doesn't exceed database limits\n\n\
+                Original error: {}",
+                url_safe,
+                categorize_db_error(&e),
+                config.max_connections,
+                e
+            ))
+        })?;
 
     Ok(pool)
+}
+
+/// Sanitize connection URL for safe logging (remove password)
+#[cfg(feature = "database")]
+fn sanitize_connection_url(url: &str) -> String {
+    if let Some(at_pos) = url.find('@') {
+        if let Some(scheme_end) = url.find("://") {
+            let scheme = &url[..=scheme_end + 2];
+            let after_at = &url[at_pos..];
+            // Find username start
+            if let Some(colon_pos) = url[scheme_end + 3..at_pos].find(':') {
+                let username = &url[scheme_end + 3..scheme_end + 3 + colon_pos];
+                return format!("{}{}:***{}", scheme, username, after_at);
+            }
+        }
+    }
+    url.to_string()
+}
+
+/// Categorize database error for better user guidance
+#[cfg(feature = "database")]
+fn categorize_db_error(err: &sqlx::Error) -> &'static str {
+    use sqlx::Error;
+    match err {
+        Error::Configuration(_) => "Configuration error",
+        Error::Database(_) => "Database query error",
+        Error::Io(_) => "Network I/O error - check connectivity",
+        Error::Tls(_) => "TLS/SSL error - check certificate configuration",
+        Error::PoolTimedOut => "Connection pool timeout - database may be overloaded",
+        Error::PoolClosed => "Connection pool closed",
+        Error::WorkerCrashed => "Database worker crashed",
+        _ => "Connection error",
+    }
 }
 
 #[cfg(test)]
