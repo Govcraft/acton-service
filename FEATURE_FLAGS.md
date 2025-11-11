@@ -1,0 +1,374 @@
+# Feature Flags Guide
+
+acton-service uses feature flags to keep compile times fast and binary sizes small. This guide helps you choose the right features for your use case.
+
+## Quick Decision Tree
+
+```
+┌─────────────────────────────────────────┐
+│ What are you building?                  │
+└─────────────────────────────────────────┘
+                    │
+        ┌───────────┴───────────┐
+        │                       │
+   REST API                gRPC Service
+        │                       │
+        ▼                       ▼
+   ["http",              ["grpc",
+    "observability"]      "observability"]
+        │                       │
+        ├───────────────────────┤
+        │
+        ▼
+┌─────────────────────────────────────────┐
+│ Do you need a database?                 │
+└─────────────────────────────────────────┘
+        │
+        ├─── Yes ──▶ Add "database"
+        └─── No  ──▶ Skip
+        │
+        ▼
+┌─────────────────────────────────────────┐
+│ Do you need caching?                    │
+└─────────────────────────────────────────┘
+        │
+        ├─── Yes ──▶ Add "cache"
+        └─── No  ──▶ Skip
+        │
+        ▼
+┌─────────────────────────────────────────┐
+│ Do you need events/messaging?           │
+└─────────────────────────────────────────┐
+        │
+        ├─── Yes ──▶ Add "events"
+        └─── No  ──▶ Skip
+        │
+        ▼
+┌─────────────────────────────────────────┐
+│ Do you need advanced features?          │
+└─────────────────────────────────────────┘
+        │
+        ├─── Rate limiting ──▶ Add "governor"
+        ├─── Resilience ─────▶ Add "resilience"
+        ├─── Metrics ────────▶ Add "otel-metrics"
+        └─── OpenAPI ────────▶ Add "openapi"
+```
+
+## Feature Flag Reference
+
+### Core Features (Start Here)
+
+#### `http` (Included in Default)
+**What it does**: Enables HTTP REST API support via Axum
+**When to use**: Building REST APIs (most common use case)
+**Dependencies**: Axum, Tower
+
+```toml
+acton-service = { version = "0.3", features = ["http"] }
+```
+
+#### `observability` (Included in Default)
+**What it does**: Structured logging and OpenTelemetry tracing
+**When to use**: Always (highly recommended for production)
+**Dependencies**: tracing, tracing-subscriber, OpenTelemetry
+
+```toml
+acton-service = { version = "0.3", features = ["observability"] }
+```
+
+### Protocol Features
+
+#### `grpc`
+**What it does**: Enables gRPC support via Tonic
+**When to use**: Building gRPC services or dual HTTP+gRPC services
+**Dependencies**: tonic, prost
+**Note**: Can run on same port as HTTP with automatic protocol detection
+
+```toml
+acton-service = { version = "0.3", features = ["grpc"] }
+```
+
+### Data Layer Features
+
+#### `database`
+**What it does**: PostgreSQL connection pooling via SQLx
+**When to use**: Your service needs a SQL database
+**Dependencies**: sqlx with postgres feature
+**Provides**:
+- Automatic connection pool management
+- Health checks for database connections
+- Retry logic on connection failures
+
+```toml
+acton-service = { version = "0.3", features = ["database"] }
+```
+
+#### `cache`
+**What it does**: Redis connection pooling
+**When to use**: Need caching, session storage, or rate limiting
+**Dependencies**: redis, deadpool-redis
+**Provides**:
+- Redis connection pool
+- JWT token revocation support
+- Distributed rate limiting
+
+```toml
+acton-service = { version = "0.3", features = ["cache"] }
+```
+
+#### `events`
+**What it does**: NATS JetStream client for event-driven architecture
+**When to use**: Building event-driven microservices
+**Dependencies**: async-nats
+**Provides**:
+- NATS connection management
+- JetStream support
+- Pub/sub messaging
+
+```toml
+acton-service = { version = "0.3", features = ["events"] }
+```
+
+### Middleware & Resilience Features
+
+#### `resilience`
+**What it does**: Circuit breaker, retry, and bulkhead patterns
+**When to use**: Production services calling external dependencies
+**Dependencies**: tower-resilience
+**Provides**:
+- Circuit breaker (prevent cascading failures)
+- Exponential backoff retry
+- Bulkhead (concurrency limiting)
+
+```toml
+acton-service = { version = "0.3", features = ["resilience"] }
+```
+
+#### `governor`
+**What it does**: Advanced rate limiting
+**When to use**: Need sophisticated rate limiting beyond basic throttling
+**Dependencies**: tower_governor
+**Provides**:
+- Per-second/minute/hour rate limits
+- Per-user rate limiting via JWT claims
+- In-memory rate limiting
+
+```toml
+acton-service = { version = "0.3", features = ["governor"] }
+```
+
+#### `otel-metrics`
+**What it does**: HTTP metrics collection via OpenTelemetry
+**When to use**: Need detailed request metrics for monitoring
+**Dependencies**: tower-otel-http-metrics
+**Provides**:
+- Request count, duration, size metrics
+- Active request tracking
+- HTTP status code distribution
+
+```toml
+acton-service = { version = "0.3", features = ["otel-metrics"] }
+```
+
+### Documentation Features
+
+#### `openapi`
+**What it does**: OpenAPI/Swagger documentation generation
+**When to use**: Need API documentation UI
+**Dependencies**: utoipa, utoipa-swagger-ui
+**Provides**:
+- Swagger UI
+- ReDoc UI
+- RapiDoc UI
+- Auto-generated OpenAPI specs
+
+```toml
+acton-service = { version = "0.3", features = ["openapi"] }
+```
+
+## Common Configurations
+
+### Minimal REST API
+**Use case**: Simple REST API, no database
+
+```toml
+[dependencies]
+acton-service = { version = "0.3", features = ["http", "observability"] }
+tokio = { version = "1", features = ["full"] }
+```
+
+**Binary size**: ~10MB (stripped)
+**Compile time**: ~30s (clean build)
+
+### REST API with Database
+**Use case**: Standard CRUD API with PostgreSQL
+
+```toml
+[dependencies]
+acton-service = { version = "0.3", features = [
+    "http",
+    "observability",
+    "database"
+] }
+tokio = { version = "1", features = ["full"] }
+```
+
+**Binary size**: ~12MB (stripped)
+**Compile time**: ~45s (clean build)
+
+### Full-Featured REST API
+**Use case**: Production API with all bells and whistles
+
+```toml
+[dependencies]
+acton-service = { version = "0.3", features = [
+    "http",
+    "observability",
+    "database",
+    "cache",
+    "resilience",
+    "governor",
+    "otel-metrics",
+    "openapi"
+] }
+tokio = { version = "1", features = ["full"] }
+```
+
+**Binary size**: ~18MB (stripped)
+**Compile time**: ~90s (clean build)
+
+### Dual HTTP + gRPC Service
+**Use case**: Service exposing both REST and gRPC APIs
+
+```toml
+[dependencies]
+acton-service = { version = "0.3", features = [
+    "http",
+    "grpc",
+    "observability",
+    "database"
+] }
+tokio = { version = "1", features = ["full"] }
+```
+
+**Binary size**: ~15MB (stripped)
+**Compile time**: ~60s (clean build)
+
+### Event-Driven Microservice
+**Use case**: Background worker processing NATS events
+
+```toml
+[dependencies]
+acton-service = { version = "0.3", features = [
+    "http",           # For health endpoints
+    "observability",
+    "events",         # NATS support
+    "database",
+    "cache"
+] }
+tokio = { version = "1", features = ["full"] }
+```
+
+**Binary size**: ~14MB (stripped)
+**Compile time**: ~55s (clean build)
+
+### Everything (Development/Prototyping)
+**Use case**: Exploring all features, quick prototyping
+
+```toml
+[dependencies]
+acton-service = { version = "0.3", features = ["full"] }
+tokio = { version = "1", features = ["full"] }
+```
+
+**Binary size**: ~20MB (stripped)
+**Compile time**: ~120s (clean build)
+
+**⚠️ Warning**: `full` includes everything. For production, only enable what you need.
+
+## Feature Dependencies
+
+Some features work better together:
+
+| Feature | Recommended Companions | Why |
+|---------|----------------------|-----|
+| `cache` | `governor` | Distributed rate limiting needs Redis |
+| `otel-metrics` | `observability` | Metrics require tracing foundation |
+| `resilience` | `http` or `grpc` | Resilience patterns apply to HTTP/gRPC calls |
+| `openapi` | `http` | OpenAPI docs are for HTTP endpoints |
+
+## Troubleshooting
+
+### "cannot find type `AppState`"
+**Solution**: You're probably missing required features. Add `http` and `observability`.
+
+### "method `database` not found"
+**Solution**: Add `database` feature flag.
+
+### "could not find `tonic` in the list"
+**Solution**: Add `grpc` feature flag.
+
+### Very slow compile times
+**Solution**: You might have `full` enabled. Only enable features you actually use.
+
+### Large binary size
+**Solution**:
+1. Remove unused features
+2. Build with `--release`
+3. Strip symbols: `strip target/release/my-service`
+
+## Best Practices
+
+### Start Small
+Begin with minimal features and add as needed:
+```toml
+# Start here
+features = ["http", "observability"]
+
+# Add as you grow
+features = ["http", "observability", "database"]
+
+# Production-ready
+features = ["http", "observability", "database", "cache", "resilience"]
+```
+
+### Production Recommendations
+
+**Minimum for production**:
+```toml
+features = ["http", "observability", "resilience"]
+```
+
+**Recommended for production**:
+```toml
+features = [
+    "http",
+    "observability",
+    "database",        # If you need it
+    "cache",          # For sessions/rate limiting
+    "resilience",     # Circuit breaker, retry
+    "otel-metrics"    # Monitoring
+]
+```
+
+### CI/CD Optimization
+
+Use different feature sets for different build stages:
+
+```yaml
+# Fast CI check
+cargo check --features "http,observability"
+
+# Full integration tests
+cargo test --features "http,observability,database,cache"
+
+# Production build
+cargo build --release --features "http,observability,database,cache,resilience,otel-metrics"
+```
+
+## Need More Help?
+
+- [QUICKSTART.md](./QUICKSTART.md) - Get started in 5 minutes
+- [TUTORIAL.md](./TUTORIAL.md) - Step-by-step service guide
+- [examples/](./acton-service/examples/) - Working examples for each feature
+- [Cargo.toml](./acton-service/Cargo.toml) - Feature definitions

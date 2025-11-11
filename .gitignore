@@ -19,6 +19,11 @@ release/
 
 # Exception: Allow specific markdown files
 !README.md
+!QUICKSTART.md
+!TUTORIAL.md
+!FEATURE_FLAGS.md
+!TROUBLESHOOTING.md
+!COMPARISON.md
 # Add more exceptions here as needed, for example:
 # !CONTRIBUTING.md
 # !LICENSE.md
