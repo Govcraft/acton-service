@@ -14,15 +14,15 @@ license = "MIT"
 
 [workspace.dependencies]
 # Async runtime
-tokio = { version = "1.48.0", features = ["full"] }
+tokio = { version = "1.48.0", features = ["net", "rt", "rt-multi-thread", "signal", "sync", "time", "macros"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 
 # HTTP framework
-axum = { version = "0.8.6", features = ["macros", "multipart"] }
-tower = { version = "0.5.2", features = ["full"] }
+axum = { version = "0.8.6", features = ["macros"] }
+tower = { version = "0.5.2", features = ["util", "timeout", "limit", "buffer", "make"] }
 tower-http = { version = "0.6.6", features = [
     "trace",
-    "compression-full",
+    "compression-gzip",
     "cors",
     "timeout",
     "request-id",
@@ -84,7 +84,7 @@ thiserror = "2.0.17"
 anyhow = "1.0.100"
 
 # Time
-chrono = { version = "0.4.42", features = ["serde"] }
+chrono = { version = "0.4.42", features = ["clock", "std", "serde"], default-features = false }
 
 # UUID
 uuid = { version = "1.18.1", features = ["v4", "serde"] }

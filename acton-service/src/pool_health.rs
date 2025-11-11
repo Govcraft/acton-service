@@ -72,7 +72,7 @@ pub struct RedisPoolHealth {
 impl RedisPoolHealth {
     /// Create health metrics from a Redis pool
     pub fn from_pool(pool: &deadpool_redis::Pool, config: &crate::config::RedisConfig) -> Self {
-        let max_size = config.max_connections as usize;
+        let max_size = config.max_connections;
         let status = pool.status();
 
         // Pool is available if it's not closed
