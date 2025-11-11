@@ -141,7 +141,7 @@ pub mod prelude {
     pub use axum::{
         extract::{Path, Query, State},
         http::{HeaderMap, HeaderValue, StatusCode},
-        response::{IntoResponse, Json},
+        response::{IntoResponse, Json, Response},
         routing::{delete, get, patch, post, put},
         Extension, Router,
     };
