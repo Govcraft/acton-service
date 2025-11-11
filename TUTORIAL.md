@@ -700,17 +700,10 @@ HTTP headers are commonly used for API versioning, client identification, reques
 
 ### Extracting Headers from Requests
 
-To read custom headers from incoming requests, you need to add `axum` as a dependency (the framework uses it internally):
-
-```toml
-# Add to Cargo.toml dependencies
-axum = "0.7"
-```
-
-Then import and use `HeaderMap`:
+To read custom headers from incoming requests, use `HeaderMap` from the prelude:
 
 ```rust
-use axum::http::HeaderMap;
+use acton_service::prelude::*;
 
 // Extract custom headers
 async fn handler_with_headers(
@@ -753,10 +746,7 @@ There are two main patterns for adding custom headers to responses:
 **Pattern 1: Direct header manipulation**
 
 ```rust
-use axum::{
-    http::{HeaderValue, StatusCode},
-    response::IntoResponse,
-};
+use acton_service::prelude::*;
 
 async fn handler_with_response_headers() -> impl IntoResponse {
     let data = serde_json::json!({"status": "ok"});
@@ -812,7 +802,7 @@ async fn create_user(
 Add a new endpoint that demonstrates both patterns:
 
 ```rust
-use axum::http::{HeaderMap, HeaderValue};
+use acton_service::prelude::*;
 
 async fn client_info(
     headers: HeaderMap,
@@ -889,7 +879,7 @@ The framework automatically adds these headers to responses:
 2. **Prefix custom headers**: Use `x-` prefix for non-standard headers (`x-api-key`, `x-client-id`)
 3. **Validate header values**: Always check header parsing with `.and_then(|v| v.to_str().ok())`
 4. **Don't log sensitive headers**: Authorization tokens and API keys should not appear in logs (framework masks these automatically)
-5. **Use TypedHeader for standards**: For standard headers like `Authorization`, `User-Agent`, use axum's `TypedHeader<Authorization<Bearer>>` extractor
+5. **HeaderMap and HeaderValue included**: These are re-exported in the prelude. For advanced usage like `TypedHeader`, add `axum` as a dependency
 
 ### Security Note
 
