@@ -621,7 +621,7 @@ fn default_body_limit_mb() -> usize {
 }
 
 fn default_cors_mode() -> String {
-    "permissive".to_string()
+    "restrictive".to_string()
 }
 
 fn default_request_id_header() -> String {
@@ -835,6 +835,43 @@ impl Config {
     /// Get NATS URL
     pub fn nats_url(&self) -> Option<&str> {
         self.nats.as_ref().map(|n| n.url.as_str())
+    }
+
+    /// Enable permissive CORS for local development
+    ///
+    /// ⚠️  **WARNING: DO NOT USE IN PRODUCTION** ⚠️
+    ///
+    /// This enables permissive CORS that allows:
+    /// - All origins (*)
+    /// - All methods (GET, POST, PUT, DELETE, etc.)
+    /// - All headers
+    /// - Credentials from any origin
+    ///
+    /// This configuration is appropriate ONLY for:
+    /// - Local development environments
+    /// - Testing with frontend dev servers (e.g., webpack-dev-server, vite)
+    /// - Prototyping where security is not a concern
+    ///
+    /// For production, you should:
+    /// - Use the default restrictive CORS (secure by default)
+    /// - Configure specific allowed origins in your config file
+    /// - Set ACTON_MIDDLEWARE_CORS_MODE=restrictive
+    ///
+    /// # Example
+    /// ```no_run
+    /// use acton_service::Config;
+    ///
+    /// let mut config = Config::load().unwrap();
+    /// config.with_development_cors(); // Only for local development!
+    /// ```
+    pub fn with_development_cors(&mut self) -> &mut Self {
+        tracing::warn!(
+            "⚠️  CORS set to permissive mode - DO NOT USE IN PRODUCTION! \
+             This allows any origin to access your API. \
+             Use only for local development."
+        );
+        self.middleware.cors_mode = "permissive".to_string();
+        self
     }
 }
 
