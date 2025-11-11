@@ -88,6 +88,9 @@ pub mod prelude {
         Claims, JwtAuth, RateLimit, RequestTrackingConfig, PROPAGATE_HEADERS, SENSITIVE_HEADERS,
         request_id_layer, request_id_propagation_layer, sensitive_headers_layer,
     };
+
+    #[cfg(feature = "cache")]
+    pub use crate::middleware::{JwtRevocation, RedisJwtRevocation};
     pub use crate::server::Server;
     pub use crate::service_builder::{ActonService, ServiceBuilder, VersionedRoutes};
     pub use crate::state::{AppState, AppStateBuilder};

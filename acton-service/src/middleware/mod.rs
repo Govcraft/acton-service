@@ -14,6 +14,9 @@ pub mod metrics;
 pub mod governor;
 
 pub use jwt::{Claims, JwtAuth};
+
+#[cfg(feature = "cache")]
+pub use jwt::{JwtRevocation, RedisJwtRevocation};
 pub use rate_limit::RateLimit;
 pub use request_tracking::{
     request_id_layer, request_id_propagation_layer, sensitive_headers_layer,

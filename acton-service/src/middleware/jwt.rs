@@ -11,6 +11,12 @@ use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use std::{fs, sync::Arc};
 
+#[cfg(feature = "cache")]
+use async_trait::async_trait;
+
+#[cfg(feature = "cache")]
+use deadpool_redis::Pool as RedisPool;
+
 use crate::{config::JwtConfig, error::Error};
 
 /// JWT Claims structure
@@ -100,11 +106,93 @@ impl Claims {
     }
 }
 
+/// Trait for JWT revocation storage
+///
+/// Implementations of this trait provide storage for revoked JWT IDs (jti).
+/// This allows tokens to be invalidated before their expiration time.
+#[cfg(feature = "cache")]
+#[async_trait]
+pub trait JwtRevocation: Send + Sync {
+    /// Check if a JWT ID (jti) has been revoked
+    async fn is_revoked(&self, jti: &str) -> Result<bool, Error>;
+
+    /// Revoke a JWT ID (jti) with a TTL in seconds
+    ///
+    /// The TTL should typically match the token's expiration time to prevent
+    /// the revocation list from growing unbounded.
+    async fn revoke(&self, jti: &str, ttl_secs: u64) -> Result<(), Error>;
+}
+
+/// Redis-based JWT revocation implementation
+///
+/// Stores revoked JTIs in Redis with automatic expiration (SETEX).
+/// The key pattern is `jwt:revoked:{jti}`.
+#[cfg(feature = "cache")]
+#[derive(Clone)]
+pub struct RedisJwtRevocation {
+    pool: RedisPool,
+}
+
+#[cfg(feature = "cache")]
+impl RedisJwtRevocation {
+    /// Create a new Redis JWT revocation checker
+    pub fn new(pool: RedisPool) -> Self {
+        Self { pool }
+    }
+
+    /// Get the Redis key for a given JTI
+    fn revocation_key(jti: &str) -> String {
+        format!("jwt:revoked:{}", jti)
+    }
+}
+
+#[cfg(feature = "cache")]
+#[async_trait]
+impl JwtRevocation for RedisJwtRevocation {
+    async fn is_revoked(&self, jti: &str) -> Result<bool, Error> {
+        use deadpool_redis::redis::AsyncCommands;
+
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to get Redis connection: {}", e)))?;
+
+        let key = Self::revocation_key(jti);
+        let exists: bool = conn
+            .exists(&key)
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to check revocation status: {}", e)))?;
+
+        Ok(exists)
+    }
+
+    async fn revoke(&self, jti: &str, ttl_secs: u64) -> Result<(), Error> {
+        use deadpool_redis::redis::AsyncCommands;
+
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to get Redis connection: {}", e)))?;
+
+        let key = Self::revocation_key(jti);
+        // Store "1" as a marker with TTL
+        conn.set_ex::<_, _, ()>(&key, 1, ttl_secs)
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to revoke JWT: {}", e)))?;
+
+        Ok(())
+    }
+}
+
 /// JWT authentication middleware state
 #[derive(Clone)]
 pub struct JwtAuth {
     decoding_key: Arc<DecodingKey>,
     validation: Validation,
+    #[cfg(feature = "cache")]
+    revocation: Option<Arc<dyn JwtRevocation>>,
 }
 
 impl JwtAuth {
@@ -165,7 +253,19 @@ impl JwtAuth {
         Ok(Self {
             decoding_key: Arc::new(decoding_key),
             validation,
+            #[cfg(feature = "cache")]
+            revocation: None,
         })
+    }
+
+    /// Set the JWT revocation checker
+    ///
+    /// This allows the middleware to check if tokens have been revoked.
+    /// Typically used with `RedisJwtRevocation`.
+    #[cfg(feature = "cache")]
+    pub fn with_revocation<R: JwtRevocation + 'static>(mut self, revocation: R) -> Self {
+        self.revocation = Some(Arc::new(revocation));
+        self
     }
 
     /// Validate and decode a JWT token
@@ -200,12 +300,18 @@ impl JwtAuth {
         // Validate token and extract claims
         let claims = auth.validate_token(&token)?;
 
-        // TODO: Check JTI revocation in Redis if cache feature is enabled
+        // Check JTI revocation if cache feature is enabled and revocation checker is configured
         #[cfg(feature = "cache")]
-        {
-            // This would need the AppState with Redis pool
-            // For now, we'll skip this check
-            // In production, inject Redis pool and check if jti is in revocation set
+        if let Some(revocation) = &auth.revocation {
+            if let Some(jti) = &claims.jti {
+                if revocation.is_revoked(jti).await? {
+                    return Err(Error::Unauthorized("Token has been revoked".to_string()));
+                }
+            } else {
+                // If revocation is configured but token has no JTI, log a warning
+                // but allow the request (for backward compatibility)
+                tracing::warn!("JWT revocation is enabled but token has no JTI claim");
+            }
         }
 
         // Inject claims into request extensions
@@ -281,5 +387,29 @@ mod tests {
         assert!(!claims.has_role("super_admin"));
         assert!(claims.has_permission("ban_user"));
         assert!(!claims.has_permission("delete_system"));
+    }
+
+    #[test]
+    fn test_revocation_key_format() {
+        #[cfg(feature = "cache")]
+        {
+            let jti = "test-jwt-id-123";
+            let key = RedisJwtRevocation::revocation_key(jti);
+            assert_eq!(key, "jwt:revoked:test-jwt-id-123");
+        }
+    }
+
+    // Integration tests for Redis revocation would require a Redis instance
+    // These should be in integration tests with testcontainers
+    #[cfg(all(test, feature = "cache"))]
+    mod revocation_tests {
+        use super::*;
+
+        #[test]
+        fn test_revocation_trait_is_object_safe() {
+            // This test ensures JwtRevocation can be used as a trait object
+            // If this compiles, the trait is object-safe
+            fn _assert_object_safe(_: &dyn JwtRevocation) {}
+        }
     }
 }
