@@ -50,6 +50,7 @@ pub mod config;
 pub mod error;
 pub mod middleware;
 pub mod health;
+pub mod pool_health;
 pub mod responses;
 pub mod server;
 pub mod service_builder;
@@ -83,7 +84,17 @@ pub mod build_utils;
 pub mod prelude {
     pub use crate::config::Config;
     pub use crate::error::{Error, Result};
-    pub use crate::health::{health, readiness};
+    pub use crate::health::{health, readiness, pool_metrics};
+    pub use crate::pool_health::PoolHealthSummary;
+
+    #[cfg(feature = "database")]
+    pub use crate::pool_health::DatabasePoolHealth;
+
+    #[cfg(feature = "cache")]
+    pub use crate::pool_health::RedisPoolHealth;
+
+    #[cfg(feature = "events")]
+    pub use crate::pool_health::NatsClientHealth;
     pub use crate::middleware::{
         Claims, JwtAuth, RateLimit, RequestTrackingConfig, PROPAGATE_HEADERS, SENSITIVE_HEADERS,
         request_id_layer, request_id_propagation_layer, sensitive_headers_layer,

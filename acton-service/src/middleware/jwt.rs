@@ -200,9 +200,19 @@ impl JwtAuth {
     pub fn new(config: &JwtConfig) -> Result<Self, Error> {
         // Read the public key file
         let public_key = fs::read(&config.public_key_path).map_err(|e| {
+            let path_display = config.public_key_path.display().to_string();
             Error::Config(Box::new(figment::Error::from(format!(
-                "Failed to read JWT public key from {:?}: {}",
-                config.public_key_path, e
+                "Failed to read JWT public key from path '{}'\n\n\
+                Troubleshooting:\n\
+                1. Verify the file exists: ls -la {}\n\
+                2. Check file permissions (must be readable)\n\
+                3. Verify the path is correct in configuration\n\
+                4. For RS256/ES256: Use PEM format public key\n\
+                5. For HS256: Use raw secret file\n\n\
+                Error: {}",
+                path_display,
+                path_display,
+                e
             ))))
         })?;
 

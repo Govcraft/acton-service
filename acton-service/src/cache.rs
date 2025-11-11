@@ -75,20 +75,74 @@ async fn try_create_pool(config: &RedisConfig) -> Result<Pool> {
 
     let pool = cfg
         .builder()
-        .map_err(|e| crate::error::Error::Internal(format!("Failed to build Redis pool: {}", e)))?
+        .map_err(|e| {
+            crate::error::Error::Internal(format!(
+                "Failed to build Redis pool configuration\n\n\
+                Troubleshooting:\n\
+                1. Check Redis URL format: redis://[:password@]host:port[/database]\n\
+                2. Verify URL encoding for special characters in password\n\
+                3. Check if database number is valid (0-15 typically)\n\n\
+                URL: {}\n\
+                Error: {}",
+                sanitize_redis_url(&config.url),
+                e
+            ))
+        })?
         .max_size(config.max_connections)
         .runtime(Runtime::Tokio1)
         .build()
-        .map_err(|e| crate::error::Error::Internal(format!("Failed to create Redis pool: {}", e)))?;
+        .map_err(|e| {
+            crate::error::Error::Internal(format!(
+                "Failed to create Redis connection pool: {}\n\n\
+                Troubleshooting:\n\
+                1. Verify Redis server is running: redis-cli ping\n\
+                2. Check network connectivity and firewall rules\n\
+                3. Verify connection limits: CONFIG GET maxclients\n\
+                4. Check server logs for connection errors\n\n\
+                Error: {}",
+                e,
+                e
+            ))
+        })?;
 
     // Test the connection
     let conn = pool
         .get()
         .await
-        .map_err(|e| crate::error::Error::Internal(format!("Failed to get Redis connection: {}", e)))?;
+        .map_err(|e| {
+            crate::error::Error::Internal(format!(
+                "Failed to establish Redis connection\n\n\
+                Troubleshooting:\n\
+                1. Redis server running: sudo systemctl status redis\n\
+                2. Check bind address in redis.conf (bind 0.0.0.0 for remote)\n\
+                3. Verify authentication: CONFIG GET requirepass\n\
+                4. Check max connections: CONFIG GET maxclients\n\
+                5. Verify network path: telnet <host> <port>\n\n\
+                URL: {}\n\
+                Error: {}",
+                sanitize_redis_url(&config.url),
+                e
+            ))
+        })?;
     drop(conn);
 
     Ok(pool)
+}
+
+/// Sanitize Redis URL for safe logging (remove password)
+#[cfg(feature = "cache")]
+fn sanitize_redis_url(url: &str) -> String {
+    if let Some(at_pos) = url.find('@') {
+        if let Some(scheme_end) = url.find("://") {
+            let scheme = &url[..=scheme_end + 2];
+            let after_at = &url[at_pos..];
+            if url[scheme_end + 3..at_pos].contains(':') {
+                return format!("{}:***{}", scheme, after_at);
+            }
+            return format!("{}***{}", scheme, after_at);
+        }
+    }
+    url.to_string()
 }
 
 #[cfg(test)]

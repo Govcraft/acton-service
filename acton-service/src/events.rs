@@ -79,7 +79,26 @@ async fn try_create_client(config: &NatsConfig) -> Result<Client> {
     let client = opts
         .connect(&config.url)
         .await
-        .map_err(|e| Error::Nats(format!("Failed to connect to NATS: {}", e)))?;
+        .map_err(|e| {
+            Error::Nats(format!(
+                "Failed to connect to NATS server at '{}'\n\n\
+                Troubleshooting:\n\
+                1. Verify NATS server is running: nats-server --version\n\
+                2. Check NATS server status: nats-server --signal status\n\
+                3. Verify network connectivity: telnet <host> <port>\n\
+                4. Check authentication if enabled (token, credentials, NKeys)\n\
+                5. Review NATS server logs for connection errors\n\
+                6. Verify firewall rules allow traffic on NATS ports\n\
+                7. Check URL format: nats://host:port or nats://user:pass@host:port\n\n\
+                Max reconnects: {}\n\
+                Client name: {}\n\
+                Error: {}",
+                config.url,
+                config.max_reconnects,
+                config.name.as_deref().unwrap_or("<none>"),
+                e
+            ))
+        })?;
 
     Ok(client)
 }

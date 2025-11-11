@@ -360,6 +360,25 @@ pub async fn readiness(State(state): State<AppState>) -> Result<impl IntoRespons
     Ok((status, Json(response)))
 }
 
+/// Pool health metrics endpoint
+///
+/// Returns detailed metrics about connection pool health including:
+/// - Database pool: size, idle connections, utilization
+/// - Redis pool: status, availability
+/// - NATS client: connection state
+///
+/// This is useful for monitoring and capacity planning.
+pub async fn pool_metrics(State(state): State<AppState>) -> impl IntoResponse {
+    let health = state.pool_health().await;
+    let status = if health.healthy {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+
+    (status, Json(health))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
