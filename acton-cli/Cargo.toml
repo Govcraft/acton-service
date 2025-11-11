@@ -18,7 +18,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Workspace dependencies
-acton-service = { path = "../acton-service", version = "0.5.0" }
+acton-service = { path = "../acton-service", version = "0.5.1" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
