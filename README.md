@@ -23,6 +23,12 @@ It's opinionated, comprehensive, and designed for teams where best practices can
 
 **Current Status**: acton-service is under active development. Core features (HTTP/gRPC, versioning, health checks, observability, resilience) are production-ready. Some advanced features are in progress.
 
+---
+
+**🚀 New to acton-service?** Start with the **[5-Minute Quickstart](./QUICKSTART.md)** or follow the **[Complete Tutorial](./TUTORIAL.md)** to build your first service.
+
+---
+
 ## Quick Start
 
 ```rust
@@ -508,12 +514,24 @@ Design principles:
 
 ## Documentation
 
+### Getting Started
+
+- **[QUICKSTART.md](./QUICKSTART.md)** - Get a service running in 5 minutes
+- **[TUTORIAL.md](./TUTORIAL.md)** - Complete step-by-step guide to building a production service
+- **[FEATURE_FLAGS.md](./FEATURE_FLAGS.md)** - Decision tree for choosing the right features
+- **[COMPARISON.md](./COMPARISON.md)** - How acton-service compares to Axum, Actix-Web, and others
+
+### Guides
+
 - [Configuration Guide](./acton-service/CONFIG.md) - Environment and file-based configuration
 - [API Versioning](./acton-service/docs/API_VERSIONING.md) - Type-safe versioning patterns
 - [Health Endpoints](./HEALTH_ENDPOINTS_GUIDE.md) - Kubernetes liveness and readiness
-- [Examples](./acton-service/examples/) - Complete working examples
 
-API documentation: `cargo doc --open`
+### Reference
+
+- [Examples](./acton-service/examples/) - Complete working examples
+- [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) - Common issues and solutions
+- API documentation: `cargo doc --open`
 
 ## Performance
 
