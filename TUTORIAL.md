@@ -391,6 +391,166 @@ curl -X POST http://localhost:8080/api/v1/users \
 curl http://localhost:8080/api/v1/users
 ```
 
+## Part 4.5: Adding Custom State (Optional, 5 minutes)
+
+Sometimes you need to share your own data across handlers alongside the framework's `AppState`. Common use cases:
+- Application-level caches or lookup tables
+- Custom service clients (external APIs)
+- Business logic state (event buses, job queues)
+- Shared configuration beyond the framework's config
+
+### The Wrapping Pattern
+
+Create a custom state type that **wraps** `AppState`:
+
+```rust
+use std::sync::Arc;
+
+#[derive(Clone)]
+struct UserServiceState {
+    // Framework state (database, config, etc.)
+    app: AppState,
+
+    // Your custom state (wrapped in Arc for cheap cloning)
+    user_cache: Arc<RwLock<HashMap<u64, User>>>,
+    analytics: Arc<AnalyticsClient>,
+}
+```
+
+**Why use `Arc`?**: State is cloned to each handler. `Arc` (Atomic Reference Counting) makes this efficient by sharing data across threads without copying.
+
+### Example: Adding an In-Memory Cache
+
+Add at the top of `src/main.rs`:
+
+```rust
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+#[derive(Clone)]
+struct UserServiceState {
+    app: AppState,
+    // Simple cache for demonstration
+    cache_hits: Arc<RwLock<u64>>,
+}
+```
+
+### Initialize Custom State
+
+Update your `main()` function:
+
+```rust
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Load config and build framework state
+    let config = Config::load()?;
+    init_tracing(&config)?;
+
+    let app_state = AppState::builder()
+        .config(config.clone())
+        .build()
+        .await?;
+
+    // Wrap with custom state
+    let state = UserServiceState {
+        app: app_state,
+        cache_hits: Arc::new(RwLock::new(0)),
+    };
+
+    // Build routes with custom state
+    let routes = VersionedApiBuilder::new()
+        .with_base_path("/api")
+        .add_version(ApiVersion::V1, |router| {
+            router
+                .route("/status", get(status))
+                .route("/users", get(list_users).post(create_user))
+                .route("/users/{id}", get(get_user))
+                .route("/cache-stats", get(cache_stats))  // New endpoint
+        })
+        .build_routes();
+
+    // Use custom state type
+    ServiceBuilder::new()
+        .with_config(config)
+        .with_routes(routes)
+        .with_state(state)  // Pass custom state
+        .build()
+        .serve()
+        .await
+}
+```
+
+### Use Custom State in Handlers
+
+Update handlers to accept your custom state:
+
+```rust
+// Access both framework and custom state
+async fn list_users(State(state): State<UserServiceState>) -> Result<Json<Vec<User>>> {
+    // Access framework state
+    let db = state.app.database()?;
+
+    // Access custom state
+    let mut hits = state.cache_hits.write().await;
+    *hits += 1;
+    info!("Cache hits: {}", *hits);
+
+    let users: Vec<User> = sqlx::query_as!(
+        User,
+        r#"
+        SELECT
+            id as "id!: u64",
+            username,
+            email,
+            created_at::text as created_at
+        FROM users
+        ORDER BY id
+        "#
+    )
+    .fetch_all(db)
+    .await
+    .map_err(|e| Error::DatabaseError(e.to_string()))?;
+
+    Ok(Json(users))
+}
+
+// New endpoint to show cache stats
+async fn cache_stats(State(state): State<UserServiceState>) -> Json<serde_json::Value> {
+    let hits = state.cache_hits.read().await;
+    Json(serde_json::json!({
+        "cache_hits": *hits
+    }))
+}
+```
+
+### Test Custom State
+
+```bash
+# Restart and test
+cargo run
+
+# Call the users endpoint a few times
+curl http://localhost:8080/api/v1/users
+curl http://localhost:8080/api/v1/users
+curl http://localhost:8080/api/v1/users
+
+# Check cache stats
+curl http://localhost:8080/api/v1/cache-stats
+# Output: {"cache_hits":3}
+```
+
+### Key Takeaways
+
+1. **Wrap, don't replace**: Keep `AppState` for framework features (database, config)
+2. **Use `Arc`**: Wrap custom fields in `Arc` for efficient cloning
+3. **Thread safety**: Use `RwLock` or `Mutex` for mutable shared state
+4. **Change the type**: Update `State<AppState>` to `State<YourState>` in all handlers
+5. **Re-exports included**: You don't need to add axum as a dependency; `State` is re-exported in the prelude
+
+For a complete example with event buses and gRPC, see:
+- [examples/event-driven.rs](./acton-service/examples/event-driven.rs)
+
 ## Part 5: Add API Versioning (5 minutes)
 
 ### Create V2 with improved response format
@@ -533,6 +693,207 @@ curl -X POST http://localhost:8080/api/v2/users \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"username":"dave","email":"dave@example.com"}'
 ```
+
+## Part 6.5: Working with Custom Headers (Optional, 5 minutes)
+
+HTTP headers are commonly used for API versioning, client identification, request tracking, and custom authentication schemes. Here's how to work with them in acton-service.
+
+### Extracting Headers from Requests
+
+To read custom headers from incoming requests, you need to add `axum` as a dependency (the framework uses it internally):
+
+```toml
+# Add to Cargo.toml dependencies
+axum = "0.7"
+```
+
+Then import and use `HeaderMap`:
+
+```rust
+use axum::http::HeaderMap;
+
+// Extract custom headers
+async fn handler_with_headers(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>> {
+    // Read a custom header
+    let client_id = headers
+        .get("x-client-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown");
+
+    // Read API key
+    let api_key = headers
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok());
+
+    if let Some(key) = api_key {
+        info!("Request from client: {} with key: {}", client_id, key);
+    }
+
+    Ok(Json(serde_json::json!({
+        "client": client_id,
+        "message": "Headers received"
+    })))
+}
+```
+
+**Common header names:**
+- `x-request-id` - Request tracking (automatically added by framework)
+- `x-client-id` - Client identification
+- `x-api-key` - API key authentication
+- `x-correlation-id` - Distributed tracing
+- `user-agent` - Client information
+
+### Adding Headers to Responses
+
+There are two main patterns for adding custom headers to responses:
+
+**Pattern 1: Direct header manipulation**
+
+```rust
+use axum::{
+    http::{HeaderValue, StatusCode},
+    response::IntoResponse,
+};
+
+async fn handler_with_response_headers() -> impl IntoResponse {
+    let data = serde_json::json!({"status": "ok"});
+    let mut response = Json(data).into_response();
+
+    // Add custom headers
+    response.headers_mut().insert(
+        "x-custom-header",
+        HeaderValue::from_str("custom-value").unwrap(),
+    );
+
+    response.headers_mut().insert(
+        "x-rate-limit",
+        HeaderValue::from_static("1000"),
+    );
+
+    response
+}
+```
+
+**Pattern 2: Using response builders**
+
+The framework provides response types with built-in header support:
+
+```rust
+use acton_service::responses::Created;
+
+async fn create_user(
+    State(state): State<AppState>,
+    Json(req): Json<CreateUserRequest>,
+) -> Result<impl IntoResponse> {
+    let db = state.database()?;
+
+    let user = sqlx::query_as!(/* ... */)
+        .fetch_one(db)
+        .await?;
+
+    // Created response with Location header
+    let mut response = Created(user).into_response();
+
+    // Add additional custom headers
+    response.headers_mut().insert(
+        "x-resource-id",
+        HeaderValue::from_str(&user.id.to_string()).unwrap(),
+    );
+
+    Ok(response)
+}
+```
+
+### Example: Client Tracking Endpoint
+
+Add a new endpoint that demonstrates both patterns:
+
+```rust
+use axum::http::{HeaderMap, HeaderValue};
+
+async fn client_info(
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    // Extract client information
+    let user_agent = headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown");
+
+    let client_id = headers
+        .get("x-client-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("anonymous");
+
+    // Build response with custom headers
+    let data = serde_json::json!({
+        "client_id": client_id,
+        "user_agent": user_agent,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    });
+
+    let mut response = Json(data).into_response();
+
+    // Add response headers
+    response.headers_mut().insert(
+        "x-processed-by",
+        HeaderValue::from_static("user-api"),
+    );
+
+    response.headers_mut().insert(
+        "x-request-timestamp",
+        HeaderValue::from_str(&chrono::Utc::now().timestamp().to_string()).unwrap(),
+    );
+
+    response
+}
+```
+
+Add the route to your V2 API:
+
+```rust
+.add_version(ApiVersion::V2, |router| {
+    router
+        .route("/status", get(status))
+        .route("/users", get(list_users_v2).post(create_user))
+        .route("/users/{id}", get(get_user))
+        .route("/client-info", get(client_info))  // New endpoint
+})
+```
+
+### Test Header Handling
+
+```bash
+# Send request with custom headers
+curl -H "x-client-id: mobile-app-v1" \
+     -H "x-api-key: test-key-123" \
+     http://localhost:8080/api/v2/client-info
+
+# Check response headers (use -i to see headers)
+curl -i http://localhost:8080/api/v2/client-info
+```
+
+### Framework-Provided Headers
+
+The framework automatically adds these headers to responses:
+- **`x-request-id`** - Unique request identifier for tracing
+- **`Deprecation`, `Sunset`, `Link`** - API deprecation headers (on deprecated versions)
+- **Security headers** - Via middleware (CORS, etc.)
+
+### Best Practices
+
+1. **Use lowercase names**: HTTP/2 requires lowercase header names (`x-client-id` not `X-Client-Id`)
+2. **Prefix custom headers**: Use `x-` prefix for non-standard headers (`x-api-key`, `x-client-id`)
+3. **Validate header values**: Always check header parsing with `.and_then(|v| v.to_str().ok())`
+4. **Don't log sensitive headers**: Authorization tokens and API keys should not appear in logs (framework masks these automatically)
+5. **Use TypedHeader for standards**: For standard headers like `Authorization`, `User-Agent`, use axum's `TypedHeader<Authorization<Bearer>>` extractor
+
+### Security Note
+
+Sensitive headers like `authorization`, `cookie`, and `x-api-key` are automatically masked in the framework's logs to prevent credential leakage.
 
 ## Part 7: Better Error Handling (5 minutes)
 
