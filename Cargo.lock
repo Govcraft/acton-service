@@ -52,6 +52,7 @@ dependencies = [
  "prost 0.14.1",
  "prost-build",
  "redis",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
