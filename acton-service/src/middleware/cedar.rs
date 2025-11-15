@@ -448,7 +448,7 @@ impl PolicyCache for RedisPolicyCache {
             Decision::Deny => "deny",
         };
 
-        conn.set_ex::<_, _, ()>(&key, value, ttl_secs as u64)
+        conn.set_ex::<_, _, ()>(&key, value, ttl_secs)
             .await
             .map_err(|e| Error::Internal(format!("Redis SETEX failed: {}", e)))?;
 
