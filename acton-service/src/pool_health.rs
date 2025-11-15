@@ -150,7 +150,7 @@ impl PoolHealthSummary {
 
     /// Check if all pools are healthy
     pub fn is_healthy(&self) -> bool {
-        let healthy = true;
+        let mut healthy = true;
 
         #[cfg(feature = "database")]
         if let Some(db) = &self.database {
