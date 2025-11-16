@@ -48,10 +48,11 @@ acton-service uses feature flags to keep compile times fast and binary sizes sma
 │ Do you need advanced features?          │
 └─────────────────────────────────────────┘
         │
-        ├─── Rate limiting ──▶ Add "governor"
-        ├─── Resilience ─────▶ Add "resilience"
-        ├─── Metrics ────────▶ Add "otel-metrics"
-        └─── OpenAPI ────────▶ Add "openapi"
+        ├─── Fine-grained authorization ──▶ Add "cedar-authz"
+        ├─── Rate limiting ───────────────▶ Add "governor"
+        ├─── Resilience ──────────────────▶ Add "resilience"
+        ├─── Metrics ─────────────────────▶ Add "otel-metrics"
+        └─── OpenAPI ─────────────────────▶ Add "openapi"
 ```
 
 ## Feature Flag Reference
@@ -130,6 +131,24 @@ acton-service = { version = "0.3", features = ["events"] }
 ```
 
 ### Middleware & Resilience Features
+
+#### `cedar-authz`
+**What it does**: AWS Cedar policy-based authorization
+**When to use**: Need fine-grained access control with declarative policies
+**Dependencies**: cedar-policy
+**Provides**:
+- Declarative Cedar policy files for resource-based permissions
+- Role-based and attribute-based access control (RBAC/ABAC)
+- Manual policy reload endpoint (automatic hot-reload in progress)
+- Optional Redis caching for sub-5ms policy decisions
+- HTTP and gRPC support with customizable path normalization
+- Layered security with JWT authentication
+
+```toml
+acton-service = { version = "0.3", features = ["cedar-authz", "cache"] }
+```
+
+**Note**: Works best with `cache` feature for policy decision caching.
 
 #### `resilience`
 **What it does**: Circuit breaker, retry, and bulkhead patterns
@@ -237,6 +256,25 @@ tokio = { version = "1", features = ["full"] }
 **Binary size**: ~18MB (stripped)
 **Compile time**: ~90s (clean build)
 
+### REST API with Cedar Authorization
+**Use case**: Secure API with fine-grained policy-based access control
+
+```toml
+[dependencies]
+acton-service = { version = "0.3", features = [
+    "http",
+    "observability",
+    "database",
+    "cache",           # Required for Cedar policy caching
+    "cedar-authz",     # Policy-based authorization
+    "resilience"
+] }
+tokio = { version = "1", features = ["full"] }
+```
+
+**Binary size**: ~16MB (stripped)
+**Compile time**: ~75s (clean build)
+
 ### Dual HTTP + gRPC Service
 **Use case**: Service exposing both REST and gRPC APIs
 
@@ -292,6 +330,7 @@ Some features work better together:
 
 | Feature | Recommended Companions | Why |
 |---------|----------------------|-----|
+| `cedar-authz` | `cache` | Policy decision caching dramatically improves performance (10-50ms → 1-5ms) |
 | `cache` | `governor` | Distributed rate limiting needs Redis |
 | `otel-metrics` | `observability` | Metrics require tracing foundation |
 | `resilience` | `http` or `grpc` | Resilience patterns apply to HTTP/gRPC calls |
@@ -345,7 +384,8 @@ features = [
     "http",
     "observability",
     "database",        # If you need it
-    "cache",          # For sessions/rate limiting
+    "cache",          # For sessions/rate limiting/Cedar caching
+    "cedar-authz",    # Fine-grained authorization (optional)
     "resilience",     # Circuit breaker, retry
     "otel-metrics"    # Monitoring
 ]

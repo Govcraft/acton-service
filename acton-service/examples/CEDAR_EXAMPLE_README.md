@@ -279,12 +279,14 @@ Redis caching reduces latency from 10-50ms to 1-5ms by caching policy decisions 
 [cedar]
 enabled = true                      # Enable/disable Cedar authorization
 policy_path = "path/to/policies.cedar"  # Path to policy file
-hot_reload = false                  # Watch policy file for changes
-hot_reload_interval_secs = 60       # Check interval for hot-reload
+hot_reload = false                  # [IN PROGRESS] Automatic policy file watching
+hot_reload_interval_secs = 60       # [IN PROGRESS] Check interval for hot-reload
 cache_enabled = true                # Enable policy decision caching
 cache_ttl_secs = 300                # Cache TTL in seconds
 fail_open = false                   # true = allow on errors, false = deny on errors
 ```
+
+**Note**: Automatic hot-reload is currently in progress. Use the manual reload endpoint (`POST /admin/reload-policies`) to reload policies without restarting the service.
 
 ### Fail-Open vs Fail-Closed
 
@@ -339,15 +341,14 @@ fail_open = true
 
 **Symptom**: Policy changes don't take effect
 
-**Possible causes**:
-1. Hot-reload is disabled
-2. Hot-reload interval not reached
-3. File watcher not working
+**Current Status**: Automatic hot-reload is in progress. For now, policies must be reloaded manually.
 
 **Solutions**:
-- Enable hot-reload: `hot_reload = true`
+- Use the manual reload endpoint: `POST /admin/reload-policies` (requires admin role)
 - Restart the service
 - Check file permissions on policy file
+
+**Future**: Automatic file watching and hot-reload will be implemented soon.
 
 ## Performance Tips
 
@@ -363,8 +364,8 @@ fail_open = true
 3. **Least privilege**: Only grant necessary permissions
 4. **Audit policies regularly**: Review and update policies
 5. **Use forbid for sensitive operations**: Explicit denials are safer
-6. **Enable hot-reload carefully**: Only in trusted environments
-7. **Secure policy files**: Restrict file permissions
+6. **Secure policy reload endpoint**: Protect `/admin/reload-policies` with admin-only access
+7. **Secure policy files**: Restrict file permissions (automatic hot-reload in progress)
 
 ## Next Steps
 
