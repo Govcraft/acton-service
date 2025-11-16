@@ -506,12 +506,19 @@ See the following examples in the acton-service repository:
 ## Summary
 
 ✅ **Type-safe versioning** - `VersionedRoutes` can only be created by `VersionedApiBuilder`
+
 ✅ **Compile-time safety** - Cannot accidentally construct `VersionedRoutes` (private fields)
+
 ✅ **Opaque type** - Prevents manual manipulation of versioned routes
+
 ✅ **Automatic health endpoints** - `ServiceBuilder` automatically adds `/health` and `/ready`
+
 ✅ **Set sunset dates when deprecating** - Clear migration timelines
+
 ✅ **Provide migration guidance** - Help developers upgrade
+
 ✅ **Monitor deprecated version usage** - Track adoption metrics
+
 ✅ **Maintain N and N-1 versions** - Gradual migration path
 
 By leveraging **Rust's type system**, acton-service strongly encourages versioned APIs through opaque types and compile-time checks. Use `VersionedApiBuilder` for all business routes and `ServiceBuilder` for automatic health/readiness endpoints.
