@@ -58,6 +58,7 @@ permit(
 )
 when {
     // Users with document write permission can access documents
+    principal has permissions &&
     principal.permissions.contains("write:documents")
 };
 

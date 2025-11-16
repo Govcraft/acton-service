@@ -10,6 +10,7 @@
 //! - Role-based access (admin vs user)
 //! - HTTP middleware integration
 //! - Redis caching for policy decisions
+//! - Custom path normalization for Cedar actions
 //!
 //! Prerequisites:
 //! 1. Create a Cedar policy file at ~/.config/acton-service/cedar-authz-example/policies.cedar
@@ -32,6 +33,7 @@
 //!   curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/admin/users
 
 use acton_service::prelude::*;
+use acton_service::middleware::cedar::CedarAuthz;
 use axum::{extract::Path, Json};
 use serde::{Deserialize, Serialize};
 
@@ -139,16 +141,12 @@ fn setup_example_files() -> Result<()> {
     // Create config directory if it doesn't exist
     std::fs::create_dir_all(&config_dir)?;
 
-    // Copy policy file (idempotent)
+    // Copy policy file (always overwrite to get latest changes)
     let policy_dest = config_dir.join("policies.cedar");
-    if !policy_dest.exists() {
-        let policy_src = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("examples/policies.cedar");
-        std::fs::copy(&policy_src, &policy_dest)?;
-        println!("   ✓ Copied policies.cedar to {:?}", policy_dest);
-    } else {
-        println!("   ✓ policies.cedar already exists");
-    }
+    let policy_src = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples/policies.cedar");
+    std::fs::copy(&policy_src, &policy_dest)?;
+    println!("   ✓ Copied policies.cedar to {:?}", policy_dest);
 
     // Copy JWT public key (idempotent)
     let jwt_dest = config_dir.join("jwt-public.pem");
@@ -201,6 +199,38 @@ cors_allowed_origins = ["http://localhost:3000"]
     Ok(())
 }
 
+// ============================================================================
+// Custom Path Normalization for Alphanumeric IDs
+// ============================================================================
+//
+// IMPORTANT: This example uses alphanumeric IDs like "user123" and "doc1" in the URLs.
+// The default path normalizer only handles UUIDs and numeric IDs, NOT alphanumeric strings.
+//
+// This example demonstrates using a custom path normalizer with ServiceBuilder
+// to handle alphanumeric document IDs in the URLs.
+
+/// Custom path normalizer for alphanumeric document IDs
+/// Handles paths like "/api/v1/documents/user123/doc1" -> "/api/v1/documents/{user_id}/{doc_id}"
+fn normalize_document_paths(path: &str) -> String {
+    // Match the pattern: /api/v1/documents/{user_id}/{doc_id}
+    // This regex handles alphanumeric IDs like "user123", "doc1", etc.
+    let doc_pattern = regex::Regex::new(r"^(/api/v[0-9]+/documents/)([a-zA-Z0-9_-]+)/([a-zA-Z0-9_-]+)$").unwrap();
+
+    if let Some(caps) = doc_pattern.captures(path) {
+        return format!("{}{{user_id}}/{{doc_id}}", &caps[1]);
+    }
+
+    // Fallback to original path if no match
+    path.to_string()
+}
+//
+// When to use custom normalization:
+// - Alphanumeric IDs (like "user123", "doc1") that aren't UUIDs or numeric
+// - Slug-based routes (like "/articles/my-article-title")
+// - Complex path patterns not handled by the default normalizer
+// - Non-Axum frameworks where MatchedPath isn't available
+// - API gateways or proxies that need explicit path normalization
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Setup example files first
@@ -213,6 +243,12 @@ async fn main() -> Result<()> {
     println!();
     println!("Note: Redis is optional but recommended for caching.");
     println!("      Start with: docker run -d -p 6379:6379 redis");
+    println!();
+    println!("Path Normalization:");
+    println!("  ✓  Using custom normalize_document_paths() function");
+    println!("  ✓  Handles alphanumeric IDs (user123, doc1)");
+    println!("  ✓  Normalizes to {{user_id}}/{{doc_id}} placeholders");
+    println!("  ℹ️  Default normalizer only handles UUIDs and numeric IDs");
     println!();
     println!("Example policy file content:");
     println!("---");
@@ -241,7 +277,7 @@ permit(
     resource
 );
 
-// Users can access their own documents
+// Users with document permissions can access documents
 permit(
     principal,
     action in [
@@ -251,9 +287,9 @@ permit(
     ],
     resource
 )
-when {{{{
-    principal.sub == resource.owner_id
-}}}};
+when {{
+    principal.permissions.contains("write:documents")
+}};
 "#);
     println!("---");
     println!();
@@ -279,24 +315,22 @@ when {{{{
         .build_routes();
 
     // Load configuration for this specific service
-    // This will look for config at:
-    // 1. ./config.toml
-    // 2. ~/.config/acton-service/cedar-authz-example/config.toml (recommended)
-    // 3. /etc/acton-service/cedar-authz-example/config.toml
     let config = Config::load_for_service("cedar-authz-example")?;
 
-    // Build and serve with Cedar authorization
-    // ServiceBuilder will:
-    // 1. Use the loaded config
-    // 2. Initialize JWT authentication middleware
-    // 3. Initialize Cedar authorization middleware (if enabled in config)
-    // 4. Setup Redis caching for policy decisions (if cache feature enabled)
-    ServiceBuilder::new()
+    // Build Cedar with custom path normalizer using the builder pattern
+    let cedar = CedarAuthz::builder(config.cedar.clone().unwrap())
+        .with_path_normalizer(normalize_document_paths)
+        .build()
+        .await?;
+
+    // Build service with explicit Cedar instance
+    let service = ServiceBuilder::new()
         .with_config(config)
         .with_routes(routes)
-        .build()
-        .serve()
-        .await?;
+        .with_cedar(cedar)  // Explicit Cedar with custom normalizer
+        .build();
+
+    service.serve().await?;
 
     Ok(())
 }
