@@ -304,6 +304,12 @@ impl JwtAuth {
         mut request: Request<Body>,
         next: Next,
     ) -> Result<Response, Error> {
+        // Skip authentication for health and readiness endpoints
+        let path = request.uri().path();
+        if path == "/health" || path == "/ready" {
+            return Ok(next.run(request).await);
+        }
+
         // Extract token from headers
         let token = Self::extract_token(request.headers())?;
 
