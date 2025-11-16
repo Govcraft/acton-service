@@ -14,6 +14,7 @@ acton-service provides a **batteries-included, type-enforced framework** where p
 
 - **Type-enforced API versioning** - Impossible to bypass, compiler-enforced versioning
 - **Dual HTTP + gRPC** - Run both protocols on the same port with automatic detection
+- **Cedar policy-based authorization** - AWS Cedar integration for fine-grained access control
 - **Production observability** - OpenTelemetry tracing, metrics, and structured logging built-in
 - **Resilience patterns** - Circuit breaker, retry logic, and bulkhead patterns included
 - **Zero-config defaults** - XDG-compliant configuration with sensible production defaults
@@ -127,7 +128,7 @@ acton-service provides a **comprehensive, opinionated framework** where producti
 4. **Automatic health endpoints** - Kubernetes-ready liveness and readiness probes with dependency monitoring ✅
 5. **Type-enforced API versioning** - The compiler prevents unversioned APIs; impossible to bypass ✅
 6. **Zero-config defaults** - XDG-compliant configuration with sensible defaults and environment variable overrides ✅
-7. **Batteries-included middleware** - JWT auth, rate limiting, request tracking, compression, CORS, timeouts ✅
+7. **Batteries-included middleware** - JWT auth, Cedar policy-based authorization, rate limiting, request tracking, compression, CORS, timeouts ✅
 8. **Connection pool management** - PostgreSQL, Redis, and NATS support with automatic retry and health checks ✅
 
 Most importantly: **it's designed for teams**. The type system enforces best practices that individual contributors can't accidentally bypass.
@@ -215,6 +216,12 @@ Available middleware (all HTTP and gRPC compatible):
 
 **Authentication & Authorization**
 - **JWT Authentication** - Full validation with RS256, ES256, HS256/384/512 algorithms
+- **Cedar Policy-Based Authorization** - AWS Cedar integration for fine-grained access control with:
+  - Declarative policy files for resource-based permissions
+  - Role-based and attribute-based access control (RBAC/ABAC)
+  - Manual policy reload endpoint (automatic hot-reload in progress)
+  - Optional Redis caching for sub-5ms policy decisions
+  - HTTP and gRPC support with customizable path normalization
 - Claims structure with roles, permissions, user/client identification
 - Token revocation ready (Redis integration)
 
@@ -325,6 +332,7 @@ acton-service = { version = "0.2", features = [
     "observability", # Structured logging (default)
     "governor",      # Advanced rate limiting
     "openapi",       # Swagger/OpenAPI documentation
+    "cedar-authz",   # AWS Cedar policy-based authorization
 ] }
 ```
 
@@ -453,6 +461,7 @@ See the [`examples/`](./acton-service/examples) directory for complete examples 
 - User management API with deprecation - [`users-api.rs`](./acton-service/examples/users-api.rs)
 - Dual-protocol HTTP + gRPC - [`ping-pong.rs`](./acton-service/examples/ping-pong.rs)
 - Event-driven architecture - [`event-driven.rs`](./acton-service/examples/event-driven.rs)
+- Cedar policy-based authorization - [`cedar-authz.rs`](./acton-service/examples/cedar-authz.rs) | [Guide](./acton-service/examples/CEDAR_EXAMPLE_README.md)
 
 Run examples:
 
@@ -461,6 +470,7 @@ cargo run --example simple-api
 cargo run --example users-api
 cargo run --example ping-pong --features grpc
 cargo run --example event-driven --features grpc
+cargo run --example cedar-authz --features cedar-authz,cache
 ```
 
 ## CLI Tool
@@ -526,6 +536,7 @@ Design principles:
 - [Configuration Guide](./acton-service/CONFIG.md) - Environment and file-based configuration
 - [API Versioning](./acton-service/docs/API_VERSIONING.md) - Type-safe versioning patterns
 - [Health Endpoints](./HEALTH_ENDPOINTS_GUIDE.md) - Kubernetes liveness and readiness
+- [Cedar Authorization](./acton-service/examples/CEDAR_EXAMPLE_README.md) - Policy-based access control with AWS Cedar
 
 ### Reference
 
@@ -659,6 +670,7 @@ See the [examples directory](./acton-service/examples/) for complete migration e
 - **Complete Observability Stack**: OpenTelemetry tracing/metrics (OTLP exporter), structured JSON logging, distributed request tracing
 - **Production Resilience Patterns**: Circuit breaker, exponential backoff retry, bulkhead (concurrency limiting)
 - **Comprehensive Middleware**: JWT authentication (RS256/ES256/HS256/384/512), Redis-backed distributed rate limiting, local governor rate limiting, request tracking with correlation IDs, OpenTelemetry metrics middleware
+- **Cedar Policy-Based Authorization**: AWS Cedar integration with declarative policies, manual reload endpoint, Redis caching, HTTP/gRPC support, customizable path normalization (automatic hot-reload in progress)
 - **Type-Enforced API Versioning**: Compile-time enforcement with RFC 8594 deprecation headers
 - **Automatic Health Checks**: Kubernetes-ready liveness/readiness probes with dependency monitoring (database, cache, events)
 - **Connection Pool Management**: PostgreSQL (SQLx), Redis (Deadpool), NATS JetStream with automatic retry and health checks
