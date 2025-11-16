@@ -232,18 +232,9 @@ impl ServiceBuilder {
             }
         };
 
-        // Auto-apply JWT middleware if configured
-        if let Ok(jwt_auth) = crate::middleware::jwt::JwtAuth::new(&config.jwt) {
-            tracing::debug!("Auto-applying JWT authentication middleware");
-            app = app.layer(axum::middleware::from_fn_with_state(
-                jwt_auth,
-                crate::middleware::jwt::JwtAuth::middleware,
-            ));
-        } else {
-            tracing::warn!("JWT configuration invalid, skipping JWT middleware");
-        }
-
         // Auto-apply Cedar middleware if configured and enabled
+        // NOTE: Cedar must be applied BEFORE JWT because Axum layers run in reverse order
+        // This ensures the execution order is: Request → JWT → Cedar → Handler
         #[cfg(feature = "cedar-authz")]
         if let Some(ref cedar_config) = config.cedar {
             if cedar_config.enabled {
@@ -272,6 +263,19 @@ impl ServiceBuilder {
                     }
                 }
             }
+        }
+
+        // Auto-apply JWT middleware if configured
+        // NOTE: JWT must be applied AFTER Cedar because Axum layers run in reverse order
+        // This ensures the execution order is: Request → JWT → Cedar → Handler
+        if let Ok(jwt_auth) = crate::middleware::jwt::JwtAuth::new(&config.jwt) {
+            tracing::debug!("Auto-applying JWT authentication middleware");
+            app = app.layer(axum::middleware::from_fn_with_state(
+                jwt_auth,
+                crate::middleware::jwt::JwtAuth::middleware,
+            ));
+        } else {
+            tracing::warn!("JWT configuration invalid, skipping JWT middleware");
         }
 
         let listener_addr = std::net::SocketAddr::from(([0, 0, 0, 0], config.service.port));
