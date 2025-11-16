@@ -456,6 +456,282 @@ impl PolicyCache for RedisPolicyCache {
     }
 }
 
+// ============================================================================
+// gRPC Tower Layer Implementation
+// ============================================================================
+
+#[cfg(feature = "grpc")]
+use tonic::{body::Body as TonicBody, Request as TonicRequest, Response as TonicResponse, Status};
+#[cfg(feature = "grpc")]
+use tower::{Layer, Service};
+#[cfg(feature = "grpc")]
+use std::task::{Context as TaskContext, Poll};
+#[cfg(feature = "grpc")]
+use std::pin::Pin;
+#[cfg(feature = "grpc")]
+use std::future::Future;
+
+/// Tower Layer for Cedar authorization in gRPC services
+#[cfg(feature = "grpc")]
+#[derive(Clone)]
+pub struct CedarAuthzLayer {
+    authz: CedarAuthz,
+}
+
+#[cfg(feature = "grpc")]
+impl CedarAuthzLayer {
+    /// Create a new Cedar authorization layer for gRPC
+    pub fn new(authz: CedarAuthz) -> Self {
+        Self { authz }
+    }
+}
+
+#[cfg(feature = "grpc")]
+impl<S> Layer<S> for CedarAuthzLayer {
+    type Service = CedarAuthzService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        CedarAuthzService {
+            inner,
+            authz: self.authz.clone(),
+        }
+    }
+}
+
+/// Tower Service for Cedar authorization in gRPC
+#[cfg(feature = "grpc")]
+#[derive(Clone)]
+pub struct CedarAuthzService<S> {
+    inner: S,
+    authz: CedarAuthz,
+}
+
+#[cfg(feature = "grpc")]
+impl<S, ReqBody> Service<TonicRequest<ReqBody>> for CedarAuthzService<S>
+where
+    S: Service<TonicRequest<ReqBody>, Response = TonicResponse<TonicBody>, Error = Status>
+        + Clone
+        + Send
+        + 'static,
+    S::Future: Send + 'static,
+    ReqBody: Send + 'static,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, cx: &mut TaskContext<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, req: TonicRequest<ReqBody>) -> Self::Future {
+        let mut inner = self.inner.clone();
+        let authz = self.authz.clone();
+
+        Box::pin(async move {
+            // Skip if Cedar is disabled
+            if !authz.config.enabled {
+                return inner.call(req).await;
+            }
+
+            // Extract JWT claims from request extensions (set by JWT interceptor)
+            let claims = req
+                .extensions()
+                .get::<Claims>()
+                .ok_or_else(|| {
+                    Status::unauthenticated(
+                        "Missing JWT claims. Ensure JWT interceptor runs before Cedar layer.",
+                    )
+                })?
+                .clone();
+
+            // Extract gRPC method path from metadata
+            let method_path = req
+                .metadata()
+                .get(":path")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("unknown")
+                .to_string();
+
+            // Build Cedar authorization request
+            let principal = build_principal(&claims).map_err(|_| {
+                Status::internal("Failed to build principal")
+            })?;
+
+            let action = build_action_grpc(&method_path).map_err(|_| {
+                Status::internal("Failed to build action")
+            })?;
+
+            let context = build_context_grpc(req.metadata(), &claims).map_err(|_| {
+                Status::internal("Failed to build context")
+            })?;
+
+            let resource: EntityUid = r#"Resource::"default""#
+                .parse()
+                .map_err(|_| Status::internal("Failed to parse resource"))?;
+
+            let cedar_request = CedarRequest::new(
+                principal.clone(),
+                action.clone(),
+                resource.clone(),
+                context,
+                None,
+            )
+            .map_err(|_| Status::internal("Failed to build Cedar request"))?;
+
+            // Check cache (if enabled)
+            #[cfg(feature = "cache")]
+            if let Some(cache) = &authz.cache {
+                if let Ok(Some(decision)) = cache.get(&cedar_request).await {
+                    match decision {
+                        Decision::Allow => return inner.call(req).await,
+                        Decision::Deny => {
+                            return Err(Status::permission_denied("Access denied by policy"))
+                        }
+                    }
+                }
+            }
+
+            // Evaluate policies
+            let policy_set = authz.policy_set.read().await;
+            let entities = build_entities(&claims).map_err(|_| {
+                Status::internal("Failed to build entities")
+            })?;
+
+            let response = authz.authorizer.is_authorized(
+                &cedar_request,
+                &policy_set,
+                &entities,
+            );
+
+            // Handle decision
+            match response.decision() {
+                Decision::Allow => {
+                    // Cache decision (if enabled)
+                    #[cfg(feature = "cache")]
+                    if let Some(cache) = &authz.cache {
+                        let _ = cache
+                            .set(&cedar_request, Decision::Allow, authz.config.cache_ttl_secs)
+                            .await;
+                    }
+
+                    inner.call(req).await
+                }
+                Decision::Deny => {
+                    tracing::warn!(
+                        principal = ?principal,
+                        action = ?action,
+                        method = %method_path,
+                        "Cedar policy denied gRPC request"
+                    );
+
+                    // Cache denial (if enabled)
+                    #[cfg(feature = "cache")]
+                    if let Some(cache) = &authz.cache {
+                        let _ = cache
+                            .set(&cedar_request, Decision::Deny, authz.config.cache_ttl_secs)
+                            .await;
+                    }
+
+                    if authz.config.fail_open {
+                        tracing::warn!("Cedar policy denied but fail_open=true, allowing gRPC request");
+                        inner.call(req).await
+                    } else {
+                        Err(Status::permission_denied("Access denied by policy"))
+                    }
+                }
+            }
+        })
+    }
+}
+
+/// Build Cedar action from gRPC method path
+///
+/// gRPC method paths are in format: /package.Service/Method
+/// We convert to Cedar action: Action::"/package.Service/Method"
+#[cfg(feature = "grpc")]
+fn build_action_grpc(method_path: &str) -> Result<EntityUid, Error> {
+    let action_str = format!(r#"Action::"{}""#, method_path);
+    let action: EntityUid = action_str
+        .parse()
+        .map_err(|e| Error::Internal(format!("Invalid gRPC action: {}", e)))?;
+    Ok(action)
+}
+
+/// Build Cedar context from gRPC metadata and claims
+#[cfg(feature = "grpc")]
+fn build_context_grpc(
+    metadata: &tonic::metadata::MetadataMap,
+    claims: &Claims,
+) -> Result<Context, Error> {
+    let mut context_map = serde_json::Map::new();
+
+    // Add user roles
+    context_map.insert("roles".to_string(), json!(claims.roles));
+
+    // Add permissions
+    context_map.insert("permissions".to_string(), json!(claims.perms));
+
+    // Add email if present
+    if let Some(email) = &claims.email {
+        context_map.insert("email".to_string(), json!(email));
+    }
+
+    // Add username if present
+    if let Some(username) = &claims.username {
+        context_map.insert("username".to_string(), json!(username));
+    }
+
+    // Add timestamp
+    let now = chrono::Utc::now();
+    context_map.insert(
+        "timestamp".to_string(),
+        json!({
+            "unix": now.timestamp(),
+            "hour": now.hour(),
+            "dayOfWeek": now.weekday().to_string(),
+        }),
+    );
+
+    // Add IP address from gRPC metadata
+    if let Some(ip) = extract_grpc_client_ip(metadata) {
+        context_map.insert("ip".to_string(), json!(ip));
+    }
+
+    // Add request ID if present
+    if let Some(request_id) = metadata.get("x-request-id").and_then(|v| v.to_str().ok()) {
+        context_map.insert("requestId".to_string(), json!(request_id));
+    }
+
+    // Add user-agent if present
+    if let Some(user_agent) = metadata.get("user-agent").and_then(|v| v.to_str().ok()) {
+        context_map.insert("userAgent".to_string(), json!(user_agent));
+    }
+
+    Context::from_json_value(serde_json::Value::Object(context_map), None)
+        .map_err(|e| Error::Internal(format!("Failed to build gRPC context: {}", e)))
+}
+
+/// Extract client IP from gRPC metadata
+#[cfg(feature = "grpc")]
+fn extract_grpc_client_ip(metadata: &tonic::metadata::MetadataMap) -> Option<String> {
+    // Try X-Forwarded-For header first
+    if let Some(xff) = metadata.get("x-forwarded-for") {
+        if let Ok(xff_str) = xff.to_str() {
+            return xff_str.split(',').next().map(|s| s.trim().to_string());
+        }
+    }
+
+    // Try X-Real-IP header
+    if let Some(xri) = metadata.get("x-real-ip") {
+        if let Ok(xri_str) = xri.to_str() {
+            return Some(xri_str.to_string());
+        }
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

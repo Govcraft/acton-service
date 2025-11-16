@@ -130,7 +130,9 @@ pub mod prelude {
 
     #[cfg(feature = "grpc")]
     pub use crate::grpc::{
-        GrpcServer, HealthService, Request, Response, Status, Code,
+        GrpcServer, HealthService, Request,
+        Response as GrpcResponse,
+        Status, Code,
         request_id_interceptor, jwt_auth_interceptor, RequestIdExtension,
         add_request_id_to_response, GrpcTracingLayer, LoggingLayer,
     };
