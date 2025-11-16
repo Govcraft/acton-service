@@ -95,8 +95,9 @@ Some examples require specific feature flags:
 |---------|-------------|-------------|
 | `cedar-authz` | Authorization examples | AWS Cedar policy-based authorization |
 | `cache` | Cedar with caching | Redis caching for policy decisions |
-| `grpc` | gRPC examples | tonic gRPC server support |
-| `observability` | Observability examples | OpenTelemetry metrics and tracing |
+| `grpc` | gRPC examples, ping-pong | tonic gRPC server support |
+| `otel-metrics` | test-metrics example | OpenTelemetry metrics collection |
+| `observability` | test-observability example | OpenTelemetry tracing setup |
 
 ## Learning Path
 

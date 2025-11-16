@@ -63,7 +63,7 @@ Demonstrates:
 
 Run with:
 ```bash
-cargo run --manifest-path=../../Cargo.toml --example ping-pong
+cargo run --manifest-path=../../Cargo.toml --example ping-pong --features grpc
 ```
 
 Test:

@@ -16,7 +16,7 @@ Demonstrates:
 
 Run with:
 ```bash
-cargo run --manifest-path=../../Cargo.toml --example test-metrics --features observability
+cargo run --manifest-path=../../Cargo.toml --example test-metrics --features otel-metrics
 ```
 
 View metrics:
