@@ -47,9 +47,9 @@ permit(
 permit(
     principal,
     action in [
-        Action::"GET /api/v1/documents/:user_id/:doc_id",
-        Action::"PUT /api/v1/documents/:user_id/:doc_id",
-        Action::"DELETE /api/v1/documents/:user_id/:doc_id"
+        Action::"GET /api/v1/documents/{user_id}/{doc_id}",
+        Action::"PUT /api/v1/documents/{user_id}/{doc_id}",
+        Action::"DELETE /api/v1/documents/{user_id}/{doc_id}"
     ],
     resource
 )

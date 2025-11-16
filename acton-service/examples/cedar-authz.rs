@@ -167,15 +167,15 @@ permit(
 permit(
     principal,
     action in [
-        Action::"GET /api/v1/documents/:user_id/:doc_id",
-        Action::"PUT /api/v1/documents/:user_id/:doc_id",
-        Action::"DELETE /api/v1/documents/:user_id/:doc_id"
+        Action::"GET /api/v1/documents/{{user_id}}/{{doc_id}}",
+        Action::"PUT /api/v1/documents/{{user_id}}/{{doc_id}}",
+        Action::"DELETE /api/v1/documents/{{user_id}}/{{doc_id}}"
     ],
     resource
 )
-when {{
+when {{{{
     principal.sub == resource.owner_id
-}};
+}}}};
 "#);
     println!("---");
     println!();
@@ -190,7 +190,7 @@ when {{
                 // Document endpoints (protected by Cedar)
                 .route("/documents", get(list_documents).post(create_document))
                 .route(
-                    "/documents/:user_id/:doc_id",
+                    "/documents/{user_id}/{doc_id}",
                     get(get_document)
                         .put(update_document)
                         .delete(delete_document),
