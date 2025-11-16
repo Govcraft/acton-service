@@ -248,9 +248,12 @@ impl ServiceBuilder {
         if let Some(ref cedar_config) = config.cedar {
             if cedar_config.enabled {
                 match tokio::runtime::Handle::try_current() {
-                    Ok(handle) => {
-                        match handle.block_on(async {
-                            crate::middleware::cedar::CedarAuthz::new(cedar_config.clone()).await
+                    Ok(_handle) => {
+                        // Use block_in_place to avoid nested runtime error
+                        match tokio::task::block_in_place(|| {
+                            tokio::runtime::Handle::current().block_on(async {
+                                crate::middleware::cedar::CedarAuthz::new(cedar_config.clone()).await
+                            })
                         }) {
                             Ok(cedar_authz) => {
                                 tracing::debug!("Auto-applying Cedar authorization middleware");
