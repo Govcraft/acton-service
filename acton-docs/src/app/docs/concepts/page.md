@@ -164,7 +164,7 @@ Use code for:
 ```toml
 # Cargo.toml feature changes require REBUILD
 [dependencies]
-acton-service = { version = "0.2", features = ["database", "cache"] }
+{% dep("databaseCache") %}
 # Adding/removing features = recompile + redeploy
 ```
 

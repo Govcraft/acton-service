@@ -27,7 +27,7 @@ Enable the cache feature:
 
 ```toml
 [dependencies]
-acton-service = { version = "0.2", features = ["cache", "http", "observability"] }
+{% $dep.cache %}
 ```
 
 ## Configuration

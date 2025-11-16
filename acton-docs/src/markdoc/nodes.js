@@ -56,6 +56,23 @@ const nodes = {
       language: {
         type: String,
       },
+      content: {
+        type: String,
+      },
+    },
+    transform(node, config) {
+      const attributes = node.transformAttributes(config)
+      const children = node.children[0]
+
+      // Get the fence content
+      let content = children?.attributes?.content || ''
+
+      // Simple variable substitution for version
+      if (config.variables?.version?.acton) {
+        content = content.replace(/\{\{version\}\}/g, config.variables.version.acton)
+      }
+
+      return new Tag(this.render, attributes, [content])
     },
   },
 }

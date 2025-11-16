@@ -227,5 +227,5 @@ Both protocols share the same health check endpoint:
 
 - See [Examples](/docs/examples) for complete dual-protocol service implementations
 - Learn about [Configuration](/docs/configuration) options for fine-tuning both protocols
-- Explore [gRPC-specific features](/docs/grpc) like streaming and reflection
+- Explore [gRPC Guide](/docs/grpc-guide) for protocol buffers, build setup, and implementation details
 - Review [Observability](/docs/observability) for protocol-specific metrics and tracing

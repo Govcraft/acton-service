@@ -27,7 +27,7 @@ Enable the events feature:
 
 ```toml
 [dependencies]
-acton-service = { version = "0.2", features = ["events", "http", "observability"] }
+{% $dep.events %}
 ```
 
 ## Configuration

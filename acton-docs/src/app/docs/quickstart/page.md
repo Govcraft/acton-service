@@ -27,7 +27,7 @@ Add acton-service to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-acton-service = { version = "0.2", features = ["http", "observability"] }
+{% $dep.http %}
 tokio = { version = "1", features = ["full"] }
 ```
 

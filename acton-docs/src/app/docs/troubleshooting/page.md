@@ -66,7 +66,7 @@ use acton_service::prelude::*;
 use acton_service::state::AppState;
 
 // And ensure you have the right features in Cargo.toml
-acton-service = { version = "0.2", features = ["http", "observability"] }
+{% $dep.http %}
 ```
 
 ### Method `database` not found
@@ -81,7 +81,7 @@ error[E0599]: no method named `database` found for struct `AppState`
 **Solution**: Add the feature to your `Cargo.toml`:
 ```toml
 [dependencies]
-acton-service = { version = "0.2", features = ["http", "observability", "database"] }
+{% $dep.database %}
 ```
 
 ### Could not find `tonic` in the list of imported crates
@@ -91,7 +91,7 @@ acton-service = { version = "0.2", features = ["http", "observability", "databas
 **Solution**: Add the feature:
 ```toml
 [dependencies]
-acton-service = { version = "0.2", features = ["grpc"] }
+{% $dep.grpc %}
 ```
 
 ### Trait `IntoResponse` is not implemented
@@ -371,7 +371,7 @@ let users = sqlx::query_as!(User, "SELECT id, name FROM users")
 2. **Reduce features**:
    ```toml
    # Only enable what you need
-   acton-service = { version = "0.2", features = ["http", "observability"] }
+   {% $dep.http %}
    ```
 
 3. **Use lazy initialization**:
