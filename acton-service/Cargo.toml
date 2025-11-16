@@ -115,30 +115,50 @@ tower-resilience-circuitbreaker = ["dep:tower-resilience-circuitbreaker"]
 tower-resilience-bulkhead = ["dep:tower-resilience-bulkhead"]
 cedar-policy = ["dep:cedar-policy"]
 
+# Basic examples
 [[example]]
 name = "simple-api"
-path = "examples/simple-api.rs"
+path = "examples/basic/simple-api.rs"
 required-features = ["http"]
 
 [[example]]
 name = "users-api"
-path = "examples/users-api.rs"
+path = "examples/basic/users-api.rs"
 required-features = ["http"]
 
 [[example]]
 name = "ping-pong"
-path = "examples/ping-pong.rs"
+path = "examples/basic/ping-pong.rs"
+required-features = ["http"]
+
+# gRPC examples
+[[example]]
+name = "single-port"
+path = "examples/grpc/single-port.rs"
 required-features = ["grpc"]
 
+# Event-driven examples
+[[example]]
+name = "event-driven"
+path = "examples/events/event-driven.rs"
+required-features = ["grpc"]
+
+# Authorization examples
+[[example]]
+name = "cedar-authz"
+path = "examples/authorization/cedar-authz.rs"
+required-features = ["cedar-authz", "cache"]
+
+# Observability examples
 [[example]]
 name = "test-metrics"
-path = "examples/test-metrics.rs"
+path = "examples/observability/test-metrics.rs"
 required-features = ["otel-metrics"]
 
 [[example]]
-name = "cedar-authz"
-path = "examples/cedar-authz.rs"
-required-features = ["cedar-authz", "cache"]
+name = "test-observability"
+path = "examples/observability/test-observability.rs"
+required-features = ["observability"]
 
 [build-dependencies]
 prost-build = "0.14.1"
