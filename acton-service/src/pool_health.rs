@@ -150,24 +150,28 @@ impl PoolHealthSummary {
 
     /// Check if all pools are healthy
     pub fn is_healthy(&self) -> bool {
-        let mut healthy = true;
+        let database_healthy = {
+            #[cfg(feature = "database")]
+            { self.database.as_ref().map_or(true, |db| db.healthy) }
+            #[cfg(not(feature = "database"))]
+            { true }
+        };
 
-        #[cfg(feature = "database")]
-        if let Some(db) = &self.database {
-            healthy = healthy && db.healthy;
-        }
+        let cache_healthy = {
+            #[cfg(feature = "cache")]
+            { self.redis.as_ref().map_or(true, |redis| redis.available) }
+            #[cfg(not(feature = "cache"))]
+            { true }
+        };
 
-        #[cfg(feature = "cache")]
-        if let Some(redis) = &self.redis {
-            healthy = healthy && redis.available;
-        }
+        let events_healthy = {
+            #[cfg(feature = "events")]
+            { self.nats.as_ref().map_or(true, |nats| nats.connected) }
+            #[cfg(not(feature = "events"))]
+            { true }
+        };
 
-        #[cfg(feature = "events")]
-        if let Some(nats) = &self.nats {
-            healthy = healthy && nats.connected;
-        }
-
-        healthy
+        database_healthy && cache_healthy && events_healthy
     }
 }
 
