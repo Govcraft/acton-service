@@ -40,3 +40,6 @@ pub use cedar::CedarAuthz;
 
 #[cfg(all(feature = "cedar-authz", feature = "cache"))]
 pub use cedar::{PolicyCache, RedisPolicyCache};
+
+#[cfg(all(feature = "cedar-authz", feature = "grpc"))]
+pub use cedar::{CedarAuthzLayer, CedarAuthzService};
