@@ -99,10 +99,15 @@ curl http://localhost:8080/ready
 You just created a production-ready microservice with:
 
 ✅ **Type-enforced API versioning** - Impossible to create unversioned routes
+
 ✅ **Automatic health checks** - `/health` and `/ready` endpoints for Kubernetes
+
 ✅ **Automatic logging** - Structured JSON logs out of the box
+
 ✅ **Automatic tracing** - OpenTelemetry tracing ready to go
+
 ✅ **Graceful shutdown** - Proper signal handling (SIGTERM, SIGINT)
+
 ✅ **Zero configuration** - Works with sensible defaults
 
 ## What's Next?
