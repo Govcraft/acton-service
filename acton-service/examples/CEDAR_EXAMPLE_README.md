@@ -1,50 +1,34 @@
 # Cedar Authorization Example
 
-This example demonstrates fine-grained, policy-based authorization using AWS Cedar with acton-service.
+This example shows how to implement fine-grained authorization using AWS Cedar policies with acton-service. Cedar allows you to define who can do what with which resources using declarative policy files.
 
-## Features
+**What you'll learn:**
+- Policy-based access control (admin vs user roles)
+- Resource ownership patterns (users can only access their own documents)
+- Custom path normalization for alphanumeric IDs
+- JWT authentication + Cedar authorization (layered security)
+- Optional Redis caching for policy decisions
 
-- ✅ JWT Authentication + Cedar Authorization (layered security)
-- ✅ Policy-based access control with Cedar policies
-- ✅ Resource ownership patterns (users can only access their own documents)
-- ✅ Role-based access control (admin vs user)
-- ✅ HTTP middleware integration
-- ✅ Redis caching for policy decisions (optional but recommended)
-- ✅ Hot-reload of policy files (optional)
-- ✅ Fail-open vs fail-closed configuration
-- ✅ **Auto-setup**: Example automatically creates all necessary files!
+**Auto-setup:** The example automatically creates all necessary configuration files on first run.
 
 ## Quick Start
-
-### 1. Optional: Start Redis (Recommended for caching)
-
-```bash
-docker run -d -p 6379:6379 redis:latest
-```
-
-### 2. Run the Example
 
 ```bash
 cargo run --example cedar-authz --features cedar-authz,cache
 ```
 
-**That's it!** The example will:
-- ✅ Automatically create `~/.config/acton-service/cedar-authz-example/`
-- ✅ Copy Cedar policies to `policies.cedar`
-- ✅ Copy JWT public key to `jwt-public.pem`
-- ✅ Copy configuration to `config.toml`
-- ✅ Start the service on `http://localhost:8080`
+That's it! The example automatically creates `~/.config/acton-service/cedar-authz-example/` with:
+- `policies.cedar` - Cedar policy definitions
+- `jwt-public.pem` - JWT public key for token validation
+- `config.toml` - Service configuration
 
-You'll see output like:
-```
-🔧 Setting up example files...
-   ✓ policies.cedar created
-   ✓ jwt-public.pem created
-   ✓ config.toml created
+Server starts on `http://localhost:8080`
 
-🚀 Cedar Authorization Example
-================================
+**Optional:** For faster policy decisions, start Redis for caching:
+```bash
+docker run -d -p 6379:6379 redis:latest
 ```
+Without Redis, policy decisions take 10-50ms instead of 1-5ms (still perfectly usable).
 
 ## Testing
 
@@ -261,54 +245,31 @@ Only admins can access admin endpoints.
 
 ## How It Works
 
-### 1. Request Flow
-
+**Request Flow:**
 ```
 Client Request
     ↓
-JWT Authentication Middleware (validates token, extracts claims)
+JWT Authentication (validates token, extracts claims)
     ↓
-Cedar Authorization Middleware (evaluates policies)
+Cedar Authorization (evaluates policies)
     ↓
-Business Logic (your handlers)
-    ↓
-Response
+Your Handler
 ```
 
-### 2. Cedar Authorization Process
+**Cedar evaluates each request using:**
 
-For each request, Cedar evaluates:
+- **Principal** (who): Extracted from JWT claims (`sub`, `roles`, `perms`, etc.)
+- **Action** (what): HTTP method + normalized path (e.g., `GET /api/v1/documents/{user_id}/{doc_id}`)
+- **Resource** (which): Path parameters or request body attributes (`owner_id`, etc.)
+- **Context** (when/where): Request metadata (`ip_address`, `timestamp`, etc.)
 
-**Principal**: Who is making the request?
-- Extracted from JWT claims
-- Format: `User::"user:123"`
-- Attributes: `sub`, `roles`, `perms`, `email`, etc.
+**Decision:**
+- If any `forbid` policy matches → Deny
+- Else if any `permit` policy matches → Allow
+- Otherwise → Deny (default)
 
-**Action**: What operation is being performed?
-- Extracted from HTTP method + path
-- Format: `Action::"GET /api/v1/documents/{user_id}/{doc_id}"`
-
-**Resource**: What is being accessed?
-- Extracted from path parameters or request body
-- Attributes: `owner_id`, etc.
-
-**Context**: Additional request metadata
-- `ip_address`: Client IP
-- `timestamp`: Request time
-- `hour`, `minute`: Time-based policies
-
-**Decision**: Allow or Deny
-- If any `forbid` policy matches → **Deny**
-- Else if any `permit` policy matches → **Allow**
-- Otherwise → **Deny** (default)
-
-### 3. Caching (Optional)
-
-When cache is enabled:
-- Policy decisions are cached in Redis
-- Cache key: `cedar:authz:{principal}:{action}:{resource}:{context_hash}`
-- TTL: Configurable (default 5 minutes)
-- Reduces latency from 10-50ms to 1-5ms
+**Caching (optional):**
+Redis caching reduces latency from 10-50ms to 1-5ms by caching policy decisions with a configurable TTL (default 5 minutes).
 
 ## Configuration Options
 
