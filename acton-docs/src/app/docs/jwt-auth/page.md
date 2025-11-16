@@ -199,30 +199,50 @@ With this config:
 - ❌ `/api/v1/users` → Protected (matches include pattern)
 - ❌ `/admin/settings` → Protected (matches include pattern)
 
-### Code-Based Protection (Per-Route)
+### Code-Based Protection (Advanced)
 
-For fine-grained control, apply JWT middleware only to specific routes:
+{% callout type="warning" title="Configuration is Recommended" %}
+For most use cases, use **configuration-based protection** (`exclude_paths` or `include_paths`). Code-based middleware is an advanced pattern that still requires using `VersionedApiBuilder`.
+{% /callout %}
+
+If you need fine-grained per-version control, apply middleware within the versioned builder:
 
 ```rust
+use acton_service::prelude::*;
 use acton_service::middleware::JwtAuthLayer;
 
-// Public routes (no authentication)
-let public_routes = Router::new()
-    .route("/login", post(login))
-    .route("/register", post(register))
-    .route("/health", get(health));
+// Create JWT middleware layer
+let jwt_layer = JwtAuthLayer::new(jwt_config);
 
-// Protected routes (authentication required)
-let protected_routes = Router::new()
-    .route("/users", get(list_users))
-    .route("/profile", get(get_profile))
-    .layer(JwtAuthLayer::new(jwt_config));  // Apply JWT only here
+let routes = VersionedApiBuilder::new()
+    .with_base_path("/api")
+    .add_version(ApiVersion::V1, |router| {
+        // V1: Some endpoints public, some protected
+        router
+            .route("/login", post(login))           // Public
+            .route("/register", post(register))     // Public
+            .route("/users", get(list_users)        // Protected
+                .layer(jwt_layer.clone()))
+            .route("/profile", get(get_profile)     // Protected
+                .layer(jwt_layer.clone()))
+    })
+    .add_version(ApiVersion::V2, |router| {
+        // V2: All endpoints require auth
+        router
+            .route("/users", get(list_users_v2))
+            .route("/profile", get(get_profile_v2))
+            .layer(jwt_layer)  // Apply to all V2 routes
+    })
+    .build_routes();
 
-// Combine routes
-let app = Router::new()
-    .merge(public_routes)
-    .merge(protected_routes);
+ServiceBuilder::new()
+    .with_routes(routes)
+    .build()
+    .serve()
+    .await?;
 ```
+
+**Note:** `/health` and `/ready` are automatically added by `ServiceBuilder` and are always public (not part of versioned routes).
 
 ### Health Checks and JWT
 

@@ -350,20 +350,30 @@ Retry-After: 5
 Isolate expensive operations from normal traffic:
 
 ```rust
-// Expensive report generation: limited concurrency
-let report_routes = Router::new()
-    .route("/api/v1/reports/generate", post(generate_report))
-    .layer(ResilienceLayer::new().with_bulkhead(5));
+use acton_service::prelude::*;
+use acton_service::middleware::ResilienceConfig;
 
-// Normal CRUD operations: higher concurrency
-let crud_routes = Router::new()
-    .route("/api/v1/users", get(list_users))
-    .route("/api/v1/documents", get(list_documents))
-    .layer(ResilienceLayer::new().with_bulkhead(100));
+let routes = VersionedApiBuilder::new()
+    .with_base_path("/api")
+    .add_version(ApiVersion::V1, |router| {
+        router
+            // Expensive report generation: limited concurrency
+            .route("/reports/generate", post(generate_report)
+                .layer(ResilienceConfig::new().with_bulkhead(true).with_bulkhead_max_concurrent(5)))
 
-let app = Router::new()
-    .merge(report_routes)
-    .merge(crud_routes);
+            // Normal CRUD operations: higher concurrency
+            .route("/users", get(list_users)
+                .layer(ResilienceConfig::new().with_bulkhead(true).with_bulkhead_max_concurrent(100)))
+            .route("/documents", get(list_documents)
+                .layer(ResilienceConfig::new().with_bulkhead(true).with_bulkhead_max_concurrent(100)))
+    })
+    .build_routes();
+
+ServiceBuilder::new()
+    .with_routes(routes)
+    .build()
+    .serve()
+    .await?;
 ```
 
 ### When to Use Bulkheads

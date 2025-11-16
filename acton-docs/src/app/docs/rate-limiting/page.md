@@ -249,33 +249,39 @@ ServiceBuilder::new()
 
 ### Per-Endpoint Limits
 
-Different endpoints often require different rate limits:
+Different endpoints often require different rate limits. Apply rate limiting within the versioned builder:
 
 ```rust
-use tower::ServiceBuilder;
+use acton_service::prelude::*;
+use acton_service::middleware::RateLimitLayer;
+use std::time::Duration;
 
-// Public endpoints - stricter limits
-let public_routes = Router::new()
-    .route("/api/public/*", get(public_handler))
-    .layer(RateLimitLayer::new(10, Duration::from_secs(60)));
+let routes = VersionedApiBuilder::new()
+    .with_base_path("/api")
+    .add_version(ApiVersion::V1, |router| {
+        router
+            // Public endpoints - stricter limits
+            .route("/public/info", get(public_handler)
+                .layer(RateLimitLayer::new(10, Duration::from_secs(60))))
 
-// Authenticated endpoints - more generous limits
-let auth_routes = Router::new()
-    .route("/api/private/*", get(private_handler))
-    .layer(JwtAuth::new("secret"))
-    .layer(RateLimitLayer::new(100, Duration::from_secs(60)));
+            // Authenticated endpoints - more generous limits
+            .route("/users", get(list_users)
+                .layer(RateLimitLayer::new(100, Duration::from_secs(60))))
 
-// Admin endpoints - no rate limiting
-let admin_routes = Router::new()
-    .route("/api/admin/*", get(admin_handler))
-    .layer(JwtAuth::new("secret"))
-    .layer(CedarAuthzLayer::new(config));
+            // Admin endpoints - even higher limits or no limiting
+            .route("/admin/settings", get(admin_handler)
+                .layer(RateLimitLayer::new(1000, Duration::from_secs(60))))
+    })
+    .build_routes();
 
-let app = Router::new()
-    .merge(public_routes)
-    .merge(auth_routes)
-    .merge(admin_routes);
+ServiceBuilder::new()
+    .with_routes(routes)
+    .build()
+    .serve()
+    .await?;
 ```
+
+**Tip:** For simpler per-user/per-client limits, use configuration-based approach (see Quick Start) rather than per-endpoint layers.
 
 ### Redis Key Structure
 
@@ -498,20 +504,30 @@ ServiceBuilder::new()
 ### Endpoint-Specific Overrides
 
 ```rust
-// Most endpoints: 100 req/min
-let default_routes = Router::new()
-    .route("/api/v1/users", get(list_users))
-    .route("/api/v1/documents", get(list_documents))
-    .layer(RateLimitLayer::new(100, Duration::from_secs(60)));
+use acton_service::prelude::*;
+use acton_service::middleware::RateLimitLayer;
 
-// Expensive endpoint: 10 req/min
-let expensive_routes = Router::new()
-    .route("/api/v1/reports/generate", post(generate_report))
-    .layer(RateLimitLayer::new(10, Duration::from_secs(60)));
+let routes = VersionedApiBuilder::new()
+    .with_base_path("/api")
+    .add_version(ApiVersion::V1, |router| {
+        router
+            // Most endpoints: 100 req/min
+            .route("/users", get(list_users)
+                .layer(RateLimitLayer::new(100, Duration::from_secs(60))))
+            .route("/documents", get(list_documents)
+                .layer(RateLimitLayer::new(100, Duration::from_secs(60))))
 
-let app = Router::new()
-    .merge(default_routes)
-    .merge(expensive_routes);
+            // Expensive endpoint: 10 req/min
+            .route("/reports/generate", post(generate_report)
+                .layer(RateLimitLayer::new(10, Duration::from_secs(60))))
+    })
+    .build_routes();
+
+ServiceBuilder::new()
+    .with_routes(routes)
+    .build()
+    .serve()
+    .await?;
 ```
 
 ## Troubleshooting
