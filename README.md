@@ -223,7 +223,7 @@ Available middleware (all HTTP and gRPC compatible):
   - Optional Redis caching for sub-5ms policy decisions
   - HTTP and gRPC support with customizable path normalization
 - Claims structure with roles, permissions, user/client identification
-- Token revocation ready (Redis integration)
+- Redis-backed token revocation (optional)
 
 **Resilience & Reliability**
 - **Circuit Breaker** - Configurable failure rate monitoring with auto-recovery
