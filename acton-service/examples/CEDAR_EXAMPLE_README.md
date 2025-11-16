@@ -196,7 +196,7 @@ Any authenticated user can list documents.
 ```cedar
 permit(
     principal,
-    action in [Action::"GET /api/v1/documents/:user_id/:doc_id", ...],
+    action in [Action::"GET /api/v1/documents/{user_id}/{doc_id}", ...],
     resource
 )
 when { principal.sub == resource.owner_id };
@@ -241,7 +241,7 @@ For each request, Cedar evaluates:
 
 **Action**: What operation is being performed?
 - Extracted from HTTP method + path
-- Format: `Action::"GET /api/v1/documents/:user_id/:doc_id"`
+- Format: `Action::"GET /api/v1/documents/{user_id}/{doc_id}"`
 
 **Resource**: What is being accessed?
 - Extracted from path parameters or request body
