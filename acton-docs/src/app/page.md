@@ -168,4 +168,4 @@ See the [Installation Guide](/docs/installation) for detailed setup instructions
 - [Quickstart Guide](/docs/quickstart) - Get a service running in 5 minutes
 - [Installation](/docs/installation) - Detailed installation and setup instructions
 - [Framework Comparison](/docs/comparison) - How acton-service compares to Axum, Actix-Web, Rocket, and others
-- [Examples](https://github.com/govcraft/acton-service/tree/main/acton-service/examples) - Complete working examples for common patterns
+- [Examples]({% $github.repositoryUrl %}/tree/main/acton-service/examples) - Complete working examples for common patterns

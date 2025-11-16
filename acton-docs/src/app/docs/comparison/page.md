@@ -440,4 +440,4 @@ Answer these questions:
 - [Quickstart Guide](/docs/quickstart) - Get started with acton-service
 - [Tutorial](/docs/tutorial) - Build your first service
 - [Feature Flags](/docs/features) - Understand features
-- [Examples](https://github.com/govcraft/acton-service/tree/main/acton-service/examples) - Working code examples
+- [Examples]({% $github.repositoryUrl %}/tree/main/acton-service/examples) - Working code examples
