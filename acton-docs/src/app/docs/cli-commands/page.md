@@ -6,6 +6,13 @@ nextjs:
     description: Complete reference for all Acton CLI commands with examples and options
 ---
 
+{% callout type="note" title="New to acton-service?" %}
+Start with the [homepage](/) to understand what acton-service is, then explore [Core Concepts](/docs/concepts) for foundational explanations. See the [Glossary](/docs/glossary) for technical term definitions.
+{% /callout %}
+
+---
+
+
 Complete reference for all commands available in the Acton CLI tool.
 
 ## Service Commands

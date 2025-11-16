@@ -6,6 +6,13 @@ nextjs:
     description: PostgreSQL integration with SQLx, connection pooling, health checks, and automatic dependency monitoring for production services
 ---
 
+{% callout type="note" title="New to acton-service?" %}
+Start with the [homepage](/) to understand what acton-service is, then explore [Core Concepts](/docs/concepts) for foundational explanations. See the [Glossary](/docs/glossary) for technical term definitions.
+{% /callout %}
+
+---
+
+
 Integrate PostgreSQL databases with compile-time checked queries, automatic connection pooling, and built-in health monitoring.
 
 ## Overview

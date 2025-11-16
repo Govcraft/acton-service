@@ -6,6 +6,13 @@ nextjs:
     description: Run HTTP REST APIs and gRPC services on the same port with automatic protocol detection
 ---
 
+{% callout type="note" title="New to acton-service?" %}
+Start with the [homepage](/) to understand what acton-service is, then explore [Core Concepts](/docs/concepts) for foundational explanations. See the [Glossary](/docs/glossary) for technical term definitions.
+{% /callout %}
+
+---
+
+
 # HTTP + gRPC Support
 
 Acton Service supports running HTTP REST APIs and gRPC services simultaneously, either on a single port with automatic protocol detection or on separate ports for isolated traffic management. This dual-protocol capability enables you to serve different client types from the same service deployment.

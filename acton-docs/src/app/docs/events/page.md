@@ -6,6 +6,13 @@ nextjs:
     description: NATS JetStream integration for event-driven microservices with pub/sub patterns, stream processing, and automatic connection management
 ---
 
+{% callout type="note" title="New to acton-service?" %}
+Start with the [homepage](/) to understand what acton-service is, then explore [Core Concepts](/docs/concepts) for foundational explanations. See the [Glossary](/docs/glossary) for technical term definitions.
+{% /callout %}
+
+---
+
+
 Build event-driven microservices with NATS JetStream for reliable message delivery, stream processing, and service decoupling.
 
 ---

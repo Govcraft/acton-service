@@ -6,6 +6,13 @@ nextjs:
     description: Secure your services with industry-standard JWT authentication supporting multiple signing algorithms and optional token revocation.
 ---
 
+{% callout type="note" title="New to acton-service?" %}
+Start with the [homepage](/) to understand what acton-service is, then explore [Core Concepts](/docs/concepts) for foundational explanations. See the [Glossary](/docs/glossary) for technical term definitions.
+{% /callout %}
+
+---
+
+
 acton-service provides production-ready JWT authentication middleware with comprehensive algorithm support and optional Redis-backed token revocation.
 
 ## Quick Start

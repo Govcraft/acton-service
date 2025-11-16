@@ -6,6 +6,13 @@ nextjs:
     description: Build fault-tolerant microservices with circuit breakers, retry logic, and bulkhead patterns to prevent cascading failures and overload.
 ---
 
+{% callout type="note" title="New to acton-service?" %}
+Start with the [homepage](/) to understand what acton-service is, then explore [Core Concepts](/docs/concepts) for foundational explanations. See the [Glossary](/docs/glossary) for technical term definitions.
+{% /callout %}
+
+---
+
+
 acton-service provides production-ready resilience patterns to protect your services from cascading failures, transient errors, and resource exhaustion.
 
 ## Quick Start
@@ -35,24 +42,60 @@ Circuit breakers prevent cascading failures by detecting unhealthy dependencies 
 
 ### How Circuit Breakers Work
 
-Circuit breakers operate in three states:
+Circuit breakers **automatically** monitor your service health and transition between states at runtime based on observed failures. You configure the thresholds and behavior, but state transitions happen automatically - no code changes or redeployment required.
 
 **Closed (Normal Operation)**
 - Requests pass through to downstream service
 - Failures are counted and monitored
-- Transitions to Open if failure rate exceeds threshold
+- **Automatically** transitions to Open if failure rate exceeds configured threshold
 
 **Open (Failing Fast)**
 - Requests fail immediately without calling downstream
 - No load on failing service (allows recovery)
-- Periodically transitions to Half-Open to test recovery
+- **Automatically** transitions to Half-Open after configured wait duration
 
 **Half-Open (Testing Recovery)**
 - Limited requests pass through to test service health
-- Success → return to Closed state
-- Failure → return to Open state
+- **Automatically** returns to Closed if test requests succeed
+- **Automatically** returns to Open if test requests fail
+
+**What You Configure:**
+- When to open (failure threshold, minimum requests)
+- How long to stay open (wait duration)
+- How to test recovery (half-open request count)
+
+**What Happens Automatically:**
+- State transitions based on observed failures
+- Failure rate calculation
+- Recovery testing
 
 ### Configuration
+
+Circuit breaker parameters can be configured **declaratively** via config files or environment variables (no recompilation needed), or programmatically in code.
+
+**Option 1: Config File (Recommended for Production)**
+
+```toml
+# config.toml
+[middleware.resilience]
+circuit_breaker_enabled = true
+circuit_breaker_threshold = 0.5      # Open at 50% failure rate
+circuit_breaker_min_requests = 10    # Min requests before evaluation
+circuit_breaker_wait_secs = 60       # How long to stay open
+```
+
+Configuration changes require service restart but not recompilation or redeployment.
+
+**Option 2: Environment Variables**
+
+```bash
+ACTON_MIDDLEWARE_RESILIENCE_CIRCUIT_BREAKER_ENABLED=true
+ACTON_MIDDLEWARE_RESILIENCE_CIRCUIT_BREAKER_THRESHOLD=0.5
+ACTON_MIDDLEWARE_RESILIENCE_CIRCUIT_BREAKER_MIN_REQUESTS=10
+ACTON_MIDDLEWARE_RESILIENCE_CIRCUIT_BREAKER_WAIT_SECS=60
+```
+
+**Option 3: Programmatic (Code)**
 
 ```rust
 use acton_service::middleware::ResilienceConfig;

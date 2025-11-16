@@ -6,6 +6,13 @@ nextjs:
     description: Complete code examples demonstrating acton-service features and patterns
 ---
 
+{% callout type="note" title="New to acton-service?" %}
+Start with the [homepage](/) to understand what acton-service is, then explore [Core Concepts](/docs/concepts) for foundational explanations. See the [Glossary](/docs/glossary) for technical term definitions.
+{% /callout %}
+
+---
+
+
 Browse complete, runnable examples showing how to build different types of services with acton-service.
 
 ## Minimal HTTP Service

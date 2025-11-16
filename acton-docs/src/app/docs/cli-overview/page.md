@@ -6,6 +6,13 @@ nextjs:
     description: Production-ready CLI tool for scaffolding and managing acton-service microservices
 ---
 
+{% callout type="note" title="New to acton-service?" %}
+Start with the [homepage](/) to understand what acton-service is, then explore [Core Concepts](/docs/concepts) for foundational explanations. See the [Glossary](/docs/glossary) for technical term definitions.
+{% /callout %}
+
+---
+
+
 The Acton CLI is a powerful command-line tool that scaffolds production-ready microservices built with the acton-service framework.
 
 ## What is the Acton CLI?

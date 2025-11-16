@@ -6,6 +6,13 @@ nextjs:
     description: Kubernetes-ready liveness and readiness probes with dependency monitoring
 ---
 
+{% callout type="note" title="New to acton-service?" %}
+Start with the [homepage](/) to understand what acton-service is, then explore [Core Concepts](/docs/concepts) for foundational explanations. See the [Glossary](/docs/glossary) for technical term definitions.
+{% /callout %}
+
+---
+
+
 Health checks are essential for production microservices, enabling orchestrators like Kubernetes to monitor service health and make informed decisions about traffic routing and container lifecycle management. acton-service includes automatic health and readiness endpoints that follow Kubernetes best practices out of the box.
 
 ---

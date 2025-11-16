@@ -6,6 +6,13 @@ nextjs:
     description: Redis integration with Deadpool connection pooling, health checks, distributed caching, and rate limiting for production services
 ---
 
+{% callout type="note" title="New to acton-service?" %}
+Start with the [homepage](/) to understand what acton-service is, then explore [Core Concepts](/docs/concepts) for foundational explanations. See the [Glossary](/docs/glossary) for technical term definitions.
+{% /callout %}
+
+---
+
+
 Integrate Redis for distributed caching, session storage, and rate limiting with automatic connection pooling and health monitoring.
 
 ---

@@ -6,6 +6,13 @@ nextjs:
     description: Production-ready middleware stack for HTTP and gRPC services with comprehensive authentication, authorization, resilience, and observability features.
 ---
 
+{% callout type="note" title="New to acton-service?" %}
+Start with the [homepage](/) to understand what acton-service is, then explore [Core Concepts](/docs/concepts) for foundational explanations. See the [Glossary](/docs/glossary) for technical term definitions.
+{% /callout %}
+
+---
+
+
 acton-service provides a batteries-included middleware stack designed for production microservices. All middleware works seamlessly with both HTTP and gRPC protocols.
 
 ## Quick Example

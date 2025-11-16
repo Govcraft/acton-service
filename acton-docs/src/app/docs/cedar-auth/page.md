@@ -6,6 +6,13 @@ nextjs:
     description: Implement fine-grained authorization with AWS Cedar policies for resource-based, role-based, and attribute-based access control.
 ---
 
+{% callout type="note" title="New to acton-service?" %}
+Start with the [homepage](/) to understand what acton-service is, then explore [Core Concepts](/docs/concepts) for foundational explanations. See the [Glossary](/docs/glossary) for technical term definitions.
+{% /callout %}
+
+---
+
+
 acton-service integrates AWS Cedar for declarative, policy-based authorization. Define who can do what with which resources using human-readable policy files.
 
 ## What You'll Learn
