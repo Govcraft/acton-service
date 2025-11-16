@@ -5,6 +5,7 @@ import { Highlight } from 'prism-react-renderer'
 
 import { Button } from '@/components/Button'
 import { HeroBackground } from '@/components/HeroBackground'
+import { siteConfig } from '@/lib/config'
 import blurCyanImage from '@/images/blur-cyan.png'
 import blurIndigoImage from '@/images/blur-indigo.png'
 
@@ -69,7 +70,7 @@ export function Hero() {
               </p>
               <div className="mt-8 flex gap-4 md:justify-center lg:justify-start">
                 <Button href="/docs/quickstart">Get started</Button>
-                <Button href="https://github.com/govcraft/acton-service" variant="secondary">
+                <Button href={siteConfig.repositoryUrl} variant="secondary">
                   View on GitHub
                 </Button>
               </div>

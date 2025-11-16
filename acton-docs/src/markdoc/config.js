@@ -1,5 +1,6 @@
 import nodes from './nodes.js'
 import tags from './tags.js'
+import { siteConfig } from '../lib/config.js'
 
 // Extract version from workspace Cargo.toml
 // This should be kept in sync with the workspace version
@@ -28,6 +29,10 @@ const config = {
   variables: {
     version: {
       acton: ACTON_VERSION,
+    },
+    github: {
+      repositoryUrl: siteConfig.repositoryUrl,
+      repositoryName: siteConfig.repositoryName,
     },
     dep: {
       http: `acton-service = { version = "${ACTON_VERSION}", features = ["http", "observability"] }`,
