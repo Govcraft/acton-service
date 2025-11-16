@@ -25,6 +25,7 @@ release/
 !TROUBLESHOOTING.md
 !COMPARISON.md
 !acton-docs/
+!acton-docs/**/*.md
 # Add more exceptions here as needed, for example:
 # !CONTRIBUTING.md
 # !LICENSE.md
