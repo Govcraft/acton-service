@@ -40,8 +40,18 @@
 //! ```
 
 use crate::config::Config;
+use crate::middleware::{request_id_layer, request_id_propagation_layer, sensitive_headers_layer};
 use crate::state::AppState;
 use axum::Router;
+use std::time::Duration;
+use tower_http::{
+    catch_panic::CatchPanicLayer,
+    compression::CompressionLayer,
+    cors::CorsLayer,
+    limit::RequestBodyLimitLayer,
+    timeout::TimeoutLayer,
+    trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer},
+};
 
 /// Opaque wrapper around versioned routes with batteries-included health/readiness
 ///
@@ -214,7 +224,7 @@ impl ServiceBuilder {
         let state = self.state.unwrap_or_else(|| AppState::new(config.clone()));
 
         // Handle both types of versioned routes
-        let mut app = match routes {
+        let app = match routes {
             VersionedRoutes::WithState(router) => {
                 // Health routes already added, just attach state
                 router.with_state(state)
@@ -232,9 +242,13 @@ impl ServiceBuilder {
             }
         };
 
+        // Apply general middleware stack (CORS, compression, timeout, TraceLayer, etc.)
+        // Layers are applied in reverse order (bottom layer is innermost/first)
+        let mut app = Self::apply_middleware(app, &config);
+
         // Auto-apply Cedar middleware if configured and enabled
         // NOTE: Cedar must be applied BEFORE JWT because Axum layers run in reverse order
-        // This ensures the execution order is: Request → JWT → Cedar → Handler
+        // This ensures the execution order is: Request → General Middleware → JWT → Cedar → Handler
         #[cfg(feature = "cedar-authz")]
         if let Some(ref cedar_config) = config.cedar {
             if cedar_config.enabled {
@@ -267,7 +281,7 @@ impl ServiceBuilder {
 
         // Auto-apply JWT middleware if configured
         // NOTE: JWT must be applied AFTER Cedar because Axum layers run in reverse order
-        // This ensures the execution order is: Request → JWT → Cedar → Handler
+        // This ensures the execution order is: Request → General Middleware → JWT → Cedar → Handler
         if let Ok(jwt_auth) = crate::middleware::jwt::JwtAuth::new(&config.jwt) {
             tracing::debug!("Auto-applying JWT authentication middleware");
             app = app.layer(axum::middleware::from_fn_with_state(
@@ -287,6 +301,63 @@ impl ServiceBuilder {
             #[cfg(feature = "grpc")]
             grpc_routes: self.grpc_services,
         }
+    }
+
+    /// Apply middleware stack based on configuration
+    ///
+    /// Applies middleware in the correct order to ensure proper request handling
+    fn apply_middleware(app: Router, config: &Config) -> Router {
+        let body_limit = config.middleware.body_limit_mb * 1024 * 1024;
+
+        let mut app = app;
+
+        // CORS (outermost layer) - configurable
+        let cors_layer = match config.middleware.cors_mode.as_str() {
+            "permissive" => CorsLayer::permissive(),
+            "restrictive" => CorsLayer::new(),
+            "disabled" => CorsLayer::new(),
+            _ => {
+                tracing::warn!("Unknown CORS mode: {}, defaulting to permissive", config.middleware.cors_mode);
+                CorsLayer::permissive()
+            }
+        };
+        app = app.layer(cors_layer);
+
+        // Compression - configurable
+        if config.middleware.compression {
+            app = app.layer(CompressionLayer::new());
+        }
+
+        // Request timeout
+        app = app.layer(TimeoutLayer::new(Duration::from_secs(config.service.timeout_secs)));
+
+        // Request body size limit - configurable
+        app = app.layer(RequestBodyLimitLayer::new(body_limit));
+
+        // Tracing (HTTP request/response logging) - always enabled
+        app = app.layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().include_headers(true))
+                .on_response(DefaultOnResponse::new().include_headers(true)),
+        );
+
+        // Request tracking layers - based on config
+        if config.middleware.request_tracking.mask_sensitive_headers {
+            app = app.layer(sensitive_headers_layer());
+        }
+        if config.middleware.request_tracking.propagate_headers {
+            app = app.layer(request_id_propagation_layer());
+        }
+        if config.middleware.request_tracking.request_id_enabled {
+            app = app.layer(request_id_layer());
+        }
+
+        // Panic recovery (innermost layer) - configurable
+        if config.middleware.catch_panic {
+            app = app.layer(CatchPanicLayer::new());
+        }
+
+        app
     }
 }
 

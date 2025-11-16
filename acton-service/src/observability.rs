@@ -61,10 +61,13 @@ pub fn init_tracing(config: &Config) -> Result<()> {
     global::set_text_map_propagator(TraceContextPropagator::new());
 
     // Build subscriber with JSON formatting
+    // Respect RUST_LOG environment variable if set, otherwise use config
     let fmt_layer = tracing_subscriber::fmt::layer()
         .json()
         .with_filter(
-            EnvFilter::try_new(&log_level).unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_default_env()
+                .or_else(|_| EnvFilter::try_new(&log_level))
+                .unwrap_or_else(|_| EnvFilter::new("info")),
         );
 
     // Try to initialize OpenTelemetry if configured
