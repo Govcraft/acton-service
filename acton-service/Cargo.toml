@@ -92,6 +92,8 @@ tonic-reflection = { version = "0.14.2", optional = true }
 once_cell = "1.21.3"
 tower-resilience-circuitbreaker = { workspace = true, optional = true }
 tower-resilience-bulkhead = { workspace = true, optional = true }
+cedar-policy = { version = "4.7.0", default-features = false, features = ["datetime", "ipaddr"], optional = true }
+regex = "1.12.2"
 
 [features]
 default = ["http", "observability"]
@@ -105,11 +107,13 @@ resilience = ["dep:tower-resilience", "dep:tower-resilience-circuitbreaker", "de
 otel-metrics = ["dep:tower-otel-http-metrics", "observability"]
 governor = ["dep:tower_governor"]
 openapi = ["dep:utoipa", "dep:utoipa-swagger-ui"]
-full = ["http", "grpc", "database", "cache", "events", "observability", "resilience", "otel-metrics", "governor", "openapi"]
+cedar-authz = ["dep:cedar-policy", "cache"]
+full = ["http", "grpc", "database", "cache", "events", "observability", "resilience", "otel-metrics", "governor", "openapi", "cedar-authz"]
 tonic-health = ["dep:tonic-health"]
 tonic-reflection = ["dep:tonic-reflection"]
 tower-resilience-circuitbreaker = ["dep:tower-resilience-circuitbreaker"]
 tower-resilience-bulkhead = ["dep:tower-resilience-bulkhead"]
+cedar-policy = ["dep:cedar-policy"]
 
 [[example]]
 name = "simple-api"
@@ -130,6 +134,11 @@ required-features = ["grpc"]
 name = "test-metrics"
 path = "examples/test-metrics.rs"
 required-features = ["otel-metrics"]
+
+[[example]]
+name = "cedar-authz"
+path = "examples/cedar-authz.rs"
+required-features = ["cedar-authz", "cache"]
 
 [build-dependencies]
 prost-build = "0.14.1"

@@ -1,0 +1,73 @@
+# Example Configuration for Cedar Authorization
+#
+# Copy this file to one of these locations:
+# 1. ~/.config/acton-service/cedar-authz-example/config.toml (recommended)
+# 2. ./config.toml (current directory)
+# 3. /etc/acton-service/cedar-authz-example/config.toml (system-wide)
+
+[service]
+name = "cedar-authz-example"
+port = 8080
+host = "127.0.0.1"
+
+[jwt]
+# Path to your JWT public key (RS256/ES256) or secret (HS256)
+# Note: Figment doesn't expand ~ so use absolute path or relative path
+public_key_path = ".config/acton-service/cedar-authz-example/jwt-public.pem"
+algorithm = "RS256"
+# Optional: Validate issuer
+# issuer = "https://your-auth-provider.com"
+# Optional: Validate audience
+# audience = "your-api-audience"
+
+[cedar]
+# Enable Cedar authorization (set to false to disable)
+enabled = true
+
+# Path to Cedar policy file
+policy_path = "~/.config/acton-service/cedar-authz-example/policies.cedar"
+
+# Enable hot-reload of policy file (watches for changes)
+hot_reload = false
+
+# Hot-reload check interval in seconds
+hot_reload_interval_secs = 60
+
+# Enable policy decision caching (requires cache feature and Redis)
+cache_enabled = true
+
+# Policy cache TTL in seconds
+cache_ttl_secs = 300
+
+# Fail open on policy evaluation errors
+# - true: Allow requests when policy evaluation fails (permissive, for development)
+# - false: Deny requests when policy evaluation fails (strict, for production)
+fail_open = false
+
+# Redis configuration (required if cache_enabled = true)
+[redis]
+url = "redis://localhost:6379"
+pool_size = 10
+connection_timeout_secs = 5
+
+# Rate limiting (optional)
+[rate_limit]
+enabled = false
+requests_per_second = 100
+burst_size = 200
+
+# OpenTelemetry (optional)
+[otlp]
+enabled = false
+# endpoint = "http://localhost:4317"
+
+# Middleware configuration
+[middleware]
+# Request timeout in seconds
+timeout_secs = 30
+
+# Enable CORS
+cors_enabled = true
+
+# CORS allowed origins (empty = allow all, not recommended for production)
+cors_allowed_origins = ["http://localhost:3000"]
