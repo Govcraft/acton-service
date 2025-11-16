@@ -11,6 +11,7 @@ export const navigation = [
   {
     title: 'Core Concepts',
     links: [
+      { title: 'Concepts', href: '/docs/concepts' },
       { title: 'API Versioning', href: '/docs/api-versioning' },
       { title: 'HTTP + gRPC Support', href: '/docs/dual-protocol' },
       { title: 'Health Checks', href: '/docs/health-checks' },
@@ -58,6 +59,7 @@ export const navigation = [
     links: [
       { title: 'Examples', href: '/docs/examples' },
       { title: 'Feature Flags', href: '/docs/feature-flags' },
+      { title: 'Glossary', href: '/docs/glossary' },
       { title: 'Troubleshooting', href: '/docs/troubleshooting' },
       { title: 'FAQ', href: '/docs/faq' },
     ],

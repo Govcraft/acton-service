@@ -6,6 +6,13 @@ nextjs:
     description: Create production-ready microservices with the Acton CLI scaffolding tool
 ---
 
+{% callout type="note" title="New to acton-service?" %}
+Start with the [homepage](/) to understand what acton-service is, then explore [Core Concepts](/docs/concepts) for foundational explanations. See the [Glossary](/docs/glossary) for technical term definitions.
+{% /callout %}
+
+---
+
+
 Use the Acton CLI to scaffold complete, production-ready microservices with all the features you need.
 
 ## Creating a New Service

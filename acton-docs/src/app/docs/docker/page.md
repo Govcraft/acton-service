@@ -6,6 +6,13 @@ nextjs:
     description: Build production-ready Docker images for acton-service applications with multi-stage builds and best practices.
 ---
 
+{% callout type="note" title="New to acton-service?" %}
+Start with the [homepage](/) to understand what acton-service is, then explore [Core Concepts](/docs/concepts) for foundational explanations. See the [Glossary](/docs/glossary) for technical term definitions.
+{% /callout %}
+
+---
+
+
 Deploy acton-service applications using Docker with optimized multi-stage builds for minimal image sizes and maximum security.
 
 ## Multi-Stage Dockerfile

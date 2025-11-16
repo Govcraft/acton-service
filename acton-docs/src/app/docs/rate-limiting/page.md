@@ -6,6 +6,13 @@ nextjs:
     description: Protect your services from abuse and overload with distributed Redis-backed or local Governor rate limiting, supporting per-user and per-client limits.
 ---
 
+{% callout type="note" title="New to acton-service?" %}
+Start with the [homepage](/) to understand what acton-service is, then explore [Core Concepts](/docs/concepts) for foundational explanations. See the [Glossary](/docs/glossary) for technical term definitions.
+{% /callout %}
+
+---
+
+
 acton-service provides two rate limiting implementations: Redis-backed for distributed systems and Governor for single-instance deployments. Both support per-user and per-client limits via JWT claims.
 
 ## Quick Start

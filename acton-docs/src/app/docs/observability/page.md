@@ -6,6 +6,13 @@ nextjs:
     description: OpenTelemetry tracing, metrics, and structured logging built-in
 ---
 
+{% callout type="note" title="New to acton-service?" %}
+Start with the [homepage](/) to understand what acton-service is, then explore [Core Concepts](/docs/concepts) for foundational explanations. See the [Glossary](/docs/glossary) for technical term definitions.
+{% /callout %}
+
+---
+
+
 # Observability
 
 acton-service includes a complete, production-ready observability stack built on OpenTelemetry standards. The three pillars of observability—distributed tracing, metrics collection, and structured logging—are configured out of the box with zero configuration required. Every request is automatically tracked, traced, and logged with correlation IDs for end-to-end visibility across your distributed services.
