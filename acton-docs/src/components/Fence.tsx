@@ -5,15 +5,15 @@ import { Highlight } from 'prism-react-renderer'
 
 export function Fence({
   children,
-  language,
+  language = 'rust',
 }: {
   children: string
-  language: string
+  language?: string
 }) {
   return (
     <Highlight
       code={children.trimEnd()}
-      language={language}
+      language={language || 'rust'}
       theme={{ plain: {}, styles: [] }}
     >
       {({ className, style, tokens, getTokenProps }) => (
