@@ -92,6 +92,12 @@ impl CedarAuthz {
             return Ok(next.run(request).await);
         }
 
+        // Skip authorization for health and readiness endpoints
+        let path = request.uri().path();
+        if path == "/health" || path == "/ready" {
+            return Ok(next.run(request).await);
+        }
+
         // Extract JWT claims (inserted by JWT middleware)
         let claims = request
             .extensions()
