@@ -126,15 +126,93 @@ async fn list_users() -> Json<Vec<User>> {
     ])
 }
 
+/// Setup function to copy example files to config directory
+fn setup_example_files() -> Result<()> {
+    use std::path::Path;
+
+    println!("🔧 Setting up example files...");
+
+    // Get the config directory
+    let config_dir = Path::new(&std::env::var("HOME").unwrap())
+        .join(".config/acton-service/cedar-authz-example");
+
+    // Create config directory if it doesn't exist
+    std::fs::create_dir_all(&config_dir)?;
+
+    // Copy policy file (idempotent)
+    let policy_dest = config_dir.join("policies.cedar");
+    if !policy_dest.exists() {
+        let policy_src = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples/policies.cedar");
+        std::fs::copy(&policy_src, &policy_dest)?;
+        println!("   ✓ Copied policies.cedar to {:?}", policy_dest);
+    } else {
+        println!("   ✓ policies.cedar already exists");
+    }
+
+    // Copy JWT public key (idempotent)
+    let jwt_dest = config_dir.join("jwt-public.pem");
+    if !jwt_dest.exists() {
+        let jwt_src = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples/jwt-public.pem");
+        std::fs::copy(&jwt_src, &jwt_dest)?;
+        println!("   ✓ Copied jwt-public.pem to {:?}", jwt_dest);
+    } else {
+        println!("   ✓ jwt-public.pem already exists");
+    }
+
+    // Create config file with absolute paths (idempotent)
+    let config_dest = config_dir.join("config.toml");
+    if !config_dest.exists() {
+        let config_content = format!(r#"[service]
+name = "cedar-authz-example"
+port = 8080
+host = "127.0.0.1"
+
+[jwt]
+public_key_path = "{}/jwt-public.pem"
+algorithm = "RS256"
+
+[cedar]
+enabled = true
+policy_path = "{}/policies.cedar"
+hot_reload = false
+hot_reload_interval_secs = 60
+cache_enabled = false
+cache_ttl_secs = 300
+fail_open = false
+
+[rate_limit]
+enabled = false
+
+[middleware]
+timeout_secs = 30
+cors_enabled = true
+cors_allowed_origins = ["http://localhost:3000"]
+"#, config_dir.display(), config_dir.display());
+
+        std::fs::write(&config_dest, config_content)?;
+        println!("   ✓ Created config.toml at {:?}", config_dest);
+    } else {
+        println!("   ✓ config.toml already exists");
+    }
+
+    println!();
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Setup example files first
+    setup_example_files()?;
+
     println!("🚀 Cedar Authorization Example");
     println!("================================");
     println!();
-    println!("Prerequisites:");
-    println!("1. Cedar policy file: ~/.config/acton-service/cedar-authz-example/policies.cedar");
-    println!("2. JWT public key: ~/.config/acton-service/cedar-authz-example/jwt-public.pem");
-    println!("3. Redis running on localhost:6379 (optional, for caching)");
+    println!("Example files copied to: ~/.config/acton-service/cedar-authz-example/");
+    println!();
+    println!("Note: Redis is optional but recommended for caching.");
+    println!("      Start with: docker run -d -p 6379:6379 redis");
     println!();
     println!("Example policy file content:");
     println!("---");
