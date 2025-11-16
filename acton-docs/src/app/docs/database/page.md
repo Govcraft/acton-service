@@ -101,34 +101,178 @@ async fn main() -> Result<()> {
 
 ## Compile-Time Query Verification
 
-SQLx provides compile-time checked queries using the `query!` and `query_as!` macros:
+{% callout type="note" title="SQLx's Killer Feature" %}
+SQLx can verify your SQL queries against your actual database schema **during compilation**, catching SQL errors before runtime. This requires additional setup but is highly recommended for production services.
+{% /callout %}
 
+### How It Works
+
+When you use `query!` or `query_as!` macros, SQLx connects to your database during `cargo build` and:
+1. Parses your SQL query
+2. Executes `DESCRIBE` to get column types from your schema
+3. Generates type-safe Rust code matching your database schema
+4. Catches mismatches (wrong table name, missing column, type errors) at compile time
+
+**Example compile-time error:**
 ```rust
-// Compile-time verified query - type mismatches caught at build time
-async fn get_user_by_id(
-    State(state): State<AppState>,
-    Path(user_id): Path<i64>,
-) -> Result<Json<User>> {
-    let db = state.db().await.ok_or_else(|| Error::Internal("Database unavailable".to_string()))?;
-
-    let user = sqlx::query_as!(
-        User,
-        "SELECT id, name, email FROM users WHERE id = $1",
-        user_id
-    )
-    .fetch_one(db)
-    .await?;
-
-    Ok(Json(user))
-}
+sqlx::query_as!(User, "SELECT id, nmae FROM users")
+//                              ^^^^ typo caught at compile time!
+// error: no such column: nmae
 ```
 
-To enable compile-time verification, set the `DATABASE_URL` environment variable:
+### Setup for Local Development
+
+**Step 1: Ensure PostgreSQL is running**
+```bash
+# macOS (Homebrew)
+brew services start postgresql@16
+
+# Linux (systemd)
+sudo systemctl start postgresql
+
+# Docker
+docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16
+```
+
+**Step 2: Create your development database**
+```bash
+createdb myapp_dev
+
+# Or with psql
+psql -U postgres -c "CREATE DATABASE myapp_dev;"
+```
+
+**Step 3: Set DATABASE_URL environment variable**
 
 ```bash
-export DATABASE_URL=postgres://localhost/mydb
+# Add to ~/.bashrc or ~/.zshrc for permanent effect
+export DATABASE_URL="postgres://username:password@localhost/myapp_dev"
+
+# Or use .env file (requires dotenv)
+echo "DATABASE_URL=postgres://localhost/myapp_dev" > .env
+```
+
+**Step 4: Run migrations (if using)**
+
+```bash
+sqlx migrate run
+```
+
+**Step 5: Build with compile-time verification**
+
+```bash
+cargo build
+# SQLx connects to DATABASE_URL and verifies all queries
+```
+
+### Offline Mode (For CI/CD)
+
+For environments without database access (CI runners, laptops without PostgreSQL), use **offline mode**:
+
+**Step 1: Prepare offline data (requires database connection)**
+
+```bash
+# Connect to dev database and generate offline metadata
+cargo sqlx prepare
+
+# Creates sqlx-data.json with query metadata
+# Commit this file to version control
+```
+
+**Step 2: Build without database**
+
+```bash
+# Set offline mode
+export SQLX_OFFLINE=true
+
+# Build succeeds without DATABASE_URL
 cargo build
 ```
+
+**Step 3: Keep offline data up-to-date**
+
+Regenerate `sqlx-data.json` whenever queries or schema change:
+
+```bash
+# After modifying queries or running migrations
+cargo sqlx prepare
+
+# Commit the updated file
+git add sqlx-data.json
+git commit -m "chore: update SQLx offline data"
+```
+
+### CI/CD Configuration
+
+**GitHub Actions:**
+```yaml
+- name: Build with SQLx offline mode
+  env:
+    SQLX_OFFLINE: true
+  run: cargo build --release
+```
+
+**GitLab CI:**
+```yaml
+build:
+  script:
+    - export SQLX_OFFLINE=true
+    - cargo build --release
+```
+
+### When Compile-Time Verification Fails
+
+**Problem:** Build fails because DATABASE_URL is unavailable or points to wrong database.
+
+**Solutions:**
+
+1. **Use offline mode** (recommended for CI/CD)
+   ```bash
+   export SQLX_OFFLINE=true
+   cargo build
+   ```
+
+2. **Point to development database**
+   ```bash
+   export DATABASE_URL="postgres://localhost/dev_db"
+   cargo build
+   ```
+
+3. **Skip verification temporarily** (NOT recommended)
+   ```rust
+   // Use query() instead of query!() - no compile-time checks
+   sqlx::query("SELECT * FROM users")  // Runtime errors possible!
+   ```
+
+### Dynamic Queries (When NOT to Use Macros)
+
+Compile-time macros require static SQL strings. For dynamic queries, use runtime query builders:
+
+```rust
+// ❌ Won't compile - query must be static string literal
+let table = "users";
+sqlx::query!(format!("SELECT * FROM {}", table))  // ERROR
+
+// ✅ Use runtime query() for dynamic SQL
+let table = "users";
+let query = format!("SELECT id, name FROM {}", table);
+sqlx::query(&query)
+    .fetch_all(&pool)
+    .await?
+```
+
+### Best Practices
+
+**DO:**
+- ✅ Use `query!`/`query_as!` for static queries (99% of cases)
+- ✅ Keep `sqlx-data.json` in version control
+- ✅ Regenerate offline data after schema migrations
+- ✅ Use `SQLX_OFFLINE=true` in CI/CD
+
+**DON'T:**
+- ❌ Skip compile-time checks unless absolutely necessary
+- ❌ Forget to update offline data after migrations
+- ❌ Commit sensitive credentials in DATABASE_URL (use localhost in docs)
 
 ## Health Checks
 

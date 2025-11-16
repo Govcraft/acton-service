@@ -108,6 +108,249 @@ Routes:
 
 ---
 
+## When to Create a New API Version
+
+{% callout type="note" title="Decision Framework" %}
+Version when making **breaking changes** that would cause existing clients to fail or behave incorrectly. Don't version for additive, backward-compatible changes.
+{% /callout %}
+
+### Breaking Changes (Require New Version)
+
+Create a new API version when you:
+
+**1. Remove Fields from Responses**
+```rust
+// V1
+{
+  "id": 123,
+  "name": "Alice",
+  "email": "alice@example.com"  // ← Removing this field = breaking
+}
+
+// V2 (new version required)
+{
+  "id": 123,
+  "name": "Alice"
+}
+```
+
+**2. Change Field Types**
+```rust
+// V1: ID as string
+{"id": "123", "name": "Alice"}
+
+// V2: ID as integer (breaks parsing)
+{"id": 123, "name": "Alice"}
+```
+
+**3. Rename Fields**
+```rust
+// V1
+{"user_id": 123}
+
+// V2 (renamed field = breaking)
+{"id": 123}
+```
+
+**4. Change Field Semantics**
+```rust
+// V1: timestamp in seconds
+{"created_at": 1704063600}
+
+// V2: timestamp in milliseconds (breaks date parsing)
+{"created_at": 1704063600000}
+```
+
+**5. Make Optional Fields Required**
+```rust
+// V1
+POST /users
+{"name": "Alice"}  // email optional
+
+// V2 (now required = breaking)
+POST /users
+{"name": "Alice", "email": "alice@example.com"}  // email required
+```
+
+**6. Change Response Structure**
+```rust
+// V1: flat structure
+{"id": 123, "name": "Alice", "email": "alice@example.com"}
+
+// V2: nested structure (breaks field access)
+{"id": 123, "profile": {"name": "Alice", "email": "alice@example.com"}}
+```
+
+**7. Change URL Patterns**
+```rust
+// V1
+GET /users/{id}
+
+// V2 (different pattern = breaking)
+GET /users/{username}
+```
+
+**8. Change HTTP Status Codes**
+```rust
+// V1: Returns 404 for not found
+GET /users/999 → 404 Not Found
+
+// V2: Returns 200 with null (breaks error handling)
+GET /users/999 → 200 OK {"user": null}
+```
+
+### Non-Breaking Changes (DON'T Version)
+
+These changes are backward-compatible and should be made to existing versions:
+
+**1. Add New Optional Fields to Responses**
+```rust
+// V1: Original
+{"id": 123, "name": "Alice"}
+
+// V1: Enhanced (clients ignore new fields)
+{"id": 123, "name": "Alice", "created_at": "2024-01-01"}  // ✅ Safe
+```
+
+**2. Add New Optional Fields to Requests**
+```rust
+// V1: Original
+POST /users
+{"name": "Alice"}
+
+// V1: Enhanced (server ignores if missing)
+POST /users
+{"name": "Alice", "preferences": {...}}  // ✅ Safe
+```
+
+**3. Add New Endpoints**
+```rust
+// V1: Add new endpoint
+GET /api/v1/users/{id}/settings  // ✅ Safe
+```
+
+**4. Make Required Fields Optional**
+```rust
+// V1: Original (email required)
+POST /users
+{"name": "Alice", "email": "..."}
+
+// V1: Relaxed (email now optional)
+POST /users
+{"name": "Alice"}  // ✅ Safe - more permissive
+```
+
+**5. Add New Error Codes**
+```rust
+// V1: Returns 400 or 500
+POST /users
+
+// V1: Enhanced (new 429 rate limit error)
+POST /users → 429 Too Many Requests  // ✅ Safe - clients already handle errors
+```
+
+**6. Change Internal Implementation**
+```rust
+// V1: Change database, algorithms, caching - anything that doesn't affect API contract
+// ✅ Safe - clients don't see implementation
+```
+
+### Decision Tree
+
+```
+Is this change backward-compatible?
+│
+├─ YES → Update existing version (V1, V2, etc.)
+│         Examples: Add optional field, new endpoint, relax validation
+│
+└─ NO → Breaking change detected
+    │
+    ├─ Are there active clients using current version?
+    │  │
+    │  ├─ YES → Create new version (V2, V3, etc.)
+    │  │         Mark old version as deprecated
+    │  │         Set sunset date (6-12 months)
+    │  │         Communicate migration path
+    │  │
+    │  └─ NO → Can update current version
+    │           (if no one is using it yet)
+```
+
+### Real-World Examples
+
+**Example 1: Adding Search Feature**
+```rust
+// V1: List all users
+GET /api/v1/users
+Response: [...]
+
+// V1: Add optional query parameter (backward-compatible)
+GET /api/v1/users?search=alice
+Response: [...]
+
+// ✅ No new version needed - optional parameter
+```
+
+**Example 2: Changing Date Format**
+```rust
+// V1: Unix timestamp
+{"created_at": 1704063600}
+
+// V2: ISO 8601 string (BREAKING - parsing changes)
+{"created_at": "2024-01-01T00:00:00Z"}
+
+// ✅ New version required
+```
+
+**Example 3: Pagination Addition**
+```rust
+// V1: Returns array
+GET /api/v1/users
+Response: [...]
+
+// V2: Returns paginated object (BREAKING - response structure changed)
+GET /api/v2/users
+Response: {"users": [...], "page": 1, "total": 100}
+
+// ✅ New version required
+```
+
+### Migration Timeline Recommendations
+
+When creating new versions:
+
+**Conservative (Large User Base)**
+- Announce deprecation immediately
+- Support old version for 12 months
+- Send sunset date 6 months in advance
+- Force migration after 12 months
+
+**Moderate (Standard)**
+- Announce deprecation immediately
+- Support old version for 6 months
+- Send sunset date 3 months in advance
+- Force migration after 6 months
+
+**Aggressive (Small/Internal)**
+- Announce deprecation immediately
+- Support old version for 3 months
+- Send sunset date 1 month in advance
+- Force migration after 3 months
+
+### Version Number Strategy
+
+**Semantic Versioning for APIs:**
+- V1, V2, V3 - Major versions only (recommended)
+- Don't use V1.1, V1.2 - confusing for consumers
+- Save minor/patch versions for implementation details
+
+**When to increment:**
+- V1 → V2: Any breaking change
+- V2 → V3: Another breaking change
+- Skip numbers if needed (V1 → V3 is fine if V2 was never released)
+
+---
+
 ## Deprecation Management
 
 ### Marking a Version as Deprecated
