@@ -47,6 +47,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use tracing::warn;
+
+#[cfg(feature = "otel-metrics")]
+use opentelemetry::KeyValue;
 
 /// API version identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -226,47 +230,100 @@ impl VersionedRouter {
 
     /// Convert to a regular Axum router with deprecation middleware applied
     pub fn into_router(self) -> Router {
-        if let Some(deprecation) = self.deprecation {
-            self.router.layer(middleware::from_fn(move |req: Request, next: Next| {
-                let deprecation = deprecation.clone();
-                async move {
-                    let mut response = next.run(req).await;
+        #[cfg(feature = "otel-metrics")]
+        let version = self.version;
+        let deprecation = self.deprecation.clone();
+
+        // Always apply middleware for metrics tracking and optional deprecation headers
+        self.router.layer(middleware::from_fn(move |req: Request, next: Next| {
+            let deprecation = deprecation.clone();
+            #[cfg(feature = "otel-metrics")]
+            let version = version;
+            async move {
+                // If deprecated, log the usage
+                if let Some(ref deprecation_info) = deprecation {
+                    let path = req.uri().path();
+                    if let Some(sunset) = &deprecation_info.sunset_date {
+                        warn!(
+                            path = %path,
+                            deprecated_version = %deprecation_info.version,
+                            replacement_version = %deprecation_info.replacement,
+                            sunset_date = %sunset,
+                            message = deprecation_info.message.as_deref().unwrap_or(""),
+                            "Deprecated API version accessed"
+                        );
+                    } else {
+                        warn!(
+                            path = %path,
+                            deprecated_version = %deprecation_info.version,
+                            replacement_version = %deprecation_info.replacement,
+                            message = deprecation_info.message.as_deref().unwrap_or(""),
+                            "Deprecated API version accessed"
+                        );
+                    }
+                }
+
+                // Record metrics for all API version usage (deprecated or not)
+                #[cfg(feature = "otel-metrics")]
+                if let Some(meter) = crate::observability::get_meter() {
+                    let counter = meter
+                        .u64_counter("api.version.requests")
+                        .with_description("Count of API requests by version")
+                        .build();
+
+                    let mut attributes = vec![
+                        KeyValue::new("version", version.to_string()),
+                        KeyValue::new("deprecated", deprecation.is_some().to_string()),
+                    ];
+
+                    if let Some(ref deprecation_info) = deprecation {
+                        attributes.push(KeyValue::new(
+                            "replacement_version",
+                            deprecation_info.replacement.to_string(),
+                        ));
+                    }
+
+                    counter.add(1, &attributes);
+                }
+
+                let mut response = next.run(req).await;
+
+                // Add deprecation headers if this version is deprecated
+                if let Some(ref deprecation_info) = deprecation {
                     let headers = response.headers_mut();
 
                     // Add Deprecation header (RFC 8594)
-                    if let Ok(value) = HeaderValue::from_str(&deprecation.deprecation_header()) {
+                    if let Ok(value) = HeaderValue::from_str(&deprecation_info.deprecation_header()) {
                         headers.insert("Deprecation", value);
                     }
 
                     // Add Sunset header if configured (RFC 8594)
-                    if let Some(sunset) = deprecation.sunset_header() {
+                    if let Some(sunset) = deprecation_info.sunset_header() {
                         if let Ok(value) = HeaderValue::from_str(&sunset) {
                             headers.insert("Sunset", value);
                         }
                     }
 
                     // Add Link header pointing to replacement version
-                    if let Ok(value) = HeaderValue::from_str(&deprecation.link_header()) {
+                    if let Ok(value) = HeaderValue::from_str(&deprecation_info.link_header()) {
                         headers.insert(header::LINK, value);
                     }
 
                     // Add custom warning header if message is provided
-                    if let Some(ref message) = deprecation.message {
+                    if let Some(ref message) = deprecation_info.message {
                         let warning = format!(
                             "299 - \"API version {} is deprecated. Please migrate to version {}. {}\"",
-                            deprecation.version, deprecation.replacement, message
+                            deprecation_info.version, deprecation_info.replacement, message
                         );
                         if let Ok(value) = HeaderValue::from_str(&warning) {
                             headers.insert(header::WARNING, value);
                         }
                     }
-
-                    response
                 }
-            }))
-        } else {
-            self.router
-        }
+
+                response
+            }
+        }))
     }
 
     /// Get the API version
