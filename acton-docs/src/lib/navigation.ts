@@ -14,6 +14,7 @@ export const navigation = [
       { title: 'Concepts', href: '/docs/concepts' },
       { title: 'API Versioning', href: '/docs/api-versioning' },
       { title: 'HTTP + gRPC Support', href: '/docs/dual-protocol' },
+      { title: 'gRPC Guide', href: '/docs/grpc-guide' },
       { title: 'Health Checks', href: '/docs/health-checks' },
       { title: 'Configuration', href: '/docs/configuration' },
       { title: 'Observability', href: '/docs/observability' },

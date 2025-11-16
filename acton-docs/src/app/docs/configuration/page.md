@@ -15,6 +15,12 @@ Start with the [homepage](/) to understand what acton-service is, then explore [
 
 The acton-service framework uses the XDG Base Directory specification for configuration file management, providing a standard and user-friendly way to organize configuration files for multiple services.
 
+{% callout type="note" title="What is XDG?" %}
+The **XDG Base Directory Specification** is a standard from freedesktop.org that defines where applications should store user-specific configuration, data, and cache files on Linux/Unix systems. Instead of cluttering your home directory with dotfiles, XDG organizes everything under `~/.config/`, `~/.local/share/`, and `~/.cache/`.
+
+acton-service follows this standard by placing config files in `~/.config/acton-service/{service_name}/config.toml` - making them easy to find, back up, and manage.
+{% /callout %}
+
 ---
 
 ## Configuration File Locations
@@ -303,13 +309,55 @@ optional = false → Depends on lazy_init:
                    lazy_init=false → Service fails to start
 ```
 
+{% callout type="warning" title="What is Degraded State?" %}
+**Degraded state** means the service is alive and running, but one or more dependencies are unavailable. The service can handle some requests but not all:
+
+- **`/health`** returns `200 OK` (service process is alive)
+- **`/ready`** returns `503 Service Unavailable` (dependencies are down)
+- **Kubernetes behavior**: Pod stays running but is removed from load balancer
+- **Requests requiring the dependency**: Return `503` with error message
+- **Requests not requiring the dependency**: Work normally
+
+**Example:** Database is down, but service is degraded (not dead):
+- `GET /health` → `200 OK` (service alive)
+- `GET /ready` → `503` (database unavailable)
+- `GET /api/v1/users` → `503` (needs database)
+- `GET /api/v1/version` → `200 OK` (doesn't need database)
+
+Once the dependency recovers, the service automatically transitions from degraded to fully healthy, and Kubernetes adds it back to the load balancer.
+{% /callout %}
+
 **`max_retries`** - Maximum connection attempts (default: `5`)
 - Number of times to retry connection before giving up
 - Applies during both startup and background initialization
 
 **`retry_delay_secs`** - Base delay between retries (default: `2` seconds)
-- Uses exponential backoff: delay = base_delay × 2^(attempt-1)
-- Example with base=2: 2s, 4s, 8s, 16s, 32s
+- Uses exponential backoff: `delay = base_delay × 2^(attempt-1)`
+- Each retry waits twice as long as the previous one
+
+**Exponential Backoff Timing Examples:**
+
+| Attempt | Formula | With base=1s | With base=2s | With base=5s |
+|---------|---------|-------------|-------------|-------------|
+| 1 | base × 2^0 | 1 second | 2 seconds | 5 seconds |
+| 2 | base × 2^1 | 2 seconds | 4 seconds | 10 seconds |
+| 3 | base × 2^2 | 4 seconds | 8 seconds | 20 seconds |
+| 4 | base × 2^3 | 8 seconds | 16 seconds | 40 seconds |
+| 5 | base × 2^4 | 16 seconds | 32 seconds | 80 seconds |
+| **Total** | Sum of all | **31 seconds** | **62 seconds** | **155 seconds** |
+
+**Example:** With `max_retries = 5` and `retry_delay_secs = 2`:
+```
+00:00 - Initial attempt fails
+00:02 - Retry #1 (waited 2s) fails
+00:06 - Retry #2 (waited 4s) fails
+00:14 - Retry #3 (waited 8s) fails
+00:30 - Retry #4 (waited 16s) fails
+00:62 - Retry #5 (waited 32s) succeeds
+Total: 62 seconds from start to success
+```
+
+This exponential backoff prevents overwhelming a recovering service with constant retry attempts.
 
 ### Operation Modes (Detailed)
 

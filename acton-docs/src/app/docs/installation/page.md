@@ -32,7 +32,7 @@ Add acton-service to your `Cargo.toml` with the features you need:
 
 ```toml
 [dependencies]
-acton-service = { version = "0.2", features = ["http", "observability"] }
+{% $dep.http %}
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -40,17 +40,17 @@ tokio = { version = "1", features = ["full"] }
 
 **Minimal HTTP Service**
 ```toml
-acton-service = { version = "0.2", features = ["http"] }
+{% $dep.httpOnly %}
 ```
 
 **HTTP with Database**
 ```toml
-acton-service = { version = "0.2", features = ["http", "database", "observability"] }
+{% $dep.database %}
 ```
 
 **Full-Featured Service**
 ```toml
-acton-service = { version = "0.2", features = [
+acton-service = { version = "{% version() %}", features = [
     "http",          # Axum HTTP framework
     "grpc",          # Tonic gRPC support
     "database",      # PostgreSQL via SQLx
@@ -64,7 +64,7 @@ acton-service = { version = "0.2", features = [
 
 **Everything Enabled**
 ```toml
-acton-service = { version = "0.2", features = ["full"] }
+{% $dep.full %}
 ```
 
 See the [Feature Flags guide](/docs/feature-flags) for detailed information on choosing features.
@@ -192,7 +192,7 @@ If you see errors about missing features, verify your `Cargo.toml` includes the 
 acton-service = "0.2"
 
 # ✅ With required features
-acton-service = { version = "0.2", features = ["http"] }
+{% $dep.httpOnly %}
 ```
 
 ### CLI Installation Issues

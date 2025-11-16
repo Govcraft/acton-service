@@ -103,6 +103,44 @@ Returns HTTP 200 if the service and all **required** dependencies are healthy. R
 }
 ```
 
+{% callout type="note" title="Understanding Degraded State" %}
+When `/health` returns 200 but `/ready` returns 503, your service is in **degraded state**:
+
+**What degraded means:**
+- Service process is alive and functioning (`/health` → 200)
+- One or more dependencies are unavailable (`/ready` → 503)
+- Service can handle SOME requests but not all
+
+**Kubernetes behavior in degraded state:**
+- **Liveness probe** passes (200) → Pod stays running (not restarted)
+- **Readiness probe** fails (503) → Pod removed from load balancer
+- Traffic stops flowing to this pod
+- Pod continues running, attempting to reconnect to dependencies
+
+**Request behavior during degraded state:**
+- Requests requiring unavailable dependency → Return 503 error
+- Requests not requiring unavailable dependency → Work normally
+- Example: Database down, but `/health` and `/metrics` endpoints still work
+
+**Recovery:**
+Once dependencies become available again, `/ready` automatically returns 200, and Kubernetes adds the pod back to the load balancer. No restart needed.
+
+**Example scenario:**
+```
+10:00 AM - Database goes down
+10:00 AM - /health → 200 (service alive)
+10:00 AM - /ready → 503 (database unavailable)
+10:00 AM - Kubernetes removes pod from load balancer
+10:00 AM - GET /api/users → Not routed to this pod
+10:05 AM - Database recovers
+10:05 AM - /ready → 200 (all dependencies healthy)
+10:05 AM - Kubernetes adds pod back to load balancer
+10:05 AM - GET /api/users → Routes to this pod again
+```
+
+This prevents cascading failures while allowing automatic recovery without pod restarts.
+{% /callout %}
+
 ---
 
 ## Dependency Monitoring

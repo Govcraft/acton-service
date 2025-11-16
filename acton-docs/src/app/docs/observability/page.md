@@ -31,7 +31,7 @@ All observability features are enabled by default when you include the `observab
 
 ```toml
 [dependencies]
-acton-service = { version = "0.2", features = ["http", "observability"] }
+{% $dep.http %}
 ```
 
 ---
@@ -73,6 +73,39 @@ The request tracking middleware automatically generates and propagates correlati
 - **`x-trace-id`** - Trace identifier for the entire request flow across services
 - **`x-span-id`** - Span identifier for the current service operation
 - **`x-correlation-id`** - Correlation identifier for related requests
+
+{% callout type="note" title="Understanding the Different ID Types" %}
+Multiple ID types serve different purposes in distributed systems:
+
+**Request ID** (`x-request-id`):
+- Unique per HTTP request to this specific service
+- New ID generated for each incoming request
+- Use for: Debugging single requests, correlating logs within one service
+- Example: `"req_1a2b3c4d"`
+
+**Trace ID** (`x-trace-id`):
+- Unique per end-to-end transaction across ALL services
+- Same trace ID follows a request through your entire system
+- Use for: Understanding full request path, distributed debugging
+- Example: A user clicks "Checkout" → trace ID `"trace_xyz789"` flows through API Gateway → Auth Service → Order Service → Payment Service → Database
+
+**Span ID** (`x-span-id`):
+- Unique per service operation within a trace
+- Each service creates a new span as part of the overall trace
+- Use for: Understanding what happened within a specific service
+- Example: Auth Service has span `"span_auth_abc"`, Order Service has span `"span_order_def"`, both part of trace `"trace_xyz789"`
+
+**Correlation ID** (`x-correlation-id`):
+- Groups related requests that are part of the same logical operation
+- Example: Batch job processing 100 items uses same correlation ID for all items
+- Use for: Correlating related async operations, batch processing
+
+**When to use which:**
+- Debugging one request in logs: Use **Request ID**
+- Following a user action through the system: Use **Trace ID**
+- Understanding what one service did: Use **Span ID**
+- Grouping related operations: Use **Correlation ID**
+{% /callout %}
 
 These headers are automatically:
 - Generated if not present in incoming requests
@@ -130,6 +163,39 @@ The following metrics are automatically collected for every HTTP request:
 - Request latency distribution
 - Percentiles (p50, p95, p99) for latency analysis
 - Labeled by HTTP method and route
+
+{% callout type="note" title="Understanding Percentiles" %}
+**Percentiles** show you the value below which a given percentage of observations fall. They're more useful than averages for understanding latency:
+
+**Why percentiles matter:**
+- **Average (mean)** hides outliers: 99 requests at 10ms + 1 request at 10 seconds = 109ms average (misleading!)
+- **Percentiles** show the full distribution
+
+**Common percentiles:**
+- **p50 (median)**: 50% of requests were faster than this
+  - Example: p50 = 25ms means half your requests complete in under 25ms
+- **p95**: 95% of requests were faster than this
+  - Example: p95 = 100ms means 95 out of 100 requests complete in under 100ms
+  - Only 5% of requests are slower
+- **p99**: 99% of requests were faster than this
+  - Example: p99 = 500ms means 99 out of 100 requests complete in under 500ms
+  - The worst 1% of requests (tail latency)
+
+**Real example:**
+```
+100,000 requests with this distribution:
+- p50 = 20ms   (median user experience - pretty good!)
+- p95 = 45ms   (worst case for 95% of users - still good)
+- p99 = 2000ms (worst case for 1% of users - bad!)
+- Average = 40ms (hides the tail latency problem!)
+```
+
+The p99 shows you have a tail latency problem affecting 1,000 users even though the average looks fine.
+
+**SLA targets typically use p95 or p99:**
+- "99% of requests complete in under 100ms" = p99 < 100ms
+- "95% of requests complete in under 50ms" = p95 < 50ms
+{% /callout %}
 
 **Active Requests**
 - Current number of in-flight requests
@@ -219,6 +285,35 @@ Masked headers appear in logs as:
 Authorization: [REDACTED]
 X-API-Key: [REDACTED]
 ```
+
+{% callout type="warning" title="Header Masking is Automatic and Not Customizable" %}
+**Important:** The sensitive header masking list is built into the framework and currently **cannot be customized**. This is intentional for security - ensuring credentials are never accidentally logged regardless of configuration.
+
+**What gets masked:**
+- All standard authentication headers (Authorization, Cookie, etc.)
+- Headers with security-related keywords: "token", "secret", "password", "key", "auth", "credential"
+- Pattern matching is case-insensitive
+
+**What doesn't get masked:**
+- Standard headers (Content-Type, Accept, User-Agent, etc.)
+- Custom business headers (X-Tenant-ID, X-Request-Priority, etc.)
+- Correlation IDs (x-request-id, x-trace-id, etc.)
+
+**If you need to mask additional headers:** Consider whether those headers should contain sensitive data. If they do, rename them to include keywords like "token" or "secret" to trigger automatic masking. Otherwise, the data shouldn't be sensitive enough to require masking.
+
+**Example:**
+```rust
+// These will be automatically masked:
+X-API-Secret: [REDACTED]
+X-Auth-Token: [REDACTED]
+Custom-Password-Header: [REDACTED]
+
+// These will appear in logs:
+X-Tenant-ID: tenant-123
+X-Request-Priority: high
+Content-Type: application/json
+```
+{% /callout %}
 
 ### Log Level Control
 

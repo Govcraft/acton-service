@@ -29,7 +29,6 @@ How acton-service compares to popular Rust web frameworks and other ecosystems.
 | **Configuration** | ✅ XDG + env | ❌ Manual | ⚠️ Basic | ✅ Good |
 | **Learning curve** | Medium | Low | Medium | Low |
 | **Flexibility** | Opinionated | Very flexible | Flexible | Opinionated |
-| **Production focus** | ✅✅✅ | ⚠️ DIY | ✅✅ | ⚠️ Limited |
 
 ---
 
@@ -91,7 +90,7 @@ async fn main() -> Result<()> {
 ```
 
 {% callout type="note" %}
-**Migration from Axum**: Easy - handlers are 100% compatible.
+**Migration from Axum**: Axum handlers work with acton-service without modification.
 {% /callout %}
 
 ---
@@ -102,7 +101,7 @@ async fn main() -> Result<()> {
 
 #### When to use Actix-Web
 
-- **Maximum performance**: Actix has historically had excellent benchmarks
+- **Performance**: High-performance framework with its own runtime
 - **Mature ecosystem**: Lots of middleware and extensions
 - **Actor model**: You want actor-based concurrency
 - **Flexibility**: Need framework flexibility with good defaults
@@ -168,10 +167,10 @@ async fn main() -> Result<()> {
 
 #### When to use Rocket
 
-- **Developer experience**: Amazing compile-time checks and error messages
-- **Code generation**: You love macros and derive attributes
+- **Developer experience**: Focus on ergonomics with compile-time checks and error messages
+- **Code generation**: Macro-based API with derive attributes
 - **Type-safe routing**: Built-in type-safe routing and validation
-- **Beginner-friendly**: Great documentation and learning resources
+- **Beginner-friendly**: Extensive documentation and learning resources
 
 ```rust
 // Rocket: Macro-based, beginner-friendly
@@ -228,60 +227,6 @@ async fn main() -> Result<()> {
 
 ---
 
-### vs Spring Boot (Java)
-
-For those coming from Spring Boot or similar JVM frameworks.
-
-#### Spring Boot equivalent features
-
-| Spring Boot | acton-service |
-|-------------|--------------|
-| `@RestController` | `VersionedApiBuilder` |
-| `@GetMapping("/users")` | `router.route("/users", get(handler))` |
-| `application.yml` | `config.toml` + env vars |
-| Spring Actuator | Built-in `/health` and `/ready` |
-| Spring Cloud Circuit Breaker | Built-in resilience middleware |
-| Spring Data JPA | SQLx (compile-time checked) |
-| Sleuth/Zipkin | OpenTelemetry (built-in) |
-| `@Valid` annotation | Manual validation (more control) |
-| Auto-configuration | `ServiceBuilder` with sensible defaults |
-
-```java
-// Spring Boot
-@RestController
-@RequestMapping("/api/v1")
-public class UserController {
-    @GetMapping("/users")
-    public List<User> listUsers() {
-        return userService.findAll();
-    }
-}
-```
-
-```rust
-// acton-service equivalent
-let routes = VersionedApiBuilder::new()
-    .with_base_path("/api")
-    .add_version(ApiVersion::V1, |router| {
-        router.route("/users", get(list_users))
-    })
-    .build_routes();
-```
-
-**Why switch from Spring Boot?**:
-- **Performance**: 10-50x lower latency, 10x less memory
-- **Binary size**: 15MB vs 150MB+ JAR files
-- **Startup time**: Milliseconds vs seconds
-- **Type safety**: Compile-time guarantees prevent entire classes of bugs
-- **No GC pauses**: Predictable performance
-
-**Tradeoffs**:
-- Smaller ecosystem than Spring
-- Steeper learning curve (Rust + async)
-- Less magic, more explicit code
-
----
-
 ## Feature Breakdown
 
 ### API Versioning
@@ -293,8 +238,8 @@ let routes = VersionedApiBuilder::new()
 | Actix-Web | Manual implementation | ❌ None |
 | Rocket | Manual implementation | ❌ None |
 
-{% callout type="warning" %}
-**acton-service is the only Rust framework with compile-time enforced versioning.**
+{% callout type="note" %}
+**acton-service provides compile-time enforced versioning**, while other frameworks require manual implementation.
 {% /callout %}
 
 ### Observability
@@ -324,22 +269,19 @@ let routes = VersionedApiBuilder::new()
 | Actix-Web | ⚠️ Manual | ⚠️ Manual | ❌ No | ⚠️ Manual |
 | Rocket | ❌ No | ❌ No | ❌ No | ❌ No |
 
-## Performance Comparison
-
-Based on typical CRUD operations (not official benchmarks):
-
-| Framework | Req/sec | Latency (p50) | Latency (p99) | Memory |
-|-----------|---------|---------------|---------------|---------|
-| acton-service | ~100k | ~0.5ms | ~2ms | ~10MB |
-| Axum | ~110k | ~0.4ms | ~1.8ms | ~8MB |
-| Actix-Web | ~120k | ~0.3ms | ~1.5ms | ~12MB |
-| Rocket | ~80k | ~0.8ms | ~3ms | ~15MB |
+## Performance Considerations
 
 {% callout type="note" %}
-Performance depends heavily on your application logic. These are rough estimates for simple CRUD operations.
-
-**acton-service overhead**: Negligible (~5%) compared to raw Axum.
+Performance depends heavily on your application logic, workload patterns, and infrastructure. All these frameworks are capable of high performance for typical web service use cases.
 {% /callout %}
+
+**General observations**:
+- **acton-service** is built on Axum and adds minimal overhead for its abstractions
+- **Axum** and **Actix-Web** are known for low-latency request handling
+- **Rocket** prioritizes developer ergonomics over raw performance
+- For most applications, the bottleneck will be your business logic, database queries, and external API calls rather than the framework itself
+
+Benchmark your specific use case if performance is critical to your requirements.
 
 ---
 

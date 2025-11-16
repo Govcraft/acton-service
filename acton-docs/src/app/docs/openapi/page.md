@@ -27,7 +27,7 @@ Enable the OpenAPI feature:
 
 ```toml
 [dependencies]
-acton-service = { version = "0.2", features = ["openapi", "http", "observability"] }
+{% $dep.openapi %}
 ```
 
 ## Configuration

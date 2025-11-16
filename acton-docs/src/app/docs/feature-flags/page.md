@@ -82,7 +82,7 @@ Enables HTTP REST API support via Axum.
 **Dependencies**: Axum, Tower
 
 ```toml
-acton-service = { version = "0.2", features = ["http"] }
+{% $dep.httpOnly %}
 ```
 
 ### `observability`
@@ -95,7 +95,7 @@ Enables structured logging and OpenTelemetry tracing.
 **Dependencies**: tracing, tracing-subscriber, OpenTelemetry
 
 ```toml
-acton-service = { version = "0.2", features = ["observability"] }
+{% dep("observability") %}
 ```
 
 ---
@@ -111,7 +111,7 @@ Enables gRPC support via Tonic. Can run on the same port as HTTP with automatic 
 **Dependencies**: tonic, prost
 
 ```toml
-acton-service = { version = "0.2", features = ["grpc"] }
+{% dep("grpcOnly") %}
 ```
 
 ---
@@ -132,7 +132,7 @@ PostgreSQL connection pooling via SQLx with automatic health checks and retry lo
 - Retry logic on connection failures
 
 ```toml
-acton-service = { version = "0.2", features = ["database"] }
+{% dep("databaseOnly") %}
 ```
 
 ### `cache`
@@ -149,7 +149,7 @@ Redis connection pooling with support for JWT token revocation and distributed r
 - Distributed rate limiting
 
 ```toml
-acton-service = { version = "0.2", features = ["cache"] }
+{% dep("cacheOnly") %}
 ```
 
 ### `events`
@@ -166,7 +166,7 @@ NATS JetStream client for event-driven architecture and pub/sub messaging.
 - Pub/sub messaging
 
 ```toml
-acton-service = { version = "0.2", features = ["events"] }
+{% dep("eventsOnly") %}
 ```
 
 ---
@@ -190,7 +190,7 @@ AWS Cedar policy-based authorization for fine-grained access control.
 - Layered security with JWT authentication
 
 ```toml
-acton-service = { version = "0.2", features = ["cedar-authz", "cache"] }
+{% dep("cedarAuthz") %}
 ```
 
 **Note**: Works best with `cache` feature for policy decision caching.
@@ -209,7 +209,7 @@ Circuit breaker, retry, and bulkhead patterns for production services.
 - Bulkhead (concurrency limiting)
 
 ```toml
-acton-service = { version = "0.2", features = ["resilience"] }
+{% dep("resilience") %}
 ```
 
 ### `governor`
@@ -226,7 +226,7 @@ Advanced rate limiting with per-user limits via JWT claims.
 - In-memory rate limiting
 
 ```toml
-acton-service = { version = "0.2", features = ["governor"] }
+{% dep("governor") %}
 ```
 
 ### `otel-metrics`
@@ -243,7 +243,7 @@ HTTP metrics collection via OpenTelemetry for detailed monitoring.
 - HTTP status code distribution
 
 ```toml
-acton-service = { version = "0.2", features = ["otel-metrics"] }
+{% dep("otelMetrics") %}
 ```
 
 ---
@@ -265,7 +265,7 @@ OpenAPI/Swagger documentation generation with multiple UI options.
 - Auto-generated OpenAPI specs
 
 ```toml
-acton-service = { version = "0.2", features = ["openapi"] }
+{% dep("openapiOnly") %}
 ```
 
 ---
@@ -277,7 +277,7 @@ acton-service = { version = "0.2", features = ["openapi"] }
 
 ```toml
 [dependencies]
-acton-service = { version = "0.2", features = ["http", "observability"] }
+{% $dep.http %}
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -289,11 +289,7 @@ tokio = { version = "1", features = ["full"] }
 
 ```toml
 [dependencies]
-acton-service = { version = "0.2", features = [
-    "http",
-    "observability",
-    "database"
-] }
+{% $dep.database %}
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -305,7 +301,7 @@ tokio = { version = "1", features = ["full"] }
 
 ```toml
 [dependencies]
-acton-service = { version = "0.2", features = [
+acton-service = { version = "{% version() %}", features = [
     "http",
     "observability",
     "database",
@@ -326,7 +322,7 @@ tokio = { version = "1", features = ["full"] }
 
 ```toml
 [dependencies]
-acton-service = { version = "0.2", features = [
+acton-service = { version = "{% version() %}", features = [
     "http",
     "observability",
     "database",
@@ -345,7 +341,7 @@ tokio = { version = "1", features = ["full"] }
 
 ```toml
 [dependencies]
-acton-service = { version = "0.2", features = [
+acton-service = { version = "{% version() %}", features = [
     "http",
     "grpc",
     "observability",
@@ -362,7 +358,7 @@ tokio = { version = "1", features = ["full"] }
 
 ```toml
 [dependencies]
-acton-service = { version = "0.2", features = [
+acton-service = { version = "{% version() %}", features = [
     "http",           # For health endpoints
     "observability",
     "events",         # NATS support
@@ -380,7 +376,7 @@ tokio = { version = "1", features = ["full"] }
 
 ```toml
 [dependencies]
-acton-service = { version = "0.2", features = ["full"] }
+{% $dep.full %}
 tokio = { version = "1", features = ["full"] }
 ```
 

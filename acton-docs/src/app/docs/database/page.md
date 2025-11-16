@@ -25,7 +25,7 @@ Enable the database feature:
 
 ```toml
 [dependencies]
-acton-service = { version = "0.2", features = ["database", "http", "observability"] }
+{% $dep.database %}
 ```
 
 ## Configuration

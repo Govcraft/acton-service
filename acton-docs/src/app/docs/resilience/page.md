@@ -40,6 +40,44 @@ ServiceBuilder::new()
 
 Circuit breakers prevent cascading failures by detecting unhealthy dependencies and failing fast instead of waiting for timeouts.
 
+{% callout type="note" title="What are Cascading Failures?" %}
+**Cascading failure** occurs when a failure in one service causes failures in dependent services, which spread through your system like falling dominos:
+
+**Without circuit breaker:**
+```
+Database goes down (1 service)
+  ↓
+API Service keeps calling it, times out after 30s per request
+  ↓
+API Service thread pool exhausted waiting for database
+  ↓
+Frontend calls API, times out waiting for response
+  ↓
+Frontend becomes unresponsive to users
+  ↓
+Load balancer health checks fail
+  ↓
+ENTIRE SYSTEM DOWN (cascading failure)
+```
+
+**With circuit breaker:**
+```
+Database goes down (1 service)
+  ↓
+Circuit breaker detects failures, opens circuit
+  ↓
+API Service fails fast (returns 503 immediately, no waiting)
+  ↓
+API Service thread pool stays available
+  ↓
+Frontend gets fast 503 response, shows user-friendly error
+  ↓
+Rest of system continues working (failure contained)
+```
+
+Circuit breakers **contain** the blast radius of failures - one failing dependency doesn't bring down your entire system.
+{% /callout %}
+
 ### How Circuit Breakers Work
 
 Circuit breakers **automatically** monitor your service health and transition between states at runtime based on observed failures. You configure the thresholds and behavior, but state transitions happen automatically - no code changes or redeployment required.
@@ -238,17 +276,28 @@ Jitter prevents thundering herd when many clients retry simultaneously.
 
 ### Idempotency Requirement
 
+{% callout type="warning" title="What is Idempotency?" %}
+**Idempotent** means an operation produces the same result whether executed once or multiple times. Retrying an idempotent operation is safe - it won't cause duplicate side effects.
+
+**Examples:**
+- **Idempotent**: `DELETE /users/123` - deleting the same user twice has the same result (user is deleted)
+- **NOT Idempotent**: `POST /orders` - creating an order twice creates two orders (duplicate!)
+
+**Why it matters for retries:** If a request times out, you don't know if the server processed it before timing out. Retrying a non-idempotent operation risks duplicates.
+{% /callout %}
+
 **Only retry idempotent operations:**
 
 ```rust
 // Safe to retry (idempotent)
-GET  /api/v1/users/123
-PUT  /api/v1/users/123  (with same data)
-DELETE /api/v1/users/123
+GET  /api/v1/users/123        // Reading same data multiple times = safe
+PUT  /api/v1/users/123        // Setting same value multiple times = safe
+DELETE /api/v1/users/123      // Deleting same user multiple times = safe
 
 // NOT safe to retry (non-idempotent)
 POST /api/v1/orders      // Creates duplicate orders
 POST /api/v1/payments    // Charges customer multiple times
+PATCH /api/v1/counter    // Increments multiple times
 ```
 
 **Making Non-Idempotent Operations Retryable:**

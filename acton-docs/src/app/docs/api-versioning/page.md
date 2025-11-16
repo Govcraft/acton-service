@@ -641,7 +641,7 @@ This allows you to:
 ```toml
 # Cargo.toml
 [dependencies]
-acton-service = { version = "0.5", features = ["otel-metrics"] }
+{% $dep.metrics %}
 ```
 
 The metrics are automatically exported via OTLP when observability is configured - no additional code needed!
