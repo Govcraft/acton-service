@@ -66,7 +66,7 @@ Returns HTTP 200 if the process is alive and can handle requests.
 {
   "status": "healthy",
   "service": "my-service",
-  "version": "0.5.2"
+  "version": "{% $version.acton %}"
 }
 ```
 

@@ -29,7 +29,7 @@ acton-service provides a **type-enforced framework** with built-in implementatio
 It's opinionated and designed for teams that want consistent patterns across services.
 
 {% callout type="note" title="Current Status" %}
-acton-service is under active development (v0.2.x). Core features have stable APIs: HTTP/gRPC servers, type-enforced versioning, health checks, observability, and resilience middleware. Some advanced CLI features are in progress. The framework is built on mature libraries (axum, tonic, sqlx). Test thoroughly for your use case.
+acton-service is under active development (v{% $version.acton %}). Core features have stable APIs: HTTP/gRPC servers, type-enforced versioning, health checks, observability, and resilience middleware. Some advanced CLI features are in progress. The framework is built on mature libraries (axum, tonic, sqlx). Test thoroughly for your use case.
 {% /callout %}
 
 ---
@@ -143,7 +143,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-acton-service = { version = "0.2", features = ["http", "observability"] }
+acton-service = { version = "{% $version.acton %}", features = ["http", "observability"] }
 tokio = { version = "1", features = ["full"] }
 ```
 
