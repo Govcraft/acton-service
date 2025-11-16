@@ -214,7 +214,7 @@ impl ServiceBuilder {
         let state = self.state.unwrap_or_else(|| AppState::new(config.clone()));
 
         // Handle both types of versioned routes
-        let app = match routes {
+        let mut app = match routes {
             VersionedRoutes::WithState(router) => {
                 // Health routes already added, just attach state
                 router.with_state(state)
@@ -231,6 +231,45 @@ impl ServiceBuilder {
                 router_with_health.with_state(state)
             }
         };
+
+        // Auto-apply JWT middleware if configured
+        if let Ok(jwt_auth) = crate::middleware::jwt::JwtAuth::new(&config.jwt) {
+            tracing::debug!("Auto-applying JWT authentication middleware");
+            app = app.layer(axum::middleware::from_fn_with_state(
+                jwt_auth,
+                crate::middleware::jwt::JwtAuth::middleware,
+            ));
+        } else {
+            tracing::warn!("JWT configuration invalid, skipping JWT middleware");
+        }
+
+        // Auto-apply Cedar middleware if configured and enabled
+        #[cfg(feature = "cedar-authz")]
+        if let Some(ref cedar_config) = config.cedar {
+            if cedar_config.enabled {
+                match tokio::runtime::Handle::try_current() {
+                    Ok(handle) => {
+                        match handle.block_on(async {
+                            crate::middleware::cedar::CedarAuthz::new(cedar_config.clone()).await
+                        }) {
+                            Ok(cedar_authz) => {
+                                tracing::debug!("Auto-applying Cedar authorization middleware");
+                                app = app.layer(axum::middleware::from_fn_with_state(
+                                    cedar_authz,
+                                    crate::middleware::cedar::CedarAuthz::middleware,
+                                ));
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to initialize Cedar middleware: {}", e);
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        tracing::warn!("No tokio runtime available for Cedar initialization");
+                    }
+                }
+            }
+        }
 
         let listener_addr = std::net::SocketAddr::from(([0, 0, 0, 0], config.service.port));
 
