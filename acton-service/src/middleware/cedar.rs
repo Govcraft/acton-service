@@ -5,7 +5,7 @@
 
 use axum::{
     body::Body,
-    extract::{Request, State},
+    extract::{MatchedPath, Request, State},
     http::{HeaderMap, Method},
     middleware::Next,
     response::Response,
@@ -112,17 +112,14 @@ impl CedarAuthz {
 
         // Extract request information
         let method = request.method().clone();
-        let path = request.uri().path().to_string();
 
         // Build Cedar authorization request
         let principal = build_principal(&claims)?;
-        let action = build_action_http(&method, &path)?;
+        let action = build_action_http(&method, &request)?;
         let context = build_context_http(request.headers(), &claims)?;
 
-        // Build a dummy resource (we don't use resource-based authorization yet)
-        let resource: EntityUid = r#"Resource::"default""#
-            .parse()
-            .map_err(|e| Error::Internal(format!("Failed to parse resource: {}", e)))?;
+        // Build resource (generic default)
+        let resource = build_resource()?;
 
         let cedar_request = CedarRequest::new(
             principal.clone(),
@@ -218,6 +215,20 @@ impl CedarAuthz {
     }
 }
 
+/// Build Cedar resource entity
+///
+/// Returns a generic default resource for authorization checks.
+/// Most authorization policies can be implemented using just the principal (user/roles)
+/// and action (HTTP method + path), without needing typed resources.
+///
+/// For applications that need typed resources with attributes (e.g., Document::"doc_id"
+/// with owner_id for ownership checks), this can be extended via a trait in the future.
+fn build_resource() -> Result<EntityUid, Error> {
+    r#"Resource::"default""#
+        .parse()
+        .map_err(|e| Error::Internal(format!("Failed to parse resource: {}", e)))
+}
+
 /// Build Cedar principal from JWT claims
 fn build_principal(claims: &Claims) -> Result<EntityUid, Error> {
     // Principal format: User::"user:123" or Client::"client:abc"
@@ -236,11 +247,21 @@ fn build_principal(claims: &Claims) -> Result<EntityUid, Error> {
     Ok(principal)
 }
 
-/// Build Cedar action from HTTP method and path
-fn build_action_http(method: &Method, path: &str) -> Result<EntityUid, Error> {
-    // Action format: Action::"GET /api/v1/users"
-    // Normalize path by removing IDs (e.g., /users/123 -> /users/:id)
-    let normalized_path = normalize_path(path);
+/// Build Cedar action from HTTP method and request
+///
+/// Uses Axum's MatchedPath to get the route pattern (most accurate).
+/// Falls back to generic path normalization if MatchedPath is not available.
+fn build_action_http(method: &Method, request: &Request<Body>) -> Result<EntityUid, Error> {
+    // Try to get Axum's matched path first (e.g., "/users/:id")
+    let normalized_path = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|matched| matched.as_str().to_string())
+        .unwrap_or_else(|| {
+            // Fallback: generic normalization for UUIDs and numeric IDs
+            normalize_path_generic(request.uri().path())
+        });
+
     let action_str = format!(r#"Action::"{} {}""#, method, normalized_path);
 
     let action: EntityUid = action_str
@@ -250,16 +271,21 @@ fn build_action_http(method: &Method, path: &str) -> Result<EntityUid, Error> {
     Ok(action)
 }
 
-/// Normalize path by replacing IDs with placeholders
-fn normalize_path(path: &str) -> String {
-    // Replace UUIDs with :id
+/// Normalize path by replacing common ID patterns with placeholders
+///
+/// This is a generic fallback used when Axum's MatchedPath is not available.
+/// It handles the most common ID patterns:
+/// - UUIDs: replaced with {id}
+/// - Numeric IDs: replaced with {id}
+fn normalize_path_generic(path: &str) -> String {
+    // Replace UUIDs with {id}
     let uuid_pattern =
         regex::Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}").unwrap();
-    let path = uuid_pattern.replace_all(path, ":id");
+    let path = uuid_pattern.replace_all(path, "{id}");
 
-    // Replace numeric IDs with :id
-    let numeric_pattern = regex::Regex::new(r"/\d+(?:/|$)").unwrap();
-    let path = numeric_pattern.replace_all(&path, "/:id$1");
+    // Replace numeric IDs at end of path segments
+    let numeric_pattern = regex::Regex::new(r"/(\d+)(?:/|$)").unwrap();
+    let path = numeric_pattern.replace_all(&path, "/{id}");
 
     path.to_string()
 }
@@ -341,25 +367,31 @@ fn extract_client_ip(headers: &HeaderMap) -> Option<String> {
 }
 
 /// Build entity hierarchy from claims
+///
+/// Creates the principal entity (User or Client) with roles and permissions.
+/// This is sufficient for most authorization policies that check:
+/// - Who is making the request (principal)
+/// - What they want to do (action)
+/// - What roles/permissions they have (in context)
 fn build_entities(claims: &Claims) -> Result<Entities, Error> {
-    // For now, we create minimal entities
-    // In a real implementation, you would fetch entity data from your database
-    let entity_json = json!([
-        {
-            "uid": {
-                "type": if claims.is_user() { "User" } else { "Client" },
-                "id": claims.sub.clone()
-            },
-            "attrs": {
-                "email": claims.email.clone().unwrap_or_default(),
-                "roles": claims.roles.clone(),
-                "permissions": claims.perms.clone(),
-            },
-            "parents": []
-        }
-    ]);
+    use serde_json::Value;
 
-    Entities::from_json_value(entity_json, None)
+    // Create principal entity (User or Client) with attributes
+    let entity = json!({
+        "uid": {
+            "type": if claims.is_user() { "User" } else { "Client" },
+            "id": claims.sub.clone()
+        },
+        "attrs": {
+            "email": claims.email.clone().unwrap_or_default(),
+            "roles": claims.roles.clone(),
+            "permissions": claims.perms.clone(),
+            "sub": claims.sub.clone(),
+        },
+        "parents": []
+    });
+
+    Entities::from_json_value(Value::Array(vec![entity]), None)
         .map_err(|e| Error::Internal(format!("Failed to build entities: {}", e)))
 }
 
@@ -572,6 +604,7 @@ where
                 Status::internal("Failed to build context")
             })?;
 
+            // For gRPC, we use default resource
             let resource: EntityUid = r#"Resource::"default""#
                 .parse()
                 .map_err(|_| Status::internal("Failed to parse resource"))?;
