@@ -101,6 +101,7 @@ impl Default for VersionedRoutes {
 /// - routes: Uses `VersionedRoutes::default()` (health + readiness only)
 /// - state: Uses `AppState::default()`
 /// - grpc_services: None (gRPC server disabled by default)
+/// - cedar: None (auto-configures from config.cedar if enabled)
 ///
 /// Health and readiness endpoints are ALWAYS included (automatically added by ServiceBuilder).
 pub struct ServiceBuilder {
@@ -109,6 +110,10 @@ pub struct ServiceBuilder {
     state: Option<AppState>,
     #[cfg(feature = "grpc")]
     grpc_services: Option<tonic::service::Routes>,
+    #[cfg(feature = "cedar-authz")]
+    cedar: Option<crate::middleware::cedar::CedarAuthz>,
+    #[cfg(feature = "cedar-authz")]
+    cedar_path_normalizer: Option<fn(&str) -> String>,
 }
 
 impl ServiceBuilder {
@@ -120,6 +125,10 @@ impl ServiceBuilder {
             state: None,
             #[cfg(feature = "grpc")]
             grpc_services: None,
+            #[cfg(feature = "cedar-authz")]
+            cedar: None,
+            #[cfg(feature = "cedar-authz")]
+            cedar_path_normalizer: None,
         }
     }
 
@@ -171,6 +180,83 @@ impl ServiceBuilder {
     #[cfg(feature = "grpc")]
     pub fn with_grpc_services(mut self, services: tonic::service::Routes) -> Self {
         self.grpc_services = Some(services);
+        self
+    }
+
+    /// Set Cedar authorization with explicit configuration
+    ///
+    /// This allows full control over Cedar initialization. Use this when you need:
+    /// - Custom path normalization
+    /// - Policy caching
+    /// - Other advanced Cedar customization
+    ///
+    /// For simple cases, just use `.with_config()` and Cedar will auto-configure.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use acton_service::prelude::*;
+    /// use acton_service::middleware::cedar::CedarAuthz;
+    ///
+    /// let cedar = CedarAuthz::builder(config.cedar.unwrap())
+    ///     .with_path_normalizer(normalize_fn)
+    ///     .with_cache(redis_cache)
+    ///     .build()
+    ///     .await?;
+    ///
+    /// let service = ServiceBuilder::new()
+    ///     .with_config(config)
+    ///     .with_cedar(cedar)  // Explicit Cedar instance
+    ///     .with_routes(routes)
+    ///     .build();
+    /// ```
+    #[cfg(feature = "cedar-authz")]
+    pub fn with_cedar(mut self, cedar: crate::middleware::cedar::CedarAuthz) -> Self {
+        self.cedar = Some(cedar);
+        self
+    }
+
+    /// Set ONLY a custom path normalizer for Cedar (convenience method)
+    ///
+    /// This is the recommended way for most users who just need custom path normalization.
+    /// Cedar will auto-configure from config.cedar with your custom normalizer.
+    ///
+    /// By default, Cedar uses a generic path normalizer that replaces UUIDs and numeric IDs
+    /// with `{id}` placeholders. Use this method to provide custom normalization logic for
+    /// your application's specific path patterns.
+    ///
+    /// This is only needed when:
+    /// - You have alphanumeric IDs (like "user123", "doc1") that aren't UUIDs or numeric
+    /// - You have slug-based routes (like "/articles/my-article-title")
+    /// - Complex path patterns not handled by the default normalizer
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use acton_service::prelude::*;
+    ///
+    /// // Define a custom normalizer for alphanumeric document IDs
+    /// fn normalize_document_paths(path: &str) -> String {
+    ///     // Handles: /api/v1/documents/user123/doc1 -> /api/v1/documents/{user_id}/{doc_id}
+    ///     let doc_pattern = regex::Regex::new(
+    ///         r"^(/api/v[0-9]+/documents/)([a-zA-Z0-9_-]+)/([a-zA-Z0-9_-]+)$"
+    ///     ).unwrap();
+    ///
+    ///     if let Some(caps) = doc_pattern.captures(path) {
+    ///         return format!("{}{{user_id}}/{{doc_id}}", &caps[1]);
+    ///     }
+    ///     path.to_string()
+    /// }
+    ///
+    /// let service = ServiceBuilder::new()
+    ///     .with_config(config)
+    ///     .with_routes(routes)
+    ///     .with_cedar_path_normalizer(normalize_document_paths)
+    ///     .build();
+    /// ```
+    #[cfg(feature = "cedar-authz")]
+    pub fn with_cedar_path_normalizer(mut self, normalizer: fn(&str) -> String) -> Self {
+        self.cedar_path_normalizer = Some(normalizer);
         self
     }
     /// Build the service
@@ -250,32 +336,59 @@ impl ServiceBuilder {
         // NOTE: Cedar must be applied BEFORE JWT because Axum layers run in reverse order
         // This ensures the execution order is: Request → General Middleware → JWT → Cedar → Handler
         #[cfg(feature = "cedar-authz")]
-        if let Some(ref cedar_config) = config.cedar {
-            if cedar_config.enabled {
-                match tokio::runtime::Handle::try_current() {
-                    Ok(_handle) => {
-                        // Use block_in_place to avoid nested runtime error
-                        match tokio::task::block_in_place(|| {
-                            tokio::runtime::Handle::current().block_on(async {
-                                crate::middleware::cedar::CedarAuthz::new(cedar_config.clone()).await
-                            })
-                        }) {
-                            Ok(cedar_authz) => {
-                                tracing::debug!("Auto-applying Cedar authorization middleware");
-                                app = app.layer(axum::middleware::from_fn_with_state(
-                                    cedar_authz,
-                                    crate::middleware::cedar::CedarAuthz::middleware,
-                                ));
-                            }
-                            Err(e) => {
-                                tracing::warn!("Failed to initialize Cedar middleware: {}", e);
+        {
+            let cedar_authz = if let Some(cedar) = self.cedar {
+                // User provided explicit Cedar instance - use it directly
+                tracing::debug!("Using explicit Cedar authorization middleware");
+                Some(cedar)
+            } else if let Some(ref cedar_config) = config.cedar {
+                if cedar_config.enabled {
+                    // Auto-configure Cedar from config
+                    match tokio::runtime::Handle::try_current() {
+                        Ok(_handle) => {
+                            // Use block_in_place to avoid nested runtime error
+                            let cedar_path_normalizer = self.cedar_path_normalizer;
+                            match tokio::task::block_in_place(|| {
+                                tokio::runtime::Handle::current().block_on(async {
+                                    let mut builder = crate::middleware::cedar::CedarAuthz::builder(cedar_config.clone());
+                                    if let Some(normalizer) = cedar_path_normalizer {
+                                        builder = builder.with_path_normalizer(normalizer);
+                                    }
+                                    builder.build().await
+                                })
+                            }) {
+                                Ok(cedar) => {
+                                    if cedar_path_normalizer.is_some() {
+                                        tracing::debug!("Auto-configured Cedar authorization middleware with custom path normalizer");
+                                    } else {
+                                        tracing::debug!("Auto-configured Cedar authorization middleware with default path normalizer");
+                                    }
+                                    Some(cedar)
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Failed to initialize Cedar middleware: {}", e);
+                                    None
+                                }
                             }
                         }
+                        Err(_) => {
+                            tracing::warn!("No tokio runtime available for Cedar initialization");
+                            None
+                        }
                     }
-                    Err(_) => {
-                        tracing::warn!("No tokio runtime available for Cedar initialization");
-                    }
+                } else {
+                    None
                 }
+            } else {
+                None
+            };
+
+            // Apply Cedar middleware if available
+            if let Some(cedar) = cedar_authz {
+                app = app.layer(axum::middleware::from_fn_with_state(
+                    cedar,
+                    crate::middleware::cedar::CedarAuthz::middleware,
+                ));
             }
         }
 

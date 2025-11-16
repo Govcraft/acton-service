@@ -20,10 +20,134 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::{
-    config::CedarConfig,
+    config::{CedarConfig, Config},
     error::Error,
     middleware::jwt::Claims,
 };
+
+/// Builder for Cedar authorization middleware
+///
+/// Use this to construct a `CedarAuthz` instance with custom configuration.
+///
+/// # Examples
+///
+/// Simple case (defaults):
+/// ```rust,ignore
+/// let cedar = CedarAuthz::builder(cedar_config)
+///     .build()
+///     .await?;
+/// ```
+///
+/// With custom path normalizer:
+/// ```rust,ignore
+/// let cedar = CedarAuthz::builder(cedar_config)
+///     .with_path_normalizer(normalize_fn)
+///     .build()
+///     .await?;
+/// ```
+///
+/// Full customization:
+/// ```rust,ignore
+/// let cedar = CedarAuthz::builder(cedar_config)
+///     .with_path_normalizer(normalize_fn)
+///     .with_cache(redis_cache)
+///     .build()
+///     .await?;
+/// ```
+pub struct CedarAuthzBuilder {
+    config: CedarConfig,
+    path_normalizer: Option<fn(&str) -> String>,
+    #[cfg(feature = "cache")]
+    cache: Option<Arc<dyn PolicyCache>>,
+}
+
+impl CedarAuthzBuilder {
+    /// Create a new builder with the given configuration
+    pub fn new(config: CedarConfig) -> Self {
+        Self {
+            config,
+            path_normalizer: None,
+            #[cfg(feature = "cache")]
+            cache: None,
+        }
+    }
+
+    /// Set a custom path normalizer
+    ///
+    /// By default, Cedar uses a generic path normalizer that replaces UUIDs and numeric IDs
+    /// with `{id}` placeholders. Use this method to provide custom normalization logic for
+    /// your application's specific path patterns.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn custom_normalizer(path: &str) -> String {
+    ///     // Example: /articles/my-article-slug-123 -> /articles/{slug}
+    ///     path.replace("/articles/", "/articles/{slug}/")
+    /// }
+    ///
+    /// let cedar = CedarAuthz::builder(cedar_config)
+    ///     .with_path_normalizer(custom_normalizer)
+    ///     .build()
+    ///     .await?;
+    /// ```
+    pub fn with_path_normalizer(mut self, normalizer: fn(&str) -> String) -> Self {
+        self.path_normalizer = Some(normalizer);
+        self
+    }
+
+    /// Set policy cache (optional, for performance)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let redis_cache = RedisPolicyCache::new(redis_pool);
+    ///
+    /// let cedar = CedarAuthz::builder(cedar_config)
+    ///     .with_cache(redis_cache)
+    ///     .build()
+    ///     .await?;
+    /// ```
+    #[cfg(feature = "cache")]
+    pub fn with_cache<C: PolicyCache + 'static>(mut self, cache: C) -> Self {
+        self.cache = Some(Arc::new(cache));
+        self
+    }
+
+    /// Build the CedarAuthz instance (async)
+    ///
+    /// This loads the Cedar policies from the configured file path.
+    pub async fn build(self) -> Result<CedarAuthz, Error> {
+        // Load policies from file (using spawn_blocking for file I/O)
+        let path = self.config.policy_path.clone();
+        let policies = tokio::task::spawn_blocking(move || std::fs::read_to_string(&path))
+            .await
+            .map_err(|e| Error::Internal(format!("Task join error: {}", e)))?
+            .map_err(|e| {
+                Error::Config(Box::new(figment::Error::from(format!(
+                    "Failed to read Cedar policy file from '{}': {}",
+                    self.config.policy_path.display(),
+                    e
+                ))))
+            })?;
+
+        let policy_set: PolicySet = policies.parse().map_err(|e| {
+            Error::Config(Box::new(figment::Error::from(format!(
+                "Failed to parse Cedar policies: {}",
+                e
+            ))))
+        })?;
+
+        Ok(CedarAuthz {
+            authorizer: Arc::new(Authorizer::new()),
+            policy_set: Arc::new(RwLock::new(policy_set)),
+            config: Arc::new(self.config),
+            #[cfg(feature = "cache")]
+            cache: self.cache,
+            path_normalizer: self.path_normalizer,
+        })
+    }
+}
 
 /// Cedar authorization middleware state
 #[derive(Clone)]
@@ -46,74 +170,55 @@ pub struct CedarAuthz {
 }
 
 impl CedarAuthz {
-    /// Create a new Cedar authorization middleware
-    pub async fn new(config: CedarConfig) -> Result<Self, Error> {
-        // Load policies from file (using spawn_blocking for file I/O)
-        let path = config.policy_path.clone();
-        let policies = tokio::task::spawn_blocking(move || std::fs::read_to_string(&path))
-            .await
-            .map_err(|e| Error::Internal(format!("Task join error: {}", e)))?
-            .map_err(|e| {
-                Error::Config(Box::new(figment::Error::from(format!(
-                    "Failed to read Cedar policy file from '{}': {}",
-                    config.policy_path.display(),
-                    e
-                ))))
-            })?;
-
-        let policy_set: PolicySet = policies.parse().map_err(|e| {
-            Error::Config(Box::new(figment::Error::from(format!(
-                "Failed to parse Cedar policies: {}",
-                e
-            ))))
-        })?;
-
-        Ok(Self {
-            authorizer: Arc::new(Authorizer::new()),
-            policy_set: Arc::new(RwLock::new(policy_set)),
-            config: Arc::new(config),
-            #[cfg(feature = "cache")]
-            cache: None,
-            path_normalizer: None,
-        })
-    }
-
-    /// Set policy cache (optional, for performance)
-    #[cfg(feature = "cache")]
-    pub fn with_cache<C: PolicyCache + 'static>(mut self, cache: C) -> Self {
-        self.cache = Some(Arc::new(cache));
-        self
-    }
-
-    /// Set a custom path normalizer
+    /// Create a builder for CedarAuthz
     ///
-    /// By default, Cedar uses a generic path normalizer that replaces UUIDs and numeric IDs
-    /// with `{id}` placeholders. Use this method to provide custom normalization logic for
-    /// your application's specific path patterns.
+    /// This is the recommended way to construct CedarAuthz instances.
     ///
     /// # Example
     ///
-    /// ```rust,no_run
-    /// use acton_service::middleware::cedar::CedarAuthz;
-    /// use acton_service::config::CedarConfig;
-    ///
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let cedar_config = CedarConfig::default();
-    /// // Define a custom normalizer for slug-based routes
-    /// fn custom_normalizer(path: &str) -> String {
-    ///     // Example: /articles/my-article-slug-123 -> /articles/{slug}
-    ///     path.replace("/articles/", "/articles/{slug}/")
-    /// }
-    ///
-    /// let authz = CedarAuthz::new(cedar_config)
-    ///     .await?
-    ///     .with_path_normalizer(custom_normalizer);
-    /// # Ok(())
-    /// # }
+    /// ```rust,ignore
+    /// let cedar = CedarAuthz::builder(cedar_config)
+    ///     .with_path_normalizer(normalize_fn)
+    ///     .with_cache(redis_cache)
+    ///     .build()
+    ///     .await?;
     /// ```
-    pub fn with_path_normalizer(mut self, normalizer: fn(&str) -> String) -> Self {
-        self.path_normalizer = Some(normalizer);
-        self
+    pub fn builder(config: CedarConfig) -> CedarAuthzBuilder {
+        CedarAuthzBuilder::new(config)
+    }
+
+    /// Create CedarAuthz from config with defaults (convenience method)
+    ///
+    /// This is a shortcut for `CedarAuthz::builder(config).build().await`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let cedar = CedarAuthz::from_config(cedar_config).await?;
+    /// ```
+    pub async fn from_config(config: CedarConfig) -> Result<Self, Error> {
+        Self::builder(config).build().await
+    }
+
+    /// Create CedarAuthz from full app config (convenience method)
+    ///
+    /// Automatically extracts Cedar config and creates the middleware if Cedar is enabled.
+    /// Returns `None` if Cedar is disabled or not configured.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// if let Some(cedar) = CedarAuthz::from_app_config(&config).await? {
+    ///     // Use cedar middleware
+    /// }
+    /// ```
+    pub async fn from_app_config(config: &Config) -> Result<Option<Self>, Error> {
+        match &config.cedar {
+            Some(cedar_config) if cedar_config.enabled => {
+                Ok(Some(Self::from_config(cedar_config.clone()).await?))
+            }
+            _ => Ok(None),
+        }
     }
 
     /// Middleware function to evaluate Cedar policies (HTTP)
