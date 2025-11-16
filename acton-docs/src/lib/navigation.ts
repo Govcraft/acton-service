@@ -52,6 +52,7 @@ export const navigation = [
     links: [
       { title: 'Docker', href: '/docs/docker' },
       { title: 'Kubernetes', href: '/docs/kubernetes' },
+      { title: 'Service Discovery', href: '/docs/service-discovery' },
       { title: 'Production Checklist', href: '/docs/production' },
     ],
   },
