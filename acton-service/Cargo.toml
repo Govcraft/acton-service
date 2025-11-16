@@ -135,6 +135,11 @@ name = "test-metrics"
 path = "examples/test-metrics.rs"
 required-features = ["otel-metrics"]
 
+[[example]]
+name = "cedar-authz"
+path = "examples/cedar-authz.rs"
+required-features = ["cedar-authz", "cache"]
+
 [build-dependencies]
 prost-build = "0.14.1"
 tonic-build.workspace = true
