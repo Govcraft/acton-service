@@ -40,6 +40,205 @@ algorithm = "HS256"
 
 The JWT middleware will automatically validate tokens on all protected routes and extract claims into the request context.
 
+## Token Generation
+
+{% callout type="warning" title="Critical: Token Generation Not Included" %}
+acton-service provides **token validation** but does NOT include a token generation/signing service. You must implement token generation separately in your authentication service or login endpoint.
+{% /callout %}
+
+### Why Separate Generation?
+
+**Security best practice:** Token generation requires access to private keys and should be isolated in a dedicated authentication service. Validation only needs public keys, which can be safely distributed.
+
+**Typical architecture:**
+```
+Auth Service (generates tokens)  →  API Services (validate tokens)
+   - Has private key                 - Have public key only
+   - /login endpoint                 - Protected endpoints
+   - Signs JWTs                      - Verify signatures
+```
+
+### Generating Tokens (Example)
+
+Use a JWT library like `jsonwebtoken` to create tokens in your login handler:
+
+```rust
+use jsonwebtoken::{encode, EncodingKey, Header, Algorithm};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Claims {
+    sub: String,           // User ID
+    username: String,
+    email: String,
+    roles: Vec<String>,
+    exp: usize,           // Expiration timestamp
+    iat: usize,           // Issued at timestamp
+    jti: String,          // Unique token ID (for revocation)
+}
+
+async fn login(
+    credentials: Json<LoginRequest>
+) -> Result<Json<LoginResponse>, AuthError> {
+    // 1. Validate credentials (check password, etc.)
+    let user = authenticate_user(&credentials.username, &credentials.password).await?;
+
+    // 2. Create claims
+    let now = chrono::Utc::now().timestamp() as usize;
+    let claims = Claims {
+        sub: format!("user:{}", user.id),
+        username: user.username,
+        email: user.email,
+        roles: user.roles,
+        exp: now + 3600,  // Expires in 1 hour
+        iat: now,
+        jti: uuid::Uuid::new_v4().to_string(),  // Unique ID for revocation
+    };
+
+    // 3. Sign token with private key
+    let token = encode(
+        &Header::new(Algorithm::RS256),
+        &claims,
+        &EncodingKey::from_rsa_pem(include_bytes!("private-key.pem"))?
+    )?;
+
+    Ok(Json(LoginResponse { token }))
+}
+```
+
+### Token Lifetime Recommendations
+
+```rust
+// Short-lived access tokens (recommended)
+exp: now + 900,      // 15 minutes
+
+// Medium-lived access tokens
+exp: now + 3600,     // 1 hour
+
+// Long-lived access tokens (avoid in production)
+exp: now + 86400,    // 24 hours
+
+// Use refresh tokens for longer sessions
+// Access token: 15 minutes
+// Refresh token: 7 days (stored securely, can be revoked)
+```
+
+### Refresh Token Pattern
+
+For production, use short-lived access tokens with long-lived refresh tokens:
+
+```rust
+// Login returns both tokens
+{
+  "access_token": "eyJ...",   // 15 min, used for API calls
+  "refresh_token": "xyz...",  // 7 days, stored securely
+  "expires_in": 900
+}
+
+// Client refreshes access token when expired
+POST /auth/refresh
+Authorization: Bearer <refresh_token>
+
+Response:
+{
+  "access_token": "eyJ...",   // New 15 min token
+  "expires_in": 900
+}
+```
+
+## Protected Routes vs Public Routes
+
+### How Route Protection Works
+
+**By default, ALL routes require authentication** when JWT middleware is configured. To make routes public, you must explicitly exclude them.
+
+### Configuration-Based Protection
+
+**Option 1: Exclude Specific Paths** (recommended for most services)
+
+```toml
+[jwt]
+secret = "your-secret-key"
+algorithm = "RS256"
+
+# Routes that DON'T require authentication
+exclude_paths = [
+    "/health",
+    "/ready",
+    "/login",
+    "/register",
+    "/public/*",          # Wildcard patterns supported
+    "/api/v1/docs/*"
+]
+```
+
+With this config:
+- ✅ `/health` → Public (no token required)
+- ✅ `/login` → Public (obviously!)
+- ✅ `/public/terms` → Public (matches wildcard)
+- ❌ `/api/v1/users` → Protected (requires valid JWT)
+- ❌ `/admin/settings` → Protected (requires valid JWT)
+
+**Option 2: Include Specific Paths** (recommended for high-security services)
+
+```toml
+[jwt]
+secret = "your-secret-key"
+algorithm = "RS256"
+
+# ONLY these routes require authentication (all others are public)
+include_paths = [
+    "/api/v1/*",
+    "/admin/*"
+]
+```
+
+With this config:
+- ✅ `/health` → Public (not in include list)
+- ✅ `/docs` → Public (not in include list)
+- ❌ `/api/v1/users` → Protected (matches include pattern)
+- ❌ `/admin/settings` → Protected (matches include pattern)
+
+### Code-Based Protection (Per-Route)
+
+For fine-grained control, apply JWT middleware only to specific routes:
+
+```rust
+use acton_service::middleware::JwtAuthLayer;
+
+// Public routes (no authentication)
+let public_routes = Router::new()
+    .route("/login", post(login))
+    .route("/register", post(register))
+    .route("/health", get(health));
+
+// Protected routes (authentication required)
+let protected_routes = Router::new()
+    .route("/users", get(list_users))
+    .route("/profile", get(get_profile))
+    .layer(JwtAuthLayer::new(jwt_config));  // Apply JWT only here
+
+// Combine routes
+let app = Router::new()
+    .merge(public_routes)
+    .merge(protected_routes);
+```
+
+### Health Checks and JWT
+
+{% callout type="note" title="Health Endpoints Always Public" %}
+The `/health` and `/ready` endpoints are **automatically excluded** from JWT authentication, even if not in your `exclude_paths`. They must remain public for Kubernetes liveness/readiness probes to work.
+{% /callout %}
+
+### Common Public Endpoints
+
+Typically exclude from authentication:
+- `/health`, `/ready` - Health checks (automatic)
+- `/login`, `/register`, `/reset-password` - Authentication endpoints
+- `/docs`, `/openapi.json` - API documentation
+- `/public/*` - Public assets, terms of service, privacy policy
+- `/webhooks/*` - Third-party webhook endpoints (use different auth)
+
 ## Supported Algorithms
 
 The JWT authentication middleware supports industry-standard signing algorithms:
