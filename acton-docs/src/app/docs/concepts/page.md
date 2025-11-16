@@ -44,7 +44,7 @@ let app = Router::new()
 
 When you see `Router`, `get()`, `post()`, handler functions - **these come from Axum**. acton-service wraps Axum's router in `VersionedRoutes` to enforce versioning and adds automatic features via `ServiceBuilder`.
 
-**Think of it as:** `acton-service = Axum + production best practices + type enforcement`
+**Think of it as:** `acton-service = Axum + opinionated patterns + type enforcement`
 
 ---
 

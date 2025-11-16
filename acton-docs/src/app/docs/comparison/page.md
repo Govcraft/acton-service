@@ -15,6 +15,10 @@ Start with the [homepage](/) to understand what acton-service is, then explore [
 
 How acton-service compares to popular Rust web frameworks and other ecosystems.
 
+{% callout type="note" title="Comparison Scope" %}
+This comparison reflects default framework capabilities as of November 2024. Features may be available through third-party crates, plugins, or custom implementation. Framework ecosystems evolve rapidly - verify current capabilities for your use case.
+{% /callout %}
+
 ## Quick Comparison Table
 
 | Feature | acton-service | Axum | Actix-Web | Rocket |
@@ -70,7 +74,7 @@ async fn main() {
 - **Consistency**: You're building multiple microservices
 
 ```rust
-// acton-service: Best practices enforced
+// acton-service: Type-enforced patterns
 use acton_service::prelude::*;
 
 #[tokio::main]
@@ -97,13 +101,13 @@ async fn main() -> Result<()> {
 
 ### vs Actix-Web
 
-**Actix-Web** is a mature, high-performance framework with its own runtime.
+**Actix-Web** is a mature framework with its own actor-based runtime.
 
 #### When to use Actix-Web
 
-- **Performance**: High-performance framework with its own runtime
-- **Mature ecosystem**: Lots of middleware and extensions
-- **Actor model**: You want actor-based concurrency
+- **Actor model**: You want actor-based concurrency patterns
+- **Mature ecosystem**: Extensive middleware and extensions available
+- **Own runtime**: Prefer Actix runtime over tokio
 - **Flexibility**: Need framework flexibility with good defaults
 
 ```rust
@@ -272,48 +276,42 @@ async fn main() -> Result<()> {
 ## Performance Considerations
 
 {% callout type="note" %}
-Performance depends heavily on your application logic, workload patterns, and infrastructure. All these frameworks are capable of high performance for typical web service use cases.
-{% /callout %}
-
-**General observations**:
-- **acton-service** is built on Axum and adds minimal overhead for its abstractions
-- **Axum** and **Actix-Web** are known for low-latency request handling
-- **Rocket** prioritizes developer ergonomics over raw performance
-- For most applications, the bottleneck will be your business logic, database queries, and external API calls rather than the framework itself
+Performance depends heavily on your application logic, workload patterns, and infrastructure. For most applications, bottlenecks are typically in business logic, database queries, and external API calls rather than the web framework itself.
 
 Benchmark your specific use case if performance is critical to your requirements.
+{% /callout %}
 
 ---
 
 ## When to Choose Each
 
-### Choose acton-service if:
-- ✅ Building production microservices at scale
-- ✅ Working in a team that needs enforced patterns
-- ✅ Need comprehensive out-of-the-box features
-- ✅ Want to avoid "decision fatigue" on architecture
+### Consider acton-service if:
+- ✅ Building microservices with type-enforced patterns
+- ✅ Working in a team that wants consistent patterns
+- ✅ Need built-in observability and resilience features
+- ✅ Want opinionated defaults for common concerns
 - ✅ Need both HTTP and gRPC support
-- ✅ API versioning and evolution are critical
-- ✅ You value fast time-to-production
+- ✅ API versioning and evolution are important
+- ✅ Prefer convention over configuration
 
-### Choose Axum if:
+### Consider Axum if:
 - ✅ You want maximum flexibility
 - ✅ Building something unconventional
-- ✅ You enjoy making architectural decisions
-- ✅ Need absolute minimal overhead
+- ✅ Prefer making your own architectural decisions
+- ✅ Need minimal framework overhead
 - ✅ Learning Rust web development
 
-### Choose Actix-Web if:
-- ✅ You need maximum performance
+### Consider Actix-Web if:
 - ✅ You prefer actor-based concurrency
-- ✅ You want a mature, stable framework
+- ✅ You want a mature framework
 - ✅ Large ecosystem of middleware matters
+- ✅ Using Actix runtime instead of tokio
 
-### Choose Rocket if:
-- ✅ Developer ergonomics are priority #1
+### Consider Rocket if:
+- ✅ Developer ergonomics are high priority
 - ✅ You're new to Rust web development
 - ✅ You prefer macro-based APIs
-- ✅ Building simpler web applications
+- ✅ Building web applications
 
 ---
 
@@ -422,17 +420,17 @@ Answer these questions:
 
 ## Summary
 
-**acton-service is best for**:
-- Production microservices with teams
+**acton-service suits**:
+- Microservices with team-enforced patterns
 - Services requiring both HTTP and gRPC
 - APIs that will evolve over time
-- Organizations wanting enforced best practices
-- Fast time-to-production with comprehensive features
+- Organizations wanting type-enforced versioning
+- Teams preferring opinionated frameworks
 
-**Choose alternatives when**:
+**Consider alternatives when**:
 - You need maximum flexibility (Axum)
-- You need maximum performance (Actix-Web)
-- You're learning or prototyping (Rocket)
+- You prefer actor-based concurrency (Actix-Web)
+- You're learning Rust web development (Rocket)
 - You're building something unconventional
 
 ---

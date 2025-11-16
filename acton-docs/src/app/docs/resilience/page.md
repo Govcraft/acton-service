@@ -13,7 +13,7 @@ Start with the [homepage](/) to understand what acton-service is, then explore [
 ---
 
 
-acton-service provides production-ready resilience patterns to protect your services from cascading failures, transient errors, and resource exhaustion.
+acton-service provides resilience patterns to protect your services from cascading failures, transient errors, and resource exhaustion.
 
 ## Quick Start
 

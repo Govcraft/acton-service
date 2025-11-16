@@ -12,16 +12,16 @@ The **acton-service** framework provides **type-safe API versioning** that stron
 
 ## Why Use Type-Safe Versioning?
 
-{% callout type="warning" title="The Problem with Optional Versioning" %}
-Optional versioning modules are frequently ignored by developers, leading to:
+{% callout type="warning" title="Challenges with Optional Versioning" %}
+When versioning is optional, teams may encounter:
 
 - Unversioned APIs that break consumers
 - Inconsistent versioning patterns across services
-- No deprecation headers
+- Missing deprecation headers
 - Breaking changes without warning
 {% /callout %}
 
-**The Solution**: The framework uses **Rust's type system** to enforce versioning best practices:
+**The Approach**: The framework uses **Rust's type system** to enforce versioning:
 
 - `VersionedRoutes` can ONLY be created by `VersionedApiBuilder` (opaque type with private fields)
 - `ServiceBuilder.with_routes()` is the ONLY way to use VersionedRoutes (enforced by type system)
@@ -500,9 +500,9 @@ let routes = VersionedApiBuilder::new()
 
 ---
 
-## Best Practices
+## Recommended Patterns
 
-### 1. Always Use VersionedApiBuilder + ServiceBuilder
+### 1. Use VersionedApiBuilder + ServiceBuilder
 
 The framework enforces versioned routes through the type system:
 
@@ -531,7 +531,7 @@ ServiceBuilder::new().with_routes(app).build();
 //                                  ^^^ ERROR: expected VersionedRoutes, found Router
 ```
 
-### 2. Set Sunset Dates (Recommended but Not Enforced)
+### 2. Set Sunset Dates (Recommended)
 
 Sunset dates are optional in both the implementation and the RFC standards:
 
@@ -547,7 +547,7 @@ Unlike API versioning (which the type system enforces), sunset dates are `Option
 - Sometimes deprecation is announced before a removal date is known
 - Allows gradual rollout: deprecate first, announce sunset date later
 
-**Production recommendation**: Always include sunset dates to give consumers clear migration timelines. The framework provides the field but doesn't enforce it to match RFC flexibility.
+**Recommendation**: Include sunset dates to give consumers clear migration timelines. The framework provides the field but doesn't enforce it to match RFC flexibility.
 {% /callout %}
 
 ### 3. Provide Clear Migration Messages

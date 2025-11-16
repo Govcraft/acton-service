@@ -13,7 +13,7 @@ Start with the [homepage](/) to understand what acton-service is, then explore [
 ---
 
 
-Ensure your acton-service application is production-ready with this comprehensive checklist covering security, observability, performance, and operational excellence.
+This checklist covers security, observability, performance, and operational considerations for acton-service deployments.
 
 ## Configuration Review
 

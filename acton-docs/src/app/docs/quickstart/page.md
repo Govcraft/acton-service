@@ -3,10 +3,10 @@ title: 5-Minute Quickstart
 nextjs:
   metadata:
     title: 5-Minute Quickstart
-    description: Get a production-ready microservice running in 5 minutes
+    description: Get a microservice running in 5 minutes with automatic health checks and observability
 ---
 
-Get a production-ready microservice running in 5 minutes.
+Get a microservice running in 5 minutes with automatic health checks and observability.
 
 ## Prerequisites
 
@@ -96,19 +96,19 @@ curl http://localhost:8080/ready
 
 ## What Just Happened?
 
-You just created a production-ready microservice with:
+You created a microservice with these features enabled by default:
 
-✅ **Type-enforced API versioning** - Impossible to create unversioned routes
+✅ **Type-enforced API versioning** - Compiler prevents unversioned routes
 
 ✅ **Automatic health checks** - `/health` and `/ready` endpoints for Kubernetes
 
-✅ **Automatic logging** - Structured JSON logs out of the box
+✅ **Automatic logging** - Structured JSON logs
 
-✅ **Automatic tracing** - OpenTelemetry tracing ready to go
+✅ **Automatic tracing** - OpenTelemetry tracing configured
 
-✅ **Graceful shutdown** - Proper signal handling (SIGTERM, SIGINT)
+✅ **Graceful shutdown** - Signal handling (SIGTERM, SIGINT)
 
-✅ **Zero configuration** - Works with sensible defaults
+✅ **Default configuration** - Works with sensible defaults
 
 ## What's Next?
 
@@ -198,4 +198,4 @@ A: No. If you need unversioned routes, use Axum directly. acton-service is opini
 
 ---
 
-**You're now ready to build production microservices!**
+**You're now ready to explore acton-service features.**

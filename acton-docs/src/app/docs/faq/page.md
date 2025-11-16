@@ -62,9 +62,9 @@ The entire design philosophy is built around preventing common production issues
 
 ---
 
-## Is this production-ready?
+## What's the current status?
 
-**Core features are production-ready**:
+**Version 0.2.x** - Core features have stable APIs:
 - HTTP/gRPC servers with protocol detection
 - Type-enforced API versioning
 - Health checks (liveness/readiness)
@@ -73,24 +73,24 @@ The entire design philosophy is built around preventing common production issues
 - Middleware stack (auth, rate limiting, correlation IDs)
 - Connection pooling (PostgreSQL, Redis, NATS)
 
-The framework is built on battle-tested libraries (axum, tonic, sqlx).
+The framework is built on established libraries (axum, tonic, sqlx).
 
-Some advanced CLI features are in progress. Review the [roadmap](https://github.com/Govcraft/acton-service#roadmap) and test thoroughly for your use case.
+Some advanced CLI features are in progress. Review the [roadmap](https://github.com/Govcraft/acton-service#roadmap) and test thoroughly for your use case before deploying.
 
 ---
 
 ## What's the performance overhead?
 
-**Minimal**. The framework is a thin abstraction layer over high-performance libraries (tokio, axum, tonic).
+The framework provides type-safe abstractions over high-performance libraries (tokio, axum, tonic).
 
-The type-enforced patterns are compile-time checks with **zero runtime cost**. Middleware like circuit breakers and metrics add small overhead for production safety benefits.
+Type-enforced versioning uses compile-time checks with zero runtime cost. Optional middleware (circuit breakers, metrics, authentication) adds overhead proportional to the features enabled. Performance characteristics depend primarily on:
 
-Benchmarks show:
-- HTTP routing: Near-identical to raw Axum
-- gRPC performance: Matches Tonic directly
-- Database pooling: Minimal overhead from SQLx
-- JWT validation: Sub-millisecond for most tokens
-- Cedar authorization: 1-5ms with caching, 10-50ms without
+- The underlying libraries (axum for HTTP, tonic for gRPC, sqlx for database)
+- Which middleware features you enable
+- Your application logic and workload patterns
+- Infrastructure configuration (connection pool sizes, cache settings)
+
+For performance-critical applications, benchmark your specific use case with your workload.
 
 ---
 

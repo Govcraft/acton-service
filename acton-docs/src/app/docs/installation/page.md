@@ -89,7 +89,7 @@ acton service new my-api --yes
 cd my-api && cargo run
 ```
 
-**Full-Featured Service** (with database, cache, and events):
+**With Additional Features** (database, cache, and events):
 ```bash
 acton service new user-service \
     --http \
@@ -102,8 +102,8 @@ cd user-service && cargo run
 ```
 
 The CLI generates:
-- Complete project structure with `src/main.rs`
-- Pre-configured `Cargo.toml` with selected features
+- Project structure with `src/main.rs`
+- Configured `Cargo.toml` with selected features
 - Health check endpoints (`/health`, `/ready`)
 - OpenTelemetry observability setup
 - XDG-compliant configuration scaffolding

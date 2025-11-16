@@ -13,7 +13,7 @@ Start with the [homepage](/) to understand what acton-service is, then explore [
 ---
 
 
-acton-service provides a batteries-included middleware stack designed for production microservices. All middleware works seamlessly with both HTTP and gRPC protocols.
+acton-service provides a middleware library for microservices. All middleware works with both HTTP and gRPC protocols.
 
 ## Quick Example
 

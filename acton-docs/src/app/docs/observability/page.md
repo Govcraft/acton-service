@@ -15,7 +15,7 @@ Start with the [homepage](/) to understand what acton-service is, then explore [
 
 # Observability
 
-acton-service includes a complete, production-ready observability stack built on OpenTelemetry standards. The three pillars of observability—distributed tracing, metrics collection, and structured logging—are configured out of the box with zero configuration required. Every request is automatically tracked, traced, and logged with correlation IDs for end-to-end visibility across your distributed services.
+acton-service includes an observability stack built on OpenTelemetry standards. The three pillars of observability—distributed tracing, metrics collection, and structured logging—are configured by default. Every request is automatically tracked, traced, and logged with correlation IDs for end-to-end visibility across distributed services.
 
 ---
 
