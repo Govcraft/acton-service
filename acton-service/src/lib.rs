@@ -83,6 +83,10 @@ pub mod build_utils;
 /// Prelude module for convenient imports
 pub mod prelude {
     pub use crate::config::Config;
+
+    #[cfg(feature = "cedar-authz")]
+    pub use crate::config::CedarConfig;
+
     pub use crate::error::{Error, Result};
     pub use crate::health::{health, readiness, pool_metrics};
     pub use crate::pool_health::PoolHealthSummary;
@@ -121,6 +125,15 @@ pub mod prelude {
 
     #[cfg(feature = "governor")]
     pub use crate::middleware::{GovernorConfig, RateLimitExceeded};
+
+    #[cfg(feature = "cedar-authz")]
+    pub use crate::middleware::CedarAuthz;
+
+    #[cfg(all(feature = "cedar-authz", feature = "cache"))]
+    pub use crate::middleware::{PolicyCache, RedisPolicyCache};
+
+    #[cfg(all(feature = "cedar-authz", feature = "grpc"))]
+    pub use crate::middleware::{CedarAuthzLayer, CedarAuthzService};
 
     #[cfg(feature = "observability")]
     pub use crate::observability::init_tracing;
