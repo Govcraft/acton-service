@@ -4,6 +4,8 @@
 
 Build microservices with enforced best practices, dual HTTP+gRPC support, and comprehensive observability out of the box.
 
+**📚 [Full Documentation](https://govcraft.github.io/acton-service/)** | [Quick Start](#quick-start) | [Examples](./acton-service/examples/)
+
 ---
 
 ## What is this?

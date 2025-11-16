@@ -11,7 +11,7 @@ release/
 .*/
 
 # But allow specific hidden files if needed (uncomment as needed)
-# !.github/
+!.github/
 # !.vscode/
 
 # Ignore all markdown files
@@ -24,6 +24,8 @@ release/
 !FEATURE_FLAGS.md
 !TROUBLESHOOTING.md
 !COMPARISON.md
+!acton-docs/
+!acton-docs/**/*.md
 # Add more exceptions here as needed, for example:
 # !CONTRIBUTING.md
 # !LICENSE.md
