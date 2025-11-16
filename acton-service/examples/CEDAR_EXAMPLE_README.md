@@ -12,141 +12,186 @@ This example demonstrates fine-grained, policy-based authorization using AWS Ced
 - ✅ Redis caching for policy decisions (optional but recommended)
 - ✅ Hot-reload of policy files (optional)
 - ✅ Fail-open vs fail-closed configuration
+- ✅ **Auto-setup**: Example automatically creates all necessary files!
 
-## Prerequisites
+## Quick Start
 
-### 1. Cedar Policy File
-
-Create the directory and policy file:
-
-```bash
-mkdir -p ~/.config/acton-service/cedar-authz-example
-cp examples/policies.cedar ~/.config/acton-service/cedar-authz-example/
-```
-
-### 2. JWT Public Key
-
-You need a JWT public key for RS256 algorithm. Generate one for testing:
-
-```bash
-# Generate private key
-openssl genrsa -out jwt-private.pem 2048
-
-# Extract public key
-openssl rsa -in jwt-private.pem -pubout -out ~/.config/acton-service/cedar-authz-example/jwt-public.pem
-```
-
-### 3. Configuration File
-
-Copy the example configuration:
-
-```bash
-cp examples/config.toml.example ~/.config/acton-service/cedar-authz-example/config.toml
-```
-
-Edit the config file to match your setup (especially JWT settings).
-
-### 4. Redis (Optional but Recommended)
-
-For policy decision caching, start Redis:
+### 1. Optional: Start Redis (Recommended for caching)
 
 ```bash
 docker run -d -p 6379:6379 redis:latest
 ```
 
-Or install Redis locally and start it.
-
-## Running the Example
+### 2. Run the Example
 
 ```bash
 cargo run --example cedar-authz --features cedar-authz,cache
 ```
 
-The service will start on `http://localhost:8080`.
+**That's it!** The example will:
+- ✅ Automatically create `~/.config/acton-service/cedar-authz-example/`
+- ✅ Copy Cedar policies to `policies.cedar`
+- ✅ Copy JWT public key to `jwt-public.pem`
+- ✅ Copy configuration to `config.toml`
+- ✅ Start the service on `http://localhost:8080`
+
+You'll see output like:
+```
+🔧 Setting up example files...
+   ✓ policies.cedar created
+   ✓ jwt-public.pem created
+   ✓ config.toml created
+
+🚀 Cedar Authorization Example
+================================
+```
 
 ## Testing
 
-### 1. Generate a Test JWT Token
+### Step 1: Verify Health Endpoints (No Auth Required)
 
-You can use various tools to generate JWT tokens. Here's an example using Python:
+```bash
+# Health check - should return 200 OK
+curl http://localhost:8080/health
+
+# Readiness check - should return 200 OK
+curl http://localhost:8080/ready
+```
+
+### Step 2: Test Without Authentication (Should Fail)
+
+```bash
+# Try to access documents without a token - should return 401 Unauthorized
+curl http://localhost:8080/api/v1/documents
+```
+
+### Step 3: Generate Test JWT Tokens
+
+Install PyJWT (using uv for fast installation):
+
+```bash
+# Create virtual environment and install PyJWT
+uv venv .venv
+source .venv/bin/activate
+uv pip install pyjwt cryptography
+```
+
+Generate tokens with Python:
 
 ```python
 import jwt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 
-private_key = open("jwt-private.pem").read()
+# Read the JWT private key (included in examples/)
+with open("acton-service/examples/jwt-private.pem", "r") as f:
+    private_key = f.read()
 
-payload = {
-    "sub": "user:123",  # User ID
+# Generate USER token (regular user)
+user_payload = {
+    "sub": "user:123",
     "username": "alice",
     "email": "alice@example.com",
-    "roles": ["user"],  # Try ["user", "admin"] for admin access
+    "roles": ["user"],  # Regular user role
     "perms": ["read:documents", "write:documents"],
-    "exp": datetime.utcnow() + timedelta(hours=1),
-    "iat": datetime.utcnow(),
-    "jti": "unique-token-id-123",
+    "exp": int((datetime.now(UTC) + timedelta(hours=1)).timestamp()),
+    "iat": int(datetime.now(UTC).timestamp()),
+    "jti": "test-user-token"
 }
+user_token = jwt.encode(user_payload, private_key, algorithm="RS256")
+print("USER TOKEN:")
+print(user_token)
+print()
 
-token = jwt.encode(payload, private_key, algorithm="RS256")
-print(token)
+# Generate ADMIN token (admin user)
+admin_payload = {
+    "sub": "user:456",
+    "username": "bob",
+    "email": "bob@example.com",
+    "roles": ["user", "admin"],  # Admin role
+    "perms": ["read:documents", "write:documents", "admin:all"],
+    "exp": int((datetime.now(UTC) + timedelta(hours=1)).timestamp()),
+    "iat": int(datetime.now(UTC).timestamp()),
+    "jti": "test-admin-token"
+}
+admin_token = jwt.encode(admin_payload, private_key, algorithm="RS256")
+print("ADMIN TOKEN:")
+print(admin_token)
 ```
 
-Save this token:
+Save the tokens for testing:
 
 ```bash
-export TOKEN="your-generated-token-here"
+export USER_TOKEN="<paste-user-token-here>"
+export ADMIN_TOKEN="<paste-admin-token-here>"
 ```
 
-### 2. Test Endpoints
+### Step 4: Test Cedar Authorization Policies
 
-**Health check (no auth required):**
+**Test 1: User can list documents** ✅
 ```bash
-curl http://localhost:8080/health
-```
-
-**List documents (any authenticated user):**
-```bash
-curl -H "Authorization: Bearer $TOKEN" \
+curl -H "Authorization: Bearer $USER_TOKEN" \
      http://localhost:8080/api/v1/documents
+
+# Expected: 200 OK with documents array
+# [{"id":"doc1","owner_id":"user123","title":"My Document",...},...]
 ```
 
-**Get a specific document (owner only):**
+**Test 2: User CANNOT access admin endpoint** ❌
 ```bash
-# This will succeed if the token's sub matches the user_id in the path
-curl -H "Authorization: Bearer $TOKEN" \
-     http://localhost:8080/api/v1/documents/user:123/doc1
+curl -H "Authorization: Bearer $USER_TOKEN" \
+     http://localhost:8080/api/v1/admin/users
+
+# Expected: 403 Forbidden
+# {"error":"Access denied by policy","code":"FORBIDDEN","status":403}
 ```
 
-**Create a document (any authenticated user):**
+**Test 3: Admin CAN access admin endpoint** ✅
+```bash
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+     http://localhost:8080/api/v1/admin/users
+
+# Expected: 200 OK with users array
+# [{"id":"user123","username":"alice","roles":["user"]},...]
+```
+
+**Test 4: User can create documents** ✅
 ```bash
 curl -X POST \
-     -H "Authorization: Bearer $TOKEN" \
+     -H "Authorization: Bearer $USER_TOKEN" \
      -H "Content-Type: application/json" \
-     -d '{"id":"doc3","owner_id":"user:123","title":"New Doc","content":"Content"}' \
+     -d '{"id":"doc-new","owner_id":"user123","title":"New Document","content":"Test"}' \
      http://localhost:8080/api/v1/documents
+
+# Expected: 200 OK with created document
+# {"id":"doc-new","owner_id":"user123",...}
 ```
 
-**Update a document (owner only):**
+**Test 5: Get specific document** (Ownership check)
+```bash
+curl -H "Authorization: Bearer $USER_TOKEN" \
+     http://localhost:8080/api/v1/documents/user123/doc1
+
+# Expected: 200 OK if user:123 matches the user_id in path
+```
+
+**Test 6: Update document** (Owner only)
 ```bash
 curl -X PUT \
-     -H "Authorization: Bearer $TOKEN" \
+     -H "Authorization: Bearer $USER_TOKEN" \
      -H "Content-Type: application/json" \
-     -d '{"id":"doc1","owner_id":"user:123","title":"Updated","content":"New content"}' \
-     http://localhost:8080/api/v1/documents/user:123/doc1
+     -d '{"id":"doc1","owner_id":"user123","title":"Updated","content":"New"}' \
+     http://localhost:8080/api/v1/documents/user123/doc1
+
+# Expected: 200 OK if user owns the document
 ```
 
-**Delete a document (owner or admin only):**
+**Test 7: Delete document** (Owner or admin)
 ```bash
 curl -X DELETE \
-     -H "Authorization: Bearer $TOKEN" \
-     http://localhost:8080/api/v1/documents/user:123/doc1
-```
+     -H "Authorization: Bearer $USER_TOKEN" \
+     http://localhost:8080/api/v1/documents/user123/doc1
 
-**List users (admin only):**
-```bash
-# This will fail with 403 Forbidden unless your token has "admin" role
-curl -H "Authorization: Bearer $TOKEN" \
-     http://localhost:8080/api/v1/admin/users
+# Expected: 200 OK if user owns the document
 ```
 
 ### 3. Test with Different Roles
