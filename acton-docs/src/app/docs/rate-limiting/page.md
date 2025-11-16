@@ -35,6 +35,167 @@ Rate limits are automatically applied based on JWT claims:
 
 No additional code needed. The rate limiter is automatically integrated into the middleware stack during service initialization.
 
+## Redis vs Governor: Which Should You Use?
+
+{% callout type="note" title="Decision Guide" %}
+Use **Redis** for multi-instance deployments. Use **Governor** for single-instance services or local development. The wrong choice can lead to limit multiplication or single points of failure.
+{% /callout %}
+
+### Comparison Matrix
+
+| Feature | Redis (Distributed) | Governor (Local) |
+|---------|-------------------|------------------|
+| **Use Case** | Production multi-instance | Single instance / dev |
+| **Consistency** | ✅ Shared across replicas | ❌ Per-instance only |
+| **Latency** | ~1ms (network call) | ~0.01ms (in-memory) |
+| **Dependencies** | Requires Redis server | None (built-in) |
+| **Failure Mode** | Depends on Redis availability | Always available |
+| **Persistence** | Survives restarts | Lost on restart |
+| **Complexity** | Higher (external service) | Lower (self-contained) |
+
+### Use Redis When...
+
+✅ **Running multiple service instances** (Kubernetes, Docker Swarm, load balancer)
+```
+Load Balancer
+    ├─ Service Instance 1 ──┐
+    ├─ Service Instance 2 ──┼─→ Shared Redis (100 req/min total)
+    └─ Service Instance 3 ──┘
+```
+
+✅ **Need consistent limits across replicas**
+- User makes 60 requests to Instance 1
+- User makes 40 requests to Instance 2
+- Total: 100 requests (limit enforced correctly)
+
+✅ **Production deployments with horizontal scaling**
+
+✅ **Need limits to survive service restarts**
+
+### Use Governor When...
+
+✅ **Running single instance only** (dev laptop, small internal tool)
+```
+Single Service Instance (100 req/min)
+```
+
+✅ **Local development** (no Redis dependency needed)
+
+✅ **Testing rate limiting behavior** (faster, simpler)
+
+✅ **Don't need distributed coordination**
+
+### What Happens with Wrong Choice?
+
+**Problem 1: Using Governor in Multi-Instance** (Limit Multiplication)
+```
+Load Balancer
+    ├─ Instance 1: 100 req/min ──┐
+    ├─ Instance 2: 100 req/min ──┼─→ User gets 300 req/min total!
+    └─ Instance 3: 100 req/min ──┘
+
+❌ Each instance has its own limit
+❌ User can bypass by hitting different instances
+❌ 3 instances × 100 = 300 effective limit (not 100!)
+```
+
+**Problem 2: Using Redis for Single Instance** (Unnecessary Complexity)
+```
+Single Instance ──→ Redis ──→ Extra network latency
+                  └─ Extra failure point
+                  └─ Extra infrastructure to manage
+
+❌ Adds latency for no benefit
+❌ Redis failure breaks rate limiting
+❌ More infrastructure to maintain
+```
+
+### How to Choose: Decision Tree
+
+```
+Do you run multiple instances of this service?
+│
+├─ YES → How many instances?
+│  │
+│  ├─ 2+ instances → Use Redis
+│  │                 (prevents limit multiplication)
+│  │
+│  └─ Autoscaling? → Use Redis
+│                    (instance count varies)
+│
+└─ NO → Single instance confirmed?
+   │
+   ├─ YES, always 1 instance → Use Governor
+   │                           (simpler, faster)
+   │
+   └─ Might scale later → Use Redis now
+                          (easier to start with Redis than migrate later)
+```
+
+### Configuration Examples
+
+**Redis (Multi-Instance):**
+```toml
+[redis]
+url = "redis://redis-cluster:6379"
+pool_size = 10
+
+[rate_limit]
+backend = "redis"        # Distributed rate limiting
+per_user_rpm = 100       # 100 total across all instances
+per_client_rpm = 1000
+```
+
+**Governor (Single-Instance):**
+```toml
+[rate_limit]
+backend = "governor"     # In-memory rate limiting
+per_user_rpm = 100       # 100 per this instance
+per_client_rpm = 1000
+```
+
+### Migration Path
+
+**Starting with Governor, need to scale:**
+
+1. Add Redis to infrastructure
+2. Update config to use Redis backend
+3. Restart service
+4. Scale to multiple instances
+
+No code changes needed - just configuration.
+
+### When Limits Feel Wrong
+
+**Symptom:** "I set 100 req/min but users can make 300 requests!"
+
+**Diagnosis:**
+```bash
+# Check how many instances are running
+kubectl get pods -l app=my-service
+
+# If you see 3 pods and using Governor:
+# 3 instances × 100 req/min = 300 effective limit
+```
+
+**Fix:** Switch to Redis backend for distributed coordination.
+
+**Symptom:** "Rate limiting is slow and sometimes fails"
+
+**Diagnosis:**
+```bash
+# Check if Redis is reachable
+redis-cli ping
+
+# Check latency
+redis-cli --latency
+```
+
+**Fix:**
+- If Redis is down, check Redis deployment
+- If latency is high, consider Redis location (same datacenter)
+- If single instance, consider switching to Governor
+
 ## Redis-Backed Rate Limiting
 
 Redis-backed rate limiting is essential for multi-instance deployments where consistent limits must apply across all service replicas.
