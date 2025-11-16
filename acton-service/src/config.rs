@@ -52,6 +52,11 @@ pub struct Config {
     /// gRPC configuration (optional)
     #[serde(default)]
     pub grpc: Option<GrpcConfig>,
+
+    /// Cedar authorization configuration (optional)
+    #[cfg(feature = "cedar-authz")]
+    #[serde(default)]
+    pub cedar: Option<CedarConfig>,
 }
 
 /// Service-level configuration
@@ -335,6 +340,53 @@ impl GrpcConfig {
     /// Get request timeout as Duration
     pub fn timeout(&self) -> Duration {
         Duration::from_secs(self.timeout_secs)
+    }
+}
+
+/// Cedar authorization configuration
+#[cfg(feature = "cedar-authz")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CedarConfig {
+    /// Enable Cedar authorization
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+
+    /// Path to Cedar policy file
+    pub policy_path: PathBuf,
+
+    /// Enable policy hot-reload (watch file for changes)
+    #[serde(default = "default_false")]
+    pub hot_reload: bool,
+
+    /// Hot-reload check interval in seconds
+    #[serde(default = "default_cedar_hot_reload_interval")]
+    pub hot_reload_interval_secs: u64,
+
+    /// Enable policy caching (requires cache feature)
+    #[serde(default = "default_true")]
+    pub cache_enabled: bool,
+
+    /// Policy cache TTL in seconds
+    #[serde(default = "default_cedar_policy_cache_ttl")]
+    pub cache_ttl_secs: u64,
+
+    /// Fail open on policy evaluation errors
+    /// - true: Allow requests when policy evaluation fails (permissive)
+    /// - false: Deny requests when policy evaluation fails (strict)
+    #[serde(default = "default_false")]
+    pub fail_open: bool,
+}
+
+#[cfg(feature = "cedar-authz")]
+impl CedarConfig {
+    /// Get hot-reload interval as Duration
+    pub fn hot_reload_interval(&self) -> Duration {
+        Duration::from_secs(self.hot_reload_interval_secs)
+    }
+
+    /// Get cache TTL as Duration
+    pub fn cache_ttl(&self) -> Duration {
+        Duration::from_secs(self.cache_ttl_secs)
     }
 }
 
@@ -692,6 +744,17 @@ fn default_proto_dir() -> String {
     "proto".to_string()
 }
 
+// Cedar default functions
+#[cfg(feature = "cedar-authz")]
+fn default_cedar_hot_reload_interval() -> u64 {
+    60 // Check every 60 seconds
+}
+
+#[cfg(feature = "cedar-authz")]
+fn default_cedar_policy_cache_ttl() -> u64 {
+    300 // Cache for 5 minutes
+}
+
 impl Config {
     /// Load configuration from all sources
     ///
@@ -902,6 +965,8 @@ impl Default for Config {
             nats: None,
             otlp: None,
             grpc: None,
+            #[cfg(feature = "cedar-authz")]
+            cedar: None,
         }
     }
 }

@@ -13,6 +13,9 @@ pub mod metrics;
 #[cfg(feature = "governor")]
 pub mod governor;
 
+#[cfg(feature = "cedar-authz")]
+pub mod cedar;
+
 pub use jwt::{Claims, JwtAuth};
 
 #[cfg(feature = "cache")]
@@ -31,3 +34,12 @@ pub use metrics::{MetricsConfig, metric_labels, metric_names};
 
 #[cfg(feature = "governor")]
 pub use governor::{GovernorConfig, RateLimitExceeded};
+
+#[cfg(feature = "cedar-authz")]
+pub use cedar::CedarAuthz;
+
+#[cfg(all(feature = "cedar-authz", feature = "cache"))]
+pub use cedar::{PolicyCache, RedisPolicyCache};
+
+#[cfg(all(feature = "cedar-authz", feature = "grpc"))]
+pub use cedar::{CedarAuthzLayer, CedarAuthzService};

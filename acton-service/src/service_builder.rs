@@ -242,9 +242,55 @@ impl ServiceBuilder {
             }
         };
 
-        // Apply middleware stack based on configuration
+        // Apply general middleware stack (CORS, compression, timeout, TraceLayer, etc.)
         // Layers are applied in reverse order (bottom layer is innermost/first)
-        let app = Self::apply_middleware(app, &config);
+        let mut app = Self::apply_middleware(app, &config);
+
+        // Auto-apply Cedar middleware if configured and enabled
+        // NOTE: Cedar must be applied BEFORE JWT because Axum layers run in reverse order
+        // This ensures the execution order is: Request → General Middleware → JWT → Cedar → Handler
+        #[cfg(feature = "cedar-authz")]
+        if let Some(ref cedar_config) = config.cedar {
+            if cedar_config.enabled {
+                match tokio::runtime::Handle::try_current() {
+                    Ok(_handle) => {
+                        // Use block_in_place to avoid nested runtime error
+                        match tokio::task::block_in_place(|| {
+                            tokio::runtime::Handle::current().block_on(async {
+                                crate::middleware::cedar::CedarAuthz::new(cedar_config.clone()).await
+                            })
+                        }) {
+                            Ok(cedar_authz) => {
+                                tracing::debug!("Auto-applying Cedar authorization middleware");
+                                app = app.layer(axum::middleware::from_fn_with_state(
+                                    cedar_authz,
+                                    crate::middleware::cedar::CedarAuthz::middleware,
+                                ));
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to initialize Cedar middleware: {}", e);
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        tracing::warn!("No tokio runtime available for Cedar initialization");
+                    }
+                }
+            }
+        }
+
+        // Auto-apply JWT middleware if configured
+        // NOTE: JWT must be applied AFTER Cedar because Axum layers run in reverse order
+        // This ensures the execution order is: Request → General Middleware → JWT → Cedar → Handler
+        if let Ok(jwt_auth) = crate::middleware::jwt::JwtAuth::new(&config.jwt) {
+            tracing::debug!("Auto-applying JWT authentication middleware");
+            app = app.layer(axum::middleware::from_fn_with_state(
+                jwt_auth,
+                crate::middleware::jwt::JwtAuth::middleware,
+            ));
+        } else {
+            tracing::warn!("JWT configuration invalid, skipping JWT middleware");
+        }
 
         let listener_addr = std::net::SocketAddr::from(([0, 0, 0, 0], config.service.port));
 
