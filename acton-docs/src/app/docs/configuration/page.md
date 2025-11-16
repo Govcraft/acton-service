@@ -244,26 +244,260 @@ optional = true
 lazy_init = true
 ```
 
+### Understanding lazy_init
+
+{% callout type="note" title="Default Behavior" %}
+By default, `lazy_init = true` makes services start immediately while connecting to dependencies in the background. This prevents slow dependencies from blocking your service startup.
+{% /callout %}
+
+**The Problem lazy_init Solves:**
+
+Without lazy initialization, a slow database connection can block service startup for 30+ seconds:
+
+```bash
+# Without lazy_init (blocking startup)
+2024-01-01 10:00:00 INFO Starting service
+2024-01-01 10:00:00 INFO Connecting to database...
+[30 second pause while waiting for database]
+2024-01-01 10:00:30 INFO Database connected
+2024-01-01 10:00:30 INFO Service ready on port 8080
+```
+
+With lazy_init enabled (default), service starts immediately:
+
+```bash
+# With lazy_init=true (non-blocking)
+2024-01-01 10:00:00 INFO Starting service
+2024-01-01 10:00:00 INFO Database connection starting in background
+2024-01-01 10:00:00 INFO Service ready on port 8080  ← Started immediately!
+2024-01-01 10:00:05 INFO Database connected successfully
+```
+
 ### Configuration Options
 
-- **`max_retries`**: Maximum number of connection attempts (default: 5)
-- **`retry_delay_secs`**: Base delay between retries in seconds (default: 2)
-  - Uses exponential backoff: delay = base_delay × 2^(attempt-1)
-- **`optional`**: Whether the dependency is optional (default: false)
-  - `true`: Service starts even if connection fails
-  - `false`: Service fails to start if connection fails (in eager mode)
-- **`lazy_init`**: Whether to initialize connection in background (default: true)
-  - `true`: Service starts immediately, connects in background with retries
-  - `false`: Service waits for connection before starting (blocks startup)
+**`lazy_init`** - Connection initialization strategy (default: `true`)
+- **`true`** (recommended): Service starts immediately, connections happen in background
+- **`false`**: Service waits for all connections before starting (blocks startup)
 
-### Operation Modes
+**When startup begins:**
+```rust
+lazy_init = true  → Service binds port, accepts requests immediately
+                    Connections attempt in background with retries
 
-| `lazy_init` | `optional` | Behavior |
-|-------------|-----------|----------|
-| `true` | `true` | **Recommended for HA**: Starts immediately, connects in background, continues if connection fails |
-| `true` | `false` | Starts immediately, connects in background, reports degraded if connection fails |
-| `false` | `true` | Blocks startup, retries connection, continues if all retries fail |
-| `false` | `false` | **Strict mode**: Blocks startup, fails if connection cannot be established |
+lazy_init = false → Service waits for connection before binding port
+                    Retries happen during startup (blocks)
+```
+
+**`optional`** - Dependency requirement level (default: `false`)
+- **`true`**: Service can operate without this dependency (degrades gracefully)
+- **`false`**: Dependency is required for service operation
+
+**When connection fails:**
+```rust
+optional = true  → Service continues running (degraded state)
+                   `/health` → 200 (alive)
+                   `/ready` → 503 (not ready)
+
+optional = false → Depends on lazy_init:
+                   lazy_init=true  → Service runs but reports degraded
+                   lazy_init=false → Service fails to start
+```
+
+**`max_retries`** - Maximum connection attempts (default: `5`)
+- Number of times to retry connection before giving up
+- Applies during both startup and background initialization
+
+**`retry_delay_secs`** - Base delay between retries (default: `2` seconds)
+- Uses exponential backoff: delay = base_delay × 2^(attempt-1)
+- Example with base=2: 2s, 4s, 8s, 16s, 32s
+
+### Operation Modes (Detailed)
+
+| `lazy_init` | `optional` | Startup Behavior | Connection Failure | `/health` | `/ready` | Use Case |
+|-------------|-----------|------------------|-------------------|-----------|----------|----------|
+| `true` | `true` | ✅ Starts immediately | Continues running | 200 OK | 503 Degraded | **Production HA** |
+| `true` | `false` | ✅ Starts immediately | Reports degraded | 200 OK | 503 Degraded | Production with dependencies |
+| `false` | `true` | ⏸️ Waits, then continues | Continues running | 200 OK | 200 OK | Eager connection, graceful fallback |
+| `false` | `false` | ⏸️ Waits or fails | Startup fails | - | - | **Strict mode** (dev/testing) |
+
+### Example Scenarios
+
+**Scenario 1: Production HA (Recommended)**
+
+```toml
+[database]
+url = "postgres://db-cluster/mydb"
+lazy_init = true    # Start immediately
+optional = true     # Continue if DB unavailable
+max_retries = 10    # Keep trying
+retry_delay_secs = 3
+```
+
+**Timeline:**
+```
+00:00 - Service starts immediately, binds port 8080
+00:00 - /health → 200 OK (service alive)
+00:00 - /ready → 503 (database not connected yet)
+00:00 - Background: Attempting database connection (1/10)
+00:03 - Background: Retry (2/10) - Database still unavailable
+00:09 - Background: Retry (3/10) - Database still unavailable
+00:21 - Background: Connection succeeded!
+00:21 - /ready → 200 OK (fully ready)
+```
+
+**During connection attempts, requests using database:**
+```rust
+GET /api/v1/users → 503 Service Unavailable
+{
+  "error": "Database unavailable",
+  "status": 503,
+  "retry_after": 5
+}
+```
+
+**After connection succeeds:**
+```rust
+GET /api/v1/users → 200 OK
+[...]
+```
+
+**Scenario 2: Strict Startup (Development)**
+
+```toml
+[database]
+url = "postgres://localhost:5432/dev"
+lazy_init = false   # Wait for connection
+optional = false    # Must connect or fail
+max_retries = 3
+retry_delay_secs = 1
+```
+
+**Timeline if database is down:**
+```
+00:00 - Service starting...
+00:00 - Attempting database connection (1/3)
+00:01 - Retry (2/3) - Failed
+00:03 - Retry (3/3) - Failed
+00:07 - ERROR: Failed to connect to required dependency: database
+00:07 - Service exits with error code 1
+```
+
+Service never starts if database is unavailable.
+
+**Scenario 3: Mixed Dependencies**
+
+```toml
+[database]
+lazy_init = true
+optional = false    # Database required
+
+[cache]
+lazy_init = true
+optional = true     # Cache optional (can continue without it)
+
+[events]
+lazy_init = false
+optional = false    # Events required, must connect at startup
+```
+
+**Timeline:**
+```
+00:00 - Service starting...
+00:00 - Events: Waiting for connection... (blocks startup)
+00:02 - Events: Connected
+00:02 - Service starts, binds port
+00:02 - Database: Connecting in background
+00:02 - Cache: Connecting in background
+00:02 - /health → 200 OK
+00:02 - /ready → 503 (database and cache not ready)
+00:05 - Database: Connected
+00:05 - /ready → 503 (cache still connecting)
+00:08 - Cache: Connection failed (optional=true, continues)
+00:08 - /ready → 200 OK (database ready, cache optional)
+```
+
+### What You See in Logs
+
+**lazy_init=true (background connection):**
+```
+INFO  Starting service
+DEBUG Initializing database pool (lazy)
+INFO  HTTP server listening on 0.0.0.0:8080
+INFO  Background task: Connecting to database
+DEBUG Database connection attempt 1/5
+INFO  Database pool established
+INFO  Service fully ready
+```
+
+**lazy_init=false (blocking startup):**
+```
+INFO  Starting service
+DEBUG Initializing database pool (eager)
+INFO  Connecting to database...
+DEBUG Database connection attempt 1/5
+INFO  Database pool established
+INFO  HTTP server listening on 0.0.0.0:8080
+INFO  Service ready
+```
+
+### Best Practices
+
+**Production Services (Recommended):**
+```toml
+lazy_init = true    # Fast startup
+optional = true     # Graceful degradation
+max_retries = 10    # Keep trying
+```
+
+**Development/Testing:**
+```toml
+lazy_init = false   # Catch connection issues early
+optional = false    # Fail fast if dependencies missing
+max_retries = 3     # Quick feedback
+```
+
+**When to use lazy_init=false:**
+- Local development (want immediate feedback if database is down)
+- Integration tests (want tests to fail if dependencies unavailable)
+- Services that can't operate at all without dependencies (no degraded mode)
+
+**When to use lazy_init=true:**
+- Production deployments (fast startup, health checks pass quickly)
+- Kubernetes deployments (liveness probes succeed during rolling updates)
+- Services with multiple dependencies (don't want one slow dep blocking everything)
+
+### Common Mistakes
+
+**❌ Mistake 1: lazy_init=false with optional=true in Kubernetes**
+```toml
+lazy_init = false
+optional = true
+```
+Problem: Startup can be slow (30s+) waiting for connection attempts, causing liveness probe failures.
+
+**✅ Fix:**
+```toml
+lazy_init = true   # Start immediately
+optional = true
+```
+
+**❌ Mistake 2: lazy_init=true without handling unavailable dependencies**
+```rust
+// Assumes database is always available
+async fn get_user(State(state): State<AppState>) -> User {
+    let db = state.db().await.unwrap();  // ← Panics if not connected!
+    // ...
+}
+```
+
+**✅ Fix:**
+```rust
+async fn get_user(State(state): State<AppState>) -> Result<User, AppError> {
+    let db = state.db().await
+        .ok_or(AppError::ServiceUnavailable("Database unavailable"))?;
+    // ...
+}
+```
 
 ---
 
