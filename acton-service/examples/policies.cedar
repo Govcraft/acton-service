@@ -40,10 +40,13 @@ permit(
 );
 
 // =============================================================================
-// Document Access Policies (Ownership-based)
+// Document Access Policies (Permission-based)
 // =============================================================================
 
-// Users can access their own documents (read, update, delete)
+// Users with document permissions can access documents
+// Note: For ownership-based access (checking if user owns a specific document),
+// you would need to implement custom resource extraction in your application.
+// This generic framework supports authorization based on roles, permissions, and actions.
 permit(
     principal,
     action in [
@@ -54,8 +57,8 @@ permit(
     resource
 )
 when {
-    // The principal's sub claim must match the resource owner
-    principal.sub == resource.owner_id
+    // Users with document write permission can access documents
+    principal.permissions.contains("write:documents")
 };
 
 // =============================================================================
