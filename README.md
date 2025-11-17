@@ -28,7 +28,7 @@ It's opinionated, comprehensive, and designed for teams where best practices can
 
 ---
 
-**🚀 New to acton-service?** Start with the **[5-Minute Quickstart](./QUICKSTART.md)** or follow the **[Complete Tutorial](./TUTORIAL.md)** to build your first service.
+**🚀 New to acton-service?** Start with the **[5-Minute Quickstart](https://govcraft.github.io/acton-service/docs/quickstart)** or follow the **[Complete Tutorial](https://govcraft.github.io/acton-service/docs/tutorial)** to build your first service.
 
 ---
 
@@ -526,25 +526,34 @@ Design principles:
 
 ## Documentation
 
+📚 **[Full Documentation Site](https://govcraft.github.io/acton-service/)** - Complete guides, API reference, and examples
+
 ### Getting Started
 
-- **[QUICKSTART.md](./QUICKSTART.md)** - Get a service running in 5 minutes
-- **[TUTORIAL.md](./TUTORIAL.md)** - Complete step-by-step guide to building a production service
-- **[FEATURE_FLAGS.md](./FEATURE_FLAGS.md)** - Decision tree for choosing the right features
-- **[COMPARISON.md](./COMPARISON.md)** - How acton-service compares to Axum, Actix-Web, and others
+- **[Quickstart](https://govcraft.github.io/acton-service/docs/quickstart)** - Get a service running in 5 minutes
+- **[Tutorial](https://govcraft.github.io/acton-service/docs/tutorial)** - Complete step-by-step guide to building a production service
+- **[Installation](https://govcraft.github.io/acton-service/docs/installation)** - Setup and feature selection
+- **[Feature Flags](https://govcraft.github.io/acton-service/docs/feature-flags)** - Decision tree for choosing the right features
+- **[Comparison](https://govcraft.github.io/acton-service/docs/comparison)** - How acton-service compares to Axum, Actix-Web, and others
 
 ### Guides
 
-- [Configuration Guide](./acton-service/CONFIG.md) - Environment and file-based configuration
-- [API Versioning](./acton-service/docs/API_VERSIONING.md) - Type-safe versioning patterns
-- [Health Endpoints](./HEALTH_ENDPOINTS_GUIDE.md) - Kubernetes liveness and readiness
-- [Cedar Authorization](./acton-service/examples/CEDAR_EXAMPLE_README.md) - Policy-based access control with AWS Cedar
+- **[Configuration](https://govcraft.github.io/acton-service/docs/configuration)** - Environment and file-based configuration
+- **[API Versioning](https://govcraft.github.io/acton-service/docs/api-versioning)** - Type-safe versioning patterns
+- **[Health Checks](https://govcraft.github.io/acton-service/docs/health-checks)** - Kubernetes liveness and readiness
+- **[Database](https://govcraft.github.io/acton-service/docs/database)** - PostgreSQL integration with SQLx
+- **[JWT Authentication](https://govcraft.github.io/acton-service/docs/jwt-auth)** - Authentication patterns
+- **[Cedar Authorization](https://govcraft.github.io/acton-service/docs/cedar-auth)** - Policy-based access control
+- **[Observability](https://govcraft.github.io/acton-service/docs/observability)** - Metrics, tracing, and logging
+- **[Production Deployment](https://govcraft.github.io/acton-service/docs/production)** - Production best practices
 
 ### Reference
 
-- [Examples](./acton-service/examples/) - Complete working examples
-- [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) - Common issues and solutions
-- API documentation: `cargo doc --open`
+- **[Examples](https://govcraft.github.io/acton-service/docs/examples)** - Complete working examples
+- **[Troubleshooting](https://govcraft.github.io/acton-service/docs/troubleshooting)** - Common issues and solutions
+- **[FAQ](https://govcraft.github.io/acton-service/docs/faq)** - Frequently asked questions
+- **[Glossary](https://govcraft.github.io/acton-service/docs/glossary)** - Technical term definitions
+- **API Documentation**: `cargo doc --open`
 
 ## Performance
 
