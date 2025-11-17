@@ -10,6 +10,10 @@ nextjs:
 Start with the [homepage](/) to understand what acton-service is, then explore [Core Concepts](/docs/concepts) for foundational explanations. See the [Glossary](/docs/glossary) for technical term definitions.
 {% /callout %}
 
+{% callout type="warning" title="Experimental - Active Development" %}
+The Acton CLI is currently experimental and under active development. Breaking changes should be expected between releases. APIs, command structure, and generated code patterns may change without prior notice.
+{% /callout %}
+
 ---
 
 
