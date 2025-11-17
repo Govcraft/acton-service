@@ -4,6 +4,7 @@ export const navigation = [
     links: [
       { title: 'What is acton-service?', href: '/' },
       { title: 'Quickstart', href: '/docs/quickstart' },
+      { title: 'Tutorial', href: '/docs/tutorial' },
       { title: 'Installation', href: '/docs/installation' },
       { title: 'Feature Comparison', href: '/docs/comparison' },
     ],
