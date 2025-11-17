@@ -78,14 +78,14 @@ const nodes = {
   link: {
     ...defaultNodes.link,
     transform(node, config) {
-      let attributes = node.transformAttributes(config)
       const children = node.transformChildren(config)
 
-      // Handle variable interpolation in href
-      // Markdoc variables are available in config.variables
-      if (attributes.href && typeof attributes.href === 'string') {
+      // Process href before transformAttributes to handle variable interpolation
+      let href = node.attributes.href
+
+      if (href && typeof href === 'string') {
         // Replace {% $variable.path %} with actual values from config.variables
-        attributes.href = attributes.href.replace(/\{%\s*\$([a-zA-Z0-9._]+)\s*%\}/g, (match, path) => {
+        href = href.replace(/\{%\s*\$([a-zA-Z0-9._]+)\s*%\}/g, (match, path) => {
           const parts = path.split('.')
           let value = config.variables
 
@@ -97,15 +97,21 @@ const nodes = {
             }
           }
 
-          return value || match
+          return value !== undefined ? value : match
         })
+
+        // Add basePath to internal links when in GitHub Actions
+        if (href.startsWith('/') && !href.startsWith('//')) {
+          const basePath = process.env.GITHUB_ACTIONS ? '/acton-service' : ''
+          href = basePath + href
+        }
       }
 
-      // Add basePath to internal links when in GitHub Actions
-      if (attributes.href && attributes.href.startsWith('/') && !attributes.href.startsWith('//')) {
-        const basePath = process.env.GITHUB_ACTIONS ? '/acton-service' : ''
-        attributes.href = basePath + attributes.href
-      }
+      // Now transform other attributes normally
+      const attributes = node.transformAttributes(config)
+
+      // Override href with our processed version
+      attributes.href = href
 
       return new Tag('a', attributes, children)
     },

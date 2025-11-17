@@ -2,6 +2,17 @@ import { Callout } from '@/components/Callout'
 import { QuickLink, QuickLinks } from '@/components/QuickLinks'
 
 const tags = {
+  link: {
+    attributes: {
+      href: { type: String, required: true },
+      title: { type: String },
+    },
+    render: ({ href, title, children }) => (
+      <a href={href} title={title}>
+        {children}
+      </a>
+    ),
+  },
   callout: {
     attributes: {
       title: { type: String },
