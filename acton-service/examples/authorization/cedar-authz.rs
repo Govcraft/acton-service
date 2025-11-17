@@ -115,14 +115,14 @@ fn setup_example_files() -> Result<()> {
     // Copy policy file (always overwrite to get latest changes)
     let policy_dest = config_dir.join("policies.cedar");
     let policy_src = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("examples/policies.cedar");
+        .join("examples/authorization/policies.cedar");
     std::fs::copy(&policy_src, &policy_dest)?;
 
     // Copy JWT public key (idempotent)
     let jwt_dest = config_dir.join("jwt-public.pem");
     if !jwt_dest.exists() {
         let jwt_src = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("examples/jwt-public.pem");
+            .join("examples/authorization/jwt-public.pem");
         std::fs::copy(&jwt_src, &jwt_dest)?;
     }
 
@@ -191,7 +191,7 @@ async fn main() -> Result<()> {
     println!();
     println!("Custom path normalizer: Handles alphanumeric IDs (user123, doc1)");
     println!();
-    println!("See examples/CEDAR_EXAMPLE_README.md for testing instructions.");
+    println!("See examples/authorization/README.md for testing instructions.");
     println!();
     println!("Starting server on http://localhost:8080");
     println!();
