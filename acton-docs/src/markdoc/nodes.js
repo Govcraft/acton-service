@@ -78,8 +78,28 @@ const nodes = {
   link: {
     ...defaultNodes.link,
     transform(node, config) {
-      const attributes = node.transformAttributes(config)
+      let attributes = node.transformAttributes(config)
       const children = node.transformChildren(config)
+
+      // Handle variable interpolation in href
+      // Markdoc variables are available in config.variables
+      if (attributes.href && typeof attributes.href === 'string') {
+        // Replace {% $variable.path %} with actual values from config.variables
+        attributes.href = attributes.href.replace(/\{%\s*\$([a-zA-Z0-9._]+)\s*%\}/g, (match, path) => {
+          const parts = path.split('.')
+          let value = config.variables
+
+          for (const part of parts) {
+            if (value && typeof value === 'object') {
+              value = value[part]
+            } else {
+              return match // Return original if path not found
+            }
+          }
+
+          return value || match
+        })
+      }
 
       // Add basePath to internal links when in GitHub Actions
       if (attributes.href && attributes.href.startsWith('/') && !attributes.href.startsWith('//')) {

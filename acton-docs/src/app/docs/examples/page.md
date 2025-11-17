@@ -13,7 +13,7 @@ Start with the [homepage](/) to understand what acton-service is, then explore [
 ---
 
 
-Browse complete, runnable examples showing how to build different types of services with acton-service. All examples are organized by category in the [`examples/`](https://github.com/Govcraft/acton-service/tree/main/acton-service/examples) directory.
+Browse complete, runnable examples showing how to build different types of services with acton-service. All examples are organized by category in the [`examples/`]({% $github.repositoryUrl %}/tree/main/acton-service/examples) directory.
 
 ---
 
@@ -23,7 +23,7 @@ Examples are organized by feature and complexity. **New to acton-service?** Star
 
 ### 📚 Basic Examples {#basic-examples}
 
-**Directory**: [`examples/basic/`](https://github.com/Govcraft/acton-service/tree/main/acton-service/examples/basic)
+**Directory**: [`examples/basic/`]({% $github.repositoryUrl %}/tree/main/acton-service/examples/basic)
 
 Simple getting-started examples demonstrating core functionality:
 
@@ -89,13 +89,13 @@ cargo run --manifest-path=acton-service/Cargo.toml --example ping-pong --feature
 
 **Best for**: First-time users, understanding basic patterns
 
-[📖 View Basic Examples README](https://github.com/Govcraft/acton-service/blob/main/acton-service/examples/basic/README.md)
+[📖 View Basic Examples README]({% $github.repositoryUrl %}/tree/main/acton-service/examples/basic/README.md)
 
 ---
 
 ### 🔐 Authorization {#authorization}
 
-**Directory**: [`examples/authorization/`](https://github.com/Govcraft/acton-service/tree/main/acton-service/examples/authorization)
+**Directory**: [`examples/authorization/`]({% $github.repositoryUrl %}/tree/main/acton-service/examples/authorization)
 
 Fine-grained access control using AWS Cedar policies.
 
@@ -120,13 +120,13 @@ Features auto-setup with:
 
 **Best for**: Implementing RBAC or attribute-based access control
 
-[📖 View Authorization README](https://github.com/Govcraft/acton-service/blob/main/acton-service/examples/authorization/README.md) for detailed setup, testing instructions, and policy explanations.
+[📖 View Authorization README]({% $github.repositoryUrl %}/tree/main/acton-service/examples/authorization/README.md) for detailed setup, testing instructions, and policy explanations.
 
 ---
 
 ### 🔌 gRPC Examples {#grpc}
 
-**Directory**: [`examples/grpc/`](https://github.com/Govcraft/acton-service/tree/main/acton-service/examples/grpc)
+**Directory**: [`examples/grpc/`]({% $github.repositoryUrl %}/tree/main/acton-service/examples/grpc)
 
 gRPC service integration patterns.
 
@@ -156,13 +156,13 @@ grpcurl -plaintext -d '{"name": "world"}' localhost:8080 hello.HelloService/SayH
 
 **Best for**: Services needing both REST and gRPC interfaces
 
-[📖 View gRPC Examples README](https://github.com/Govcraft/acton-service/blob/main/acton-service/examples/grpc/README.md)
+[📖 View gRPC Examples README]({% $github.repositoryUrl %}/tree/main/acton-service/examples/grpc/README.md)
 
 ---
 
 ### 📨 Event-Driven Architecture {#events}
 
-**Directory**: [`examples/events/`](https://github.com/Govcraft/acton-service/tree/main/acton-service/examples/events)
+**Directory**: [`examples/events/`]({% $github.repositoryUrl %}/tree/main/acton-service/examples/events)
 
 Event bus patterns and asynchronous communication.
 
@@ -187,13 +187,13 @@ HTTP Client → REST API → Event Bus → gRPC Service → Business Logic
 
 **Best for**: Decoupled microservices, async message processing
 
-[📖 View Events README](https://github.com/Govcraft/acton-service/blob/main/acton-service/examples/events/README.md)
+[📖 View Events README]({% $github.repositoryUrl %}/tree/main/acton-service/examples/events/README.md)
 
 ---
 
 ### 📊 Observability {#observability}
 
-**Directory**: [`examples/observability/`](https://github.com/Govcraft/acton-service/tree/main/acton-service/examples/observability)
+**Directory**: [`examples/observability/`]({% $github.repositoryUrl %}/tree/main/acton-service/examples/observability)
 
 Metrics, tracing, and monitoring integration.
 
@@ -222,13 +222,13 @@ Demonstrates:
 
 **Best for**: Production monitoring, debugging, performance analysis
 
-[📖 View Observability README](https://github.com/Govcraft/acton-service/blob/main/acton-service/examples/observability/README.md)
+[📖 View Observability README]({% $github.repositoryUrl %}/tree/main/acton-service/examples/observability/README.md)
 
 ---
 
 ### 📋 Templates {#templates}
 
-**Directory**: [`examples/templates/`](https://github.com/Govcraft/acton-service/tree/main/acton-service/examples/templates)
+**Directory**: [`examples/templates/`]({% $github.repositoryUrl %}/tree/main/acton-service/examples/templates)
 
 Configuration and build templates for new projects.
 
@@ -244,7 +244,7 @@ cp examples/templates/build.rs.example build.rs
 
 **Best for**: Starting a new project, understanding all configuration options
 
-[📖 View Templates README](https://github.com/Govcraft/acton-service/blob/main/acton-service/examples/templates/README.md)
+[📖 View Templates README]({% $github.repositoryUrl %}/tree/main/acton-service/examples/templates/README.md)
 
 ---
 
