@@ -13,11 +13,23 @@ Start with the [homepage](/) to understand what acton-service is, then explore [
 ---
 
 
-Browse complete, runnable examples showing how to build different types of services with acton-service.
+Browse complete, runnable examples showing how to build different types of services with acton-service. All examples are organized by category in the [`examples/`]({% $github.repositoryUrl %}/tree/main/acton-service/examples) directory.
 
-## Minimal HTTP Service
+---
 
-The simplest possible REST API with type-enforced versioning.
+## Example Categories
+
+Examples are organized by feature and complexity. **New to acton-service?** Start with [Basic Examples](#basic-examples).
+
+### 📚 Basic Examples {#basic-examples}
+
+**Directory**: [`examples/basic/`]({% $github.repositoryUrl %}/tree/main/acton-service/examples/basic)
+
+Simple getting-started examples demonstrating core functionality:
+
+#### **simple-api.rs** - Zero-Configuration Versioned API
+
+The simplest possible service with automatic health checks.
 
 ```rust
 use acton_service::prelude::*;
@@ -43,189 +55,257 @@ async fn main() -> Result<()> {
 }
 ```
 
-This creates a service with:
-- Health endpoints at `/health` and `/ready`
-- API endpoint at `/api/v1/hello`
-- Automatic observability and tracing
-- Production-ready defaults
+Demonstrates:
+- Automatic configuration loading
+- Type-safe API versioning
+- Auto-generated health endpoints (`/health`, `/ready`)
+- Built-in tracing and logging
+
+```bash
+cargo run --manifest-path=acton-service/Cargo.toml --example simple-api
+```
+
+#### **users-api.rs** - Multi-Version API Evolution
+
+Shows how to manage multiple API versions with deprecation headers.
+
+Demonstrates:
+- Multiple API versions (V1, V2, V3)
+- Automatic deprecation warnings
+- API evolution patterns
+- Breaking change management
+
+```bash
+cargo run --manifest-path=acton-service/Cargo.toml --example users-api
+```
+
+#### **ping-pong.rs** - Simple Request/Response
+
+Minimal service template for basic HTTP endpoints.
+
+```bash
+cargo run --manifest-path=acton-service/Cargo.toml --example ping-pong --features grpc
+```
+
+**Best for**: First-time users, understanding basic patterns
+
+[📖 View Basic Examples README]({% $github.repositoryUrl %}/tree/main/acton-service/examples/basic/README.md)
 
 ---
 
-## Production Service with Database
+### 🔐 Authorization {#authorization}
 
-A complete CRUD API with PostgreSQL connection pooling and error handling.
+**Directory**: [`examples/authorization/`]({% $github.repositoryUrl %}/tree/main/acton-service/examples/authorization)
 
-```rust
-use acton_service::prelude::*;
+Fine-grained access control using AWS Cedar policies.
 
-#[derive(Serialize)]
-struct User {
-    id: i64,
-    name: String,
-}
+#### **cedar-authz.rs** - Policy-Based Authorization
 
-async fn list_users(State(state): State<AppState>) -> Result<Json<Vec<User>>> {
-    let db = state.database()?;
-    let users = sqlx::query_as!(User, "SELECT id, name FROM users")
-        .fetch_all(db)
-        .await?;
-    Ok(Json(users))
-}
+Complete example with JWT authentication + Cedar authorization.
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let routes = VersionedApiBuilder::new()
-        .with_base_path("/api")
-        .add_version(ApiVersion::V1, |router| {
-            router.route("/users", get(list_users))
-        })
-        .build_routes();
+Demonstrates:
+- Role-based access control (admin vs user)
+- Resource ownership patterns
+- JWT + Cedar integration
+- Optional Redis caching for policy decisions
 
-    ServiceBuilder::new()
-        .with_routes(routes)
-        .build()
-        .serve()
-        .await
-}
+```bash
+cargo run --manifest-path=acton-service/Cargo.toml --example cedar-authz --features cedar-authz,cache
 ```
 
-Configuration in `~/.config/acton-service/my-service/config.toml`:
+Features auto-setup with:
+- `policies.cedar` - Policy definitions
+- `jwt-public.pem` - JWT validation key
+- `config.toml` - Service configuration
 
-```toml
-[service]
-name = "my-service"
-port = 8080
+**Best for**: Implementing RBAC or attribute-based access control
 
-[database]
-url = "postgres://localhost/mydb"
-max_connections = 50
-```
-
-Features:
-- Automatic database connection pooling
-- Health checks verify database connectivity
-- Retry logic on connection failures
-- Structured error handling
+[📖 View Authorization README]({% $github.repositoryUrl %}/tree/main/acton-service/examples/authorization/README.md) for detailed setup, testing instructions, and policy explanations.
 
 ---
 
-## Event-Driven Service
+### 🔌 gRPC Examples {#grpc}
 
-Background worker processing NATS JetStream events.
+**Directory**: [`examples/grpc/`]({% $github.repositoryUrl %}/tree/main/acton-service/examples/grpc)
 
-```rust
-use acton_service::prelude::*;
+gRPC service integration patterns.
 
-async fn process_event(msg: async_nats::Message) -> Result<()> {
-    let payload: serde_json::Value = serde_json::from_slice(&msg.payload)?;
-    info!("Processing event: {:?}", payload);
-    Ok(())
-}
+#### **single-port.rs** - HTTP + gRPC on One Port
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let config = Config::load()?;
-    init_tracing(&config)?;
+Run both REST and gRPC on a single port with automatic protocol detection.
 
-    let state = AppState::builder()
-        .config(config.clone())
-        .build()
-        .await?;
+Demonstrates:
+- Dual-protocol support on port 8080
+- Automatic routing based on content-type
+- gRPC (`application/grpc`) → tonic services
+- All other requests → axum HTTP handlers
 
-    let nats = state.nats()?;
-    let mut subscriber = nats.subscribe("events.>").await?;
-
-    while let Some(msg) = subscriber.next().await {
-        if let Err(e) = process_event(msg).await {
-            error!("Event processing failed: {}", e);
-        }
-    }
-
-    Ok(())
-}
+```bash
+cargo run --manifest-path=acton-service/Cargo.toml --example single-port --features grpc
 ```
 
-Use cases:
-- Asynchronous message processing
-- Event-driven microservices
-- Background job processing
-- Distributed system integration
+Test HTTP:
+```bash
+curl http://localhost:8080/api/v1/hello
+```
+
+Test gRPC:
+```bash
+grpcurl -plaintext -d '{"name": "world"}' localhost:8080 hello.HelloService/SayHello
+```
+
+**Best for**: Services needing both REST and gRPC interfaces
+
+[📖 View gRPC Examples README]({% $github.repositoryUrl %}/tree/main/acton-service/examples/grpc/README.md)
 
 ---
 
-## Example Repository
+### 📨 Event-Driven Architecture {#events}
 
-The [`examples/`](https://github.com/Govcraft/acton-service/tree/main/acton-service/examples) directory contains complete working examples:
+**Directory**: [`examples/events/`]({% $github.repositoryUrl %}/tree/main/acton-service/examples/events)
 
-### Simple Versioned API
-**File**: `simple-api.rs`
+Event bus patterns and asynchronous communication.
 
-Demonstrates basic API versioning with multiple versions and deprecation notices.
+#### **event-driven.rs** - HTTP API + gRPC with Event Bus
 
-```bash
-cargo run --example simple-api
-```
+Recommended architecture: HTTP publishes events, gRPC consumes them.
 
-### User Management API
-**File**: `users-api.rs`
-
-Full CRUD API showing version deprecation, database integration, and migration paths.
+Demonstrates:
+- HTTP REST API (port 8080) publishing events
+- gRPC service (port 9090) consuming events
+- Decoupled microservice communication
+- Async event processing
 
 ```bash
-cargo run --example users-api
+cargo run --manifest-path=acton-service/Cargo.toml --example event-driven --features grpc
 ```
 
-### Dual-Protocol Service
-**File**: `ping-pong.rs`
+Architecture:
+```
+HTTP Client → REST API → Event Bus → gRPC Service → Business Logic
+```
 
-HTTP and gRPC on the same port with automatic protocol detection.
+**Best for**: Decoupled microservices, async message processing
+
+[📖 View Events README]({% $github.repositoryUrl %}/tree/main/acton-service/examples/events/README.md)
+
+---
+
+### 📊 Observability {#observability}
+
+**Directory**: [`examples/observability/`]({% $github.repositoryUrl %}/tree/main/acton-service/examples/observability)
+
+Metrics, tracing, and monitoring integration.
+
+#### **test-metrics.rs** - Prometheus Metrics
+
+Prometheus metrics collection and custom metric definitions.
 
 ```bash
-cargo run --example ping-pong --features grpc
+cargo run --manifest-path=acton-service/Cargo.toml --example test-metrics --features otel-metrics
+curl http://localhost:8080/metrics
 ```
 
-### Event-Driven Architecture
-**File**: `event-driven.rs`
+#### **test-observability.rs** - OpenTelemetry Tracing
 
-NATS JetStream integration for pub/sub messaging patterns.
+Distributed tracing setup with OpenTelemetry.
 
 ```bash
-cargo run --example event-driven --features grpc
+cargo run --manifest-path=acton-service/Cargo.toml --example test-observability --features observability
 ```
 
-### Cedar Authorization
-**File**: `cedar-authz.rs`
+Demonstrates:
+- OpenTelemetry initialization
+- Span creation and propagation
+- Integration with Jaeger/Zipkin
+- Structured logging correlation
 
-Policy-based authorization with fine-grained access control.
+**Best for**: Production monitoring, debugging, performance analysis
+
+[📖 View Observability README]({% $github.repositoryUrl %}/tree/main/acton-service/examples/observability/README.md)
+
+---
+
+### 📋 Templates {#templates}
+
+**Directory**: [`examples/templates/`]({% $github.repositoryUrl %}/tree/main/acton-service/examples/templates)
+
+Configuration and build templates for new projects.
+
+- **config.toml.example** - Complete service configuration template
+- **build.rs.example** - Build script for proto compilation
+
+Use these as starting points for your own services:
 
 ```bash
-cargo run --example cedar-authz --features cedar-authz,cache
+cp examples/templates/config.toml.example config.toml
+cp examples/templates/build.rs.example build.rs
 ```
 
-See the [Cedar Example Guide](https://github.com/Govcraft/acton-service/blob/main/acton-service/examples/CEDAR_EXAMPLE_README.md) for detailed documentation on implementing policy-based authorization.
+**Best for**: Starting a new project, understanding all configuration options
+
+[📖 View Templates README]({% $github.repositoryUrl %}/tree/main/acton-service/examples/templates/README.md)
 
 ---
 
 ## Running Examples
 
-All examples can be run from the repository root:
+All examples run from the repository root with updated paths:
 
 ```bash
 # Basic examples
-cargo run --example simple-api
-cargo run --example users-api
+cargo run --manifest-path=acton-service/Cargo.toml --example simple-api
+cargo run --manifest-path=acton-service/Cargo.toml --example users-api
+cargo run --manifest-path=acton-service/Cargo.toml --example ping-pong --features grpc
 
-# Examples requiring feature flags
-cargo run --example ping-pong --features grpc
-cargo run --example event-driven --features grpc
-cargo run --example cedar-authz --features cedar-authz,cache
+# Authorization (requires features)
+cargo run --manifest-path=acton-service/Cargo.toml --example cedar-authz --features cedar-authz,cache
+
+# gRPC (requires features)
+cargo run --manifest-path=acton-service/Cargo.toml --example single-port --features grpc
+
+# Events (requires features)
+cargo run --manifest-path=acton-service/Cargo.toml --example event-driven --features grpc
+
+# Observability (requires features)
+cargo run --manifest-path=acton-service/Cargo.toml --example test-metrics --features otel-metrics
+cargo run --manifest-path=acton-service/Cargo.toml --example test-observability --features observability
 ```
 
-Each example includes:
-- Complete source code
-- Configuration file templates
-- Test requests you can copy/paste
-- Inline documentation explaining key concepts
+---
+
+## Feature Flags for Examples
+
+Some examples require specific feature flags:
+
+| Feature | Required For | Description |
+|---------|-------------|-------------|
+| `cedar-authz` | Authorization examples | AWS Cedar policy authorization |
+| `cache` | Cedar with caching | Redis caching for policy decisions |
+| `grpc` | gRPC examples | tonic gRPC server support |
+| `otel-metrics` | test-metrics | OpenTelemetry metrics collection |
+| `observability` | test-observability | OpenTelemetry tracing |
+
+---
+
+## Learning Path
+
+Recommended order for exploring acton-service:
+
+1. **Start**: [simple-api.rs](#basic-examples) - Understand basic service setup
+2. **Versioning**: [users-api.rs](#basic-examples) - Learn API version management
+3. **Authorization**: [cedar-authz.rs](#authorization) - Add access control
+4. **Advanced**: Explore [gRPC](#grpc), [events](#events), and [observability](#observability) as needed
+
+---
+
+## Example Structure
+
+Each category includes:
+- **README.md** - Detailed category documentation
+- **Complete source code** - Runnable examples
+- **Inline documentation** - Code comments explaining key concepts
+- **Test commands** - Copy/paste curl/grpcurl commands
 
 ---
 

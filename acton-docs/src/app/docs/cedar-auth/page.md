@@ -26,7 +26,7 @@ acton-service integrates AWS Cedar for declarative, policy-based authorization. 
 ## Quick Start
 
 ```bash
-cargo run --example cedar-authz --features cedar-authz,cache
+cargo run --manifest-path=acton-service/Cargo.toml --example cedar-authz --features cedar-authz,cache
 ```
 
 The example automatically creates configuration files in `~/.config/acton-service/cedar-authz-example/`:

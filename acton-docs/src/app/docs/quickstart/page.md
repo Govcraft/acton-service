@@ -160,13 +160,13 @@ git clone https://github.com/Govcraft/acton-service
 cd acton-service
 
 # Run the simple API example
-cargo run --example simple-api
+cargo run --manifest-path=acton-service/Cargo.toml --example simple-api
 
 # Run the users API example (shows deprecation)
-cargo run --example users-api
+cargo run --manifest-path=acton-service/Cargo.toml --example users-api
 
 # Run the dual HTTP+gRPC example
-cargo run --example ping-pong --features grpc
+cargo run --manifest-path=acton-service/Cargo.toml --example ping-pong --features grpc
 ```
 
 ## Common First Questions

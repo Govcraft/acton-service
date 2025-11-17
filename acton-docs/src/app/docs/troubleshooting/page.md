@@ -451,7 +451,7 @@ let users = sqlx::query_as!(User, "SELECT id, name FROM users")
 
 ```bash
 # From acton-service repository root
-cargo run --example simple-api
+cargo run --manifest-path=acton-service/Cargo.toml --example simple-api
 
 # Not from acton-service/ subdirectory
 ```

@@ -29,7 +29,7 @@ If you need maximum flexibility, use the underlying libraries directly. If you w
 
 Yes! This is a core feature. acton-service provides automatic protocol detection allowing HTTP and gRPC to share a single port, or you can configure separate ports if preferred.
 
-See the [`ping-pong` example](https://github.com/Govcraft/acton-service/blob/main/acton-service/examples/ping-pong.rs) for a complete demonstration.
+See the [`ping-pong` example](https://github.com/Govcraft/acton-service/blob/main/acton-service/examples/basic/ping-pong.rs) for a complete demonstration.
 
 ---
 

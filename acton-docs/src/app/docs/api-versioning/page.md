@@ -740,9 +740,11 @@ package myservice.v2;
 ## Examples
 
 See the following examples in the acton-service repository:
-- `examples/users-api.rs` - Basic versioned API with multiple endpoint handlers
-- `examples/simple-api.rs` - Simple API with basic routing patterns
-- `examples/cedar-authz.rs` - Versioned API with authorization
+- `examples/basic/users-api.rs` - Multi-version API demonstrating version evolution and deprecation
+- `examples/basic/simple-api.rs` - Zero-configuration versioned API with automatic health checks
+- `examples/authorization/cedar-authz.rs` - Versioned API with JWT authentication and Cedar authorization
+
+For more examples, see the [Examples page](/docs/examples).
 
 ---
 
