@@ -13,7 +13,7 @@ Start with the [homepage](/) to understand what acton-service is, then explore [
 ---
 
 
-Browse complete, runnable examples showing how to build different types of services with acton-service. All examples are organized by category in the [examples/]({% $github.repositoryUrl %}/tree/main/acton-service/examples) directory.
+Browse complete, runnable examples showing how to build different types of services with acton-service. All examples are organized by category in the {% link baseUrl=$github.repositoryUrl path="/tree/main/acton-service/examples" %}examples/{% /link %} directory.
 
 ---
 
@@ -23,7 +23,7 @@ Examples are organized by feature and complexity. **New to acton-service?** Star
 
 ### 📚 Basic Examples {#basic-examples}
 
-**Directory**: [examples/basic/]({% $github.repositoryUrl %}/tree/main/acton-service/examples/basic)
+**Directory**: {% link baseUrl=$github.repositoryUrl path="/tree/main/acton-service/examples/basic" %}examples/basic/{% /link %}
 
 Simple getting-started examples demonstrating core functionality:
 
@@ -89,13 +89,13 @@ cargo run --manifest-path=acton-service/Cargo.toml --example ping-pong --feature
 
 **Best for**: First-time users, understanding basic patterns
 
-[📖 View Basic Examples README]({% $github.repositoryUrl %}/tree/main/acton-service/examples/basic/README.md)
+{% link baseUrl=$github.repositoryUrl path="/tree/main/acton-service/examples/basic/README.md" %}📖 View Basic Examples README{% /link %}
 
 ---
 
 ### 🔐 Authorization {#authorization}
 
-**Directory**: [examples/authorization/]({% $github.repositoryUrl %}/tree/main/acton-service/examples/authorization)
+**Directory**: {% link baseUrl=$github.repositoryUrl path="/tree/main/acton-service/examples/authorization" %}examples/authorization/{% /link %}
 
 Fine-grained access control using AWS Cedar policies.
 
@@ -120,13 +120,13 @@ Features auto-setup with:
 
 **Best for**: Implementing RBAC or attribute-based access control
 
-[📖 View Authorization README]({% $github.repositoryUrl %}/tree/main/acton-service/examples/authorization/README.md) for detailed setup, testing instructions, and policy explanations.
+{% link baseUrl=$github.repositoryUrl path="/tree/main/acton-service/examples/authorization/README.md" %}📖 View Authorization README{% /link %} for detailed setup, testing instructions, and policy explanations.
 
 ---
 
 ### 🔌 gRPC Examples {#grpc}
 
-**Directory**: [examples/grpc/]({% $github.repositoryUrl %}/tree/main/acton-service/examples/grpc)
+**Directory**: {% link baseUrl=$github.repositoryUrl path="/tree/main/acton-service/examples/grpc" %}examples/grpc/{% /link %}
 
 gRPC service integration patterns.
 
@@ -156,13 +156,13 @@ grpcurl -plaintext -d '{"name": "world"}' localhost:8080 hello.HelloService/SayH
 
 **Best for**: Services needing both REST and gRPC interfaces
 
-[📖 View gRPC Examples README]({% $github.repositoryUrl %}/tree/main/acton-service/examples/grpc/README.md)
+{% link baseUrl=$github.repositoryUrl path="/tree/main/acton-service/examples/grpc/README.md" %}📖 View gRPC Examples README{% /link %}
 
 ---
 
 ### 📨 Event-Driven Architecture {#events}
 
-**Directory**: [examples/events/]({% $github.repositoryUrl %}/tree/main/acton-service/examples/events)
+**Directory**: {% link baseUrl=$github.repositoryUrl path="/tree/main/acton-service/examples/events" %}examples/events/{% /link %}
 
 Event bus patterns and asynchronous communication.
 
@@ -187,13 +187,13 @@ HTTP Client → REST API → Event Bus → gRPC Service → Business Logic
 
 **Best for**: Decoupled microservices, async message processing
 
-[📖 View Events README]({% $github.repositoryUrl %}/tree/main/acton-service/examples/events/README.md)
+{% link baseUrl=$github.repositoryUrl path="/tree/main/acton-service/examples/events/README.md" %}📖 View Events README{% /link %}
 
 ---
 
 ### 📊 Observability {#observability}
 
-**Directory**: [examples/observability/]({% $github.repositoryUrl %}/tree/main/acton-service/examples/observability)
+**Directory**: {% link baseUrl=$github.repositoryUrl path="/tree/main/acton-service/examples/observability" %}examples/observability/{% /link %}
 
 Metrics, tracing, and monitoring integration.
 
@@ -222,13 +222,13 @@ Demonstrates:
 
 **Best for**: Production monitoring, debugging, performance analysis
 
-[📖 View Observability README]({% $github.repositoryUrl %}/tree/main/acton-service/examples/observability/README.md)
+{% link baseUrl=$github.repositoryUrl path="/tree/main/acton-service/examples/observability/README.md" %}📖 View Observability README{% /link %}
 
 ---
 
 ### 📋 Templates {#templates}
 
-**Directory**: [examples/templates/]({% $github.repositoryUrl %}/tree/main/acton-service/examples/templates)
+**Directory**: {% link baseUrl=$github.repositoryUrl path="/tree/main/acton-service/examples/templates" %}examples/templates/{% /link %}
 
 Configuration and build templates for new projects.
 
@@ -244,7 +244,7 @@ cp examples/templates/build.rs.example build.rs
 
 **Best for**: Starting a new project, understanding all configuration options
 
-[📖 View Templates README]({% $github.repositoryUrl %}/tree/main/acton-service/examples/templates/README.md)
+{% link baseUrl=$github.repositoryUrl path="/tree/main/acton-service/examples/templates/README.md" %}📖 View Templates README{% /link %}
 
 ---
 

@@ -4,14 +4,21 @@ import { QuickLink, QuickLinks } from '@/components/QuickLinks'
 const tags = {
   link: {
     attributes: {
-      href: { type: String, required: true },
+      href: { type: String },
+      baseUrl: { type: String },
+      path: { type: String },
       title: { type: String },
     },
-    render: ({ href, title, children }) => (
-      <a href={href} title={title}>
-        {children}
-      </a>
-    ),
+    render: ({ href, baseUrl, path, title, children }) => {
+      // Support either direct href or baseUrl + path combination
+      const finalHref = href || (baseUrl && path ? baseUrl + path : baseUrl || path)
+
+      return (
+        <a href={finalHref} title={title}>
+          {children}
+        </a>
+      )
+    },
   },
   callout: {
     attributes: {
