@@ -1,0 +1,53 @@
+changelog:
+  exclude:
+    labels:
+      - ignore-for-release
+      - duplicate
+      - invalid
+      - wontfix
+    authors:
+      - dependabot
+  categories:
+    - title: 🚀 Features
+      labels:
+        - enhancement
+        - feature
+      rules:
+        - type: feat
+    - title: 🐛 Bug Fixes
+      labels:
+        - bug
+        - fix
+      rules:
+        - type: fix
+    - title: 📚 Documentation
+      labels:
+        - documentation
+      rules:
+        - type: docs
+    - title: 🔧 Maintenance
+      labels:
+        - chore
+        - dependencies
+      rules:
+        - type: chore
+        - type: build
+        - type: ci
+    - title: ⚡ Performance
+      labels:
+        - performance
+      rules:
+        - type: perf
+    - title: ♻️ Refactoring
+      labels:
+        - refactor
+      rules:
+        - type: refactor
+    - title: ✅ Tests
+      labels:
+        - test
+      rules:
+        - type: test
+    - title: Other Changes
+      labels:
+        - "*"
