@@ -1,16 +1,15 @@
 import { Callout } from '@/components/Callout'
-import { Link } from '@/components/Link'
 import { QuickLink, QuickLinks } from '@/components/QuickLinks'
 
 const tags = {
   link: {
+    render: 'a',
     attributes: {
-      href: { type: String },
-      baseUrl: { type: String },
-      path: { type: String },
+      href: { type: String, required: true },
       title: { type: String },
+      target: { type: String },
+      rel: { type: String },
     },
-    render: Link,
   },
   callout: {
     attributes: {

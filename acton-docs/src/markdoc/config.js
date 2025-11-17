@@ -24,6 +24,13 @@ const config = {
         }
         return buildDep(features)
       }
+    },
+    // Function to build GitHub URLs
+    githubUrl: {
+      transform(parameters) {
+        const path = parameters[0] || ''
+        return siteConfig.repositoryUrl + path
+      }
     }
   },
   variables: {
