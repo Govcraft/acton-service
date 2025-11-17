@@ -75,6 +75,21 @@ const nodes = {
       return new Tag(this.render, attributes, [content])
     },
   },
+  link: {
+    ...defaultNodes.link,
+    transform(node, config) {
+      const attributes = node.transformAttributes(config)
+      const children = node.transformChildren(config)
+
+      // Add basePath to internal links when in GitHub Actions
+      if (attributes.href && attributes.href.startsWith('/') && !attributes.href.startsWith('//')) {
+        const basePath = process.env.GITHUB_ACTIONS ? '/acton-service' : ''
+        attributes.href = basePath + attributes.href
+      }
+
+      return new Tag('a', attributes, children)
+    },
+  },
 }
 
 export default nodes
