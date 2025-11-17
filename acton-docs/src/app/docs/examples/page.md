@@ -13,7 +13,7 @@ Start with the [homepage](/) to understand what acton-service is, then explore [
 ---
 
 
-Browse complete, runnable examples showing how to build different types of services with acton-service. All examples are organized by category in the [`examples/`]({% $github.repositoryUrl %}/tree/main/acton-service/examples) directory.
+Browse complete, runnable examples showing how to build different types of services with acton-service. All examples are organized by category in the [examples/]({% $github.repositoryUrl %}/tree/main/acton-service/examples) directory.
 
 ---
 
@@ -23,7 +23,7 @@ Examples are organized by feature and complexity. **New to acton-service?** Star
 
 ### 📚 Basic Examples {#basic-examples}
 
-**Directory**: [`examples/basic/`]({% $github.repositoryUrl %}/tree/main/acton-service/examples/basic)
+**Directory**: [examples/basic/]({% $github.repositoryUrl %}/tree/main/acton-service/examples/basic)
 
 Simple getting-started examples demonstrating core functionality:
 
@@ -95,7 +95,7 @@ cargo run --manifest-path=acton-service/Cargo.toml --example ping-pong --feature
 
 ### 🔐 Authorization {#authorization}
 
-**Directory**: [`examples/authorization/`]({% $github.repositoryUrl %}/tree/main/acton-service/examples/authorization)
+**Directory**: [examples/authorization/]({% $github.repositoryUrl %}/tree/main/acton-service/examples/authorization)
 
 Fine-grained access control using AWS Cedar policies.
 
@@ -126,7 +126,7 @@ Features auto-setup with:
 
 ### 🔌 gRPC Examples {#grpc}
 
-**Directory**: [`examples/grpc/`]({% $github.repositoryUrl %}/tree/main/acton-service/examples/grpc)
+**Directory**: [examples/grpc/]({% $github.repositoryUrl %}/tree/main/acton-service/examples/grpc)
 
 gRPC service integration patterns.
 
@@ -162,7 +162,7 @@ grpcurl -plaintext -d '{"name": "world"}' localhost:8080 hello.HelloService/SayH
 
 ### 📨 Event-Driven Architecture {#events}
 
-**Directory**: [`examples/events/`]({% $github.repositoryUrl %}/tree/main/acton-service/examples/events)
+**Directory**: [examples/events/]({% $github.repositoryUrl %}/tree/main/acton-service/examples/events)
 
 Event bus patterns and asynchronous communication.
 
@@ -193,7 +193,7 @@ HTTP Client → REST API → Event Bus → gRPC Service → Business Logic
 
 ### 📊 Observability {#observability}
 
-**Directory**: [`examples/observability/`]({% $github.repositoryUrl %}/tree/main/acton-service/examples/observability)
+**Directory**: [examples/observability/]({% $github.repositoryUrl %}/tree/main/acton-service/examples/observability)
 
 Metrics, tracing, and monitoring integration.
 
@@ -228,7 +228,7 @@ Demonstrates:
 
 ### 📋 Templates {#templates}
 
-**Directory**: [`examples/templates/`]({% $github.repositoryUrl %}/tree/main/acton-service/examples/templates)
+**Directory**: [examples/templates/]({% $github.repositoryUrl %}/tree/main/acton-service/examples/templates)
 
 Configuration and build templates for new projects.
 
