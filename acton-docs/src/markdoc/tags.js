@@ -1,4 +1,5 @@
 import { Callout } from '@/components/Callout'
+import { Link } from '@/components/Link'
 import { QuickLink, QuickLinks } from '@/components/QuickLinks'
 
 const tags = {
@@ -9,16 +10,7 @@ const tags = {
       path: { type: String },
       title: { type: String },
     },
-    render: ({ href, baseUrl, path, title, children }) => {
-      // Support either direct href or baseUrl + path combination
-      const finalHref = href || (baseUrl && path ? baseUrl + path : baseUrl || path)
-
-      return (
-        <a href={finalHref} title={title}>
-          {children}
-        </a>
-      )
-    },
+    render: Link,
   },
   callout: {
     attributes: {
