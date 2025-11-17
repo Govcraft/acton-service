@@ -4,7 +4,7 @@
 
 Build microservices with enforced best practices, dual HTTP+gRPC support, and comprehensive observability out of the box.
 
-**📚 [Full Documentation](https://govcraft.github.io/acton-service/)** | [Quick Start](#quick-start) | [Examples](./acton-service/examples/)
+**📚 [Full Documentation](https://govcraft.github.io/acton-service/)** | [Quick Start](#quick-start) | [Examples](https://govcraft.github.io/acton-service/docs/examples)
 
 ---
 
@@ -457,13 +457,13 @@ async fn main() -> Result<()> {
 }
 ```
 
-See the [`examples/`](./acton-service/examples) directory for complete examples including:
+See the [Examples documentation](https://govcraft.github.io/acton-service/docs/examples) for complete examples including:
 
-- Simple versioned API - [`simple-api.rs`](./acton-service/examples/simple-api.rs)
-- User management API with deprecation - [`users-api.rs`](./acton-service/examples/users-api.rs)
-- Dual-protocol HTTP + gRPC - [`ping-pong.rs`](./acton-service/examples/ping-pong.rs)
-- Event-driven architecture - [`event-driven.rs`](./acton-service/examples/event-driven.rs)
-- Cedar policy-based authorization - [`cedar-authz.rs`](./acton-service/examples/cedar-authz.rs) | [Guide](./acton-service/examples/CEDAR_EXAMPLE_README.md)
+- Simple versioned API - [`simple-api.rs`](./acton-service/examples/basic/simple-api.rs)
+- User management API with deprecation - [`users-api.rs`](./acton-service/examples/basic/users-api.rs)
+- Dual-protocol HTTP + gRPC - [`ping-pong.rs`](./acton-service/examples/basic/ping-pong.rs)
+- Event-driven architecture - [`event-driven.rs`](./acton-service/examples/events/event-driven.rs)
+- Cedar policy-based authorization - [`cedar-authz.rs`](./acton-service/examples/authorization/cedar-authz.rs) | [Guide](./acton-service/examples/authorization/README.md)
 
 Run examples:
 
@@ -672,7 +672,7 @@ async fn create_user(Json(user): Json<User>) -> impl IntoResponse {
 }
 ```
 
-See the [examples directory](./acton-service/examples/) for complete migration examples.
+See the [Examples documentation](https://govcraft.github.io/acton-service/docs/examples) for complete migration examples.
 
 ## Roadmap
 
