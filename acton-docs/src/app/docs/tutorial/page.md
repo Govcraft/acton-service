@@ -129,7 +129,7 @@ curl http://localhost:8080/health
 # Output: {"status":"healthy"}
 ```
 
-{% callout type="success" title="Success!" %}
+{% callout type="note" title="Success!" %}
 You now have a running microservice with automatic health checks enabled by default.
 {% /callout %}
 
