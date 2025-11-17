@@ -19,11 +19,7 @@ release/
 
 # Exception: Allow specific markdown files
 !README.md
-!QUICKSTART.md
 !TUTORIAL.md
-!FEATURE_FLAGS.md
-!TROUBLESHOOTING.md
-!COMPARISON.md
 !acton-docs/
 !acton-docs/**/*.md
 # Add more exceptions here as needed, for example:
