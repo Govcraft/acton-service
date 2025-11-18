@@ -19,7 +19,7 @@ acton-service provides a **batteries-included, type-enforced framework** where p
 - **Cedar policy-based authorization** - AWS Cedar integration for fine-grained access control
 - **Production observability** - OpenTelemetry tracing, metrics, and structured logging built-in
 - **Resilience patterns** - Circuit breaker, retry logic, and bulkhead patterns included
-- **Zero-config defaults** - XDG-compliant configuration with sensible production defaults
+- **Zero-config defaults** - XDG-compliant configuration with sensible production defaults and custom config extensions
 - **Kubernetes-ready** - Automatic health/readiness probes for orchestration
 
 It's opinionated, comprehensive, and designed for teams where best practices can't be optional.
@@ -129,7 +129,7 @@ acton-service provides a **comprehensive, opinionated framework** where producti
 3. **Production resilience patterns** - Circuit breaker, exponential backoff retry, and bulkhead middleware included ✅
 4. **Automatic health endpoints** - Kubernetes-ready liveness and readiness probes with dependency monitoring ✅
 5. **Type-enforced API versioning** - The compiler prevents unversioned APIs; impossible to bypass ✅
-6. **Zero-config defaults** - XDG-compliant configuration with sensible defaults and environment variable overrides ✅
+6. **Zero-config defaults** - XDG-compliant configuration with sensible defaults, environment variable overrides, and custom config extensions ✅
 7. **Batteries-included middleware** - JWT auth, Cedar policy-based authorization, rate limiting, request tracking, compression, CORS, timeouts ✅
 8. **Connection pool management** - PostgreSQL, Redis, and NATS support with automatic retry and health checks ✅
 
@@ -319,6 +319,25 @@ ACTON_SERVICE_PORT=9090 cargo run
 ~/.config/acton-service/my-service/config.toml
 ```
 
+**Custom Config Extensions**: Extend the framework configuration with your own application-specific fields that are automatically loaded from the same `config.toml`:
+
+```rust
+#[derive(Serialize, Deserialize, Clone, Default)]
+struct MyCustomConfig {
+    api_key: String,
+    feature_flags: HashMap<String, bool>,
+}
+
+// Framework automatically loads both framework and custom config
+ServiceBuilder::<MyCustomConfig>::new()
+    .with_routes(routes)
+    .build()
+    .serve()
+    .await
+```
+
+See the [Configuration Guide](https://govcraft.github.io/acton-service/docs/configuration#custom-configuration-extensions) for details.
+
 ## Feature Flags
 
 Enable only what you need:
@@ -462,6 +481,7 @@ See the [Examples documentation](https://govcraft.github.io/acton-service/docs/e
 - Simple versioned API - [`simple-api.rs`](./acton-service/examples/basic/simple-api.rs)
 - User management API with deprecation - [`users-api.rs`](./acton-service/examples/basic/users-api.rs)
 - Dual-protocol HTTP + gRPC - [`ping-pong.rs`](./acton-service/examples/basic/ping-pong.rs)
+- Custom configuration extensions - [`custom-config.rs`](./acton-service/examples/custom-config.rs)
 - Event-driven architecture - [`event-driven.rs`](./acton-service/examples/events/event-driven.rs)
 - Cedar policy-based authorization - [`cedar-authz.rs`](./acton-service/examples/authorization/cedar-authz.rs) | [Guide](./acton-service/examples/authorization/README.md)
 
@@ -470,6 +490,7 @@ Run examples:
 ```bash
 cargo run --example simple-api
 cargo run --example users-api
+cargo run --example custom-config
 cargo run --example ping-pong --features grpc
 cargo run --example event-driven --features grpc
 cargo run --example cedar-authz --features cedar-authz,cache
