@@ -223,6 +223,344 @@ export ACTON_SERVICE_PORT=7070
 
 ---
 
+## Custom Configuration Extensions
+
+{% callout type="note" title="New Feature" %}
+As of version 0.6.0, you can extend the framework's configuration with your own custom fields that are automatically loaded from the same `config.toml` file.
+{% /callout %}
+
+The framework's `Config` type is generic, allowing you to add application-specific configuration fields alongside the built-in framework configuration. Custom fields are seamlessly integrated using Serde's `#[serde(flatten)]` attribute.
+
+### Why Use Custom Config Extensions?
+
+**Benefits:**
+- **Single source of truth**: All config in one `config.toml` file
+- **XDG directory support**: Custom fields get same XDG path resolution as framework config
+- **Environment variable overrides**: Use `ACTON_` prefix for custom fields too
+- **Type safety**: Your custom config is strongly typed
+- **Zero boilerplate**: No manual file loading or parsing needed
+
+### Basic Usage
+
+**1. Define your custom configuration:**
+
+```rust
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct MyCustomConfig {
+    /// API key for external service
+    api_key: String,
+
+    /// Feature flags
+    feature_flags: HashMap<String, bool>,
+
+    /// Custom timeout in milliseconds
+    timeout_ms: u32,
+}
+```
+
+**2. Specify the custom type when building your service:**
+
+```rust
+use acton_service::prelude::*;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Config<MyCustomConfig> automatically loads from config.toml
+    ServiceBuilder::<MyCustomConfig>::new()
+        .with_routes(routes)
+        .build()
+        .serve()
+        .await
+}
+```
+
+**3. Create a unified config.toml:**
+
+```toml
+# Framework configuration (standard fields)
+[service]
+name = "my-service"
+port = 8080
+log_level = "info"
+
+[database]
+url = "postgres://localhost/mydb"
+
+# Custom configuration (your fields)
+api_key = "sk_live_abc123xyz"
+timeout_ms = 5000
+
+[feature_flags]
+new_dashboard = true
+analytics = false
+beta_features = true
+```
+
+### Accessing Custom Configuration
+
+Custom config is accessed through the `config.custom` field in handlers:
+
+```rust
+use axum::extract::State;
+use acton_service::AppState;
+
+async fn handler(State(state): State<AppState<MyCustomConfig>>) -> String {
+    let config = state.config();
+
+    // Access framework config
+    let service_name = &config.service.name;
+    let port = config.service.port;
+
+    // Access custom config
+    let api_key = &config.custom.api_key;
+    let timeout = config.custom.timeout_ms;
+    let new_ui_enabled = config.custom.feature_flags
+        .get("new_dashboard")
+        .copied()
+        .unwrap_or(false);
+
+    format!("Service: {service_name}, Timeout: {timeout}ms")
+}
+```
+
+### Environment Variable Overrides
+
+Custom config fields support environment variable overrides using the `ACTON_` prefix:
+
+```bash
+# Override custom fields
+export ACTON_API_KEY="sk_test_xyz789"
+export ACTON_TIMEOUT_MS=3000
+export ACTON_FEATURE_FLAGS_NEW_DASHBOARD=false
+
+# Service automatically loads overrides
+./my-service
+```
+
+### Default Configuration
+
+If you don't need custom configuration, simply omit the type parameter (defaults to `()`):
+
+```rust
+// No custom config - uses default behavior
+ServiceBuilder::new()  // Same as ServiceBuilder::<()>::new()
+    .with_routes(routes)
+    .build()
+    .serve()
+    .await
+```
+
+### Complex Custom Configuration
+
+You can nest structures and use all Serde features:
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct MyCustomConfig {
+    external_services: ExternalServices,
+    feature_flags: HashMap<String, bool>,
+
+    #[serde(default)]
+    retry_config: RetryConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct ExternalServices {
+    payment_api: ServiceEndpoint,
+    analytics_api: ServiceEndpoint,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ServiceEndpoint {
+    url: String,
+    api_key: String,
+    timeout_ms: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RetryConfig {
+    max_attempts: u32,
+    backoff_ms: u32,
+}
+
+impl Default for RetryConfig {
+    fn default() -> Self {
+        Self {
+            max_attempts: 3,
+            backoff_ms: 1000,
+        }
+    }
+}
+```
+
+**Corresponding config.toml:**
+
+```toml
+[service]
+name = "my-service"
+port = 8080
+
+[external_services.payment_api]
+url = "https://api.stripe.com"
+api_key = "sk_live_..."
+timeout_ms = 5000
+
+[external_services.analytics_api]
+url = "https://api.analytics.com"
+api_key = "key_..."
+timeout_ms = 3000
+
+[feature_flags]
+payments_v2 = true
+new_analytics = false
+
+[retry_config]
+max_attempts = 5
+backoff_ms = 2000
+```
+
+### Loading Custom Config Manually
+
+For advanced use cases, you can load custom config explicitly:
+
+```rust
+use acton_service::prelude::*;
+
+// Load from default XDG locations
+let config = Config::<MyCustomConfig>::load()?;
+
+// Load from specific file
+let config = Config::<MyCustomConfig>::load_from("custom-path.toml")?;
+
+// Load for specific service name
+let config = Config::<MyCustomConfig>::load_for_service("my-service")?;
+
+// Create AppState with custom config
+let state = AppState::new(config);
+
+ServiceBuilder::new()
+    .with_state(state)
+    .with_routes(routes)
+    .build()
+    .serve()
+    .await
+```
+
+### Requirements for Custom Config Types
+
+Your custom config type must implement:
+
+```rust
+trait CustomConfigRequirements:
+    Serialize +
+    DeserializeOwned +
+    Clone +
+    Default +
+    Send +
+    Sync +
+    'static
+{}
+```
+
+**Why these requirements?**
+- `Serialize + DeserializeOwned`: Load from and save to config files
+- `Clone`: Config is shared across handlers
+- `Default`: Provides fallback values
+- `Send + Sync + 'static`: Required for async web handlers in Axum
+
+### Example: Feature Flags Service
+
+Complete example with custom config:
+
+```rust
+use acton_service::prelude::*;
+use axum::{extract::State, routing::get, Json};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct MyCustomConfig {
+    feature_flags: HashMap<String, bool>,
+    rollout_percentage: HashMap<String, u8>,
+}
+
+#[derive(Serialize)]
+struct FeatureStatus {
+    feature: String,
+    enabled: bool,
+    rollout_percentage: u8,
+}
+
+async fn check_feature(
+    State(state): State<AppState<MyCustomConfig>>,
+    Path(feature): Path<String>,
+) -> Json<FeatureStatus> {
+    let config = state.config();
+    let enabled = config.custom.feature_flags
+        .get(&feature)
+        .copied()
+        .unwrap_or(false);
+    let rollout = config.custom.rollout_percentage
+        .get(&feature)
+        .copied()
+        .unwrap_or(0);
+
+    Json(FeatureStatus {
+        feature,
+        enabled,
+        rollout_percentage: rollout,
+    })
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let routes = VersionedApiBuilder::new()
+        .add_version(ApiVersion::V1, |router| {
+            router.route("/features/:feature", get(check_feature))
+        })
+        .build_routes();
+
+    ServiceBuilder::<MyCustomConfig>::new()
+        .with_routes(routes)
+        .build()
+        .serve()
+        .await
+}
+```
+
+**config.toml:**
+```toml
+[service]
+name = "feature-flags"
+port = 8080
+
+[feature_flags]
+new_ui = true
+dark_mode = true
+analytics = false
+
+[rollout_percentage]
+new_ui = 100
+dark_mode = 50
+analytics = 10
+```
+
+### Best Practices
+
+{% callout type="warning" title="Custom Config Best Practices" %}
+1. **Always derive Default**: Provides sensible fallback values
+2. **Use `#[serde(default)]` on optional fields**: Prevents errors if fields are missing
+3. **Document your custom fields**: Add doc comments explaining each field's purpose
+4. **Validate on load**: Add validation logic in a `validate()` method
+5. **Keep it flat when possible**: Deeply nested config can be hard to override with env vars
+6. **Use type aliases for clarity**: `type MyAppState = AppState<MyCustomConfig>`
+{% /callout %}
+
+---
+
 ## High Availability Configuration
 
 All external dependencies (Database, Redis, NATS) support high-availability options:
