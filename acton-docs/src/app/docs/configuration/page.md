@@ -226,7 +226,7 @@ export ACTON_SERVICE_PORT=7070
 ## Custom Configuration Extensions
 
 {% callout type="note" title="New Feature" %}
-As of version 0.6.0, you can extend the framework's configuration with your own custom fields that are automatically loaded from the same `config.toml` file.
+As of version 0.7.0, you can extend the framework's configuration with your own custom fields that are automatically loaded from the same `config.toml` file.
 {% /callout %}
 
 The framework's `Config` type is generic, allowing you to add application-specific configuration fields alongside the built-in framework configuration. Custom fields are seamlessly integrated using Serde's `#[serde(flatten)]` attribute.
