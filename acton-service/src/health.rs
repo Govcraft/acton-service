@@ -1,7 +1,7 @@
 //! Health check handlers
 
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::{error::Error, state::AppState};
@@ -48,7 +48,10 @@ pub struct DependencyStatus {
 ///
 /// Always returns 200 OK if the service is running.
 /// This is used by Kubernetes to determine if the pod should be restarted.
-pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
+pub async fn health<T>(State(state): State<AppState<T>>) -> impl IntoResponse
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
     let response = HealthResponse {
         status: "healthy".to_string(),
         service: state.config().service.name.clone(),
@@ -63,7 +66,10 @@ pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
 /// Returns 200 OK if the service and all dependencies are ready.
 /// Returns 503 Service Unavailable if any dependency is unhealthy.
 /// This is used by Kubernetes to determine if the pod should receive traffic.
-pub async fn readiness(State(state): State<AppState>) -> Result<impl IntoResponse, Error> {
+pub async fn readiness<T>(State(state): State<AppState<T>>) -> Result<impl IntoResponse, Error>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
     #[cfg_attr(not(any(feature = "database", feature = "cache", feature = "events")), allow(unused_mut))]
     let mut dependencies = HashMap::new();
     #[cfg_attr(not(any(feature = "database", feature = "cache", feature = "events")), allow(unused_mut))]
@@ -368,7 +374,10 @@ pub async fn readiness(State(state): State<AppState>) -> Result<impl IntoRespons
 /// - NATS client: connection state
 ///
 /// This is useful for monitoring and capacity planning.
-pub async fn pool_metrics(State(state): State<AppState>) -> impl IntoResponse {
+pub async fn pool_metrics<T>(State(state): State<AppState<T>>) -> impl IntoResponse
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
     let health = state.pool_health().await;
     let status = if health.healthy {
         StatusCode::OK

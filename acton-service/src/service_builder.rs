@@ -43,6 +43,7 @@ use crate::config::Config;
 use crate::middleware::{request_id_layer, request_id_propagation_layer, sensitive_headers_layer};
 use crate::state::AppState;
 use axum::Router;
+use serde::{de::DeserializeOwned, Serialize};
 use std::time::Duration;
 use tower_http::{
     catch_panic::CatchPanicLayer,
@@ -58,16 +59,22 @@ use tower_http::{
 /// This type can ONLY be created by `VersionedApiBuilder::build_routes()`.
 /// It cannot be constructed manually, ensuring all routes are versioned.
 ///
-/// Uses an enum to support both stateless routes (Router<()>) and stateful routes (Router<AppState>)
+/// Uses an enum to support both stateless routes (Router<()>) and stateful routes (Router<AppState<T>>)
 #[derive(Debug)]
-pub enum VersionedRoutes {
+pub enum VersionedRoutes<T = ()>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
     /// Routes without state (typical versioned API routes)
     WithoutState(Router<()>),
     /// Routes with AppState (includes health/readiness endpoints)
-    WithState(Router<AppState>),
+    WithState(Router<AppState<T>>),
 }
 
-impl VersionedRoutes {
+impl<T> VersionedRoutes<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
     /// Create from a stateless router (crate-private, only accessible to VersionedApiBuilder)
     #[allow(dead_code)]
     pub(crate) fn from_router(router: Router<()>) -> Self {
@@ -75,19 +82,22 @@ impl VersionedRoutes {
     }
 
     /// Create from a stateful router (crate-private)
-    pub(crate) fn from_router_with_state(router: Router<AppState>) -> Self {
+    pub(crate) fn from_router_with_state(router: Router<AppState<T>>) -> Self {
         Self::WithState(router)
     }
 }
 
-impl Default for VersionedRoutes {
+impl<T> Default for VersionedRoutes<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
     /// Default routes with health and readiness endpoints
     fn default() -> Self {
         use axum::routing::get;
 
-        let health_router: Router<AppState> = Router::new()
-            .route("/health", get(crate::health::health))
-            .route("/ready", get(crate::health::readiness));
+        let health_router: Router<AppState<T>> = Router::new()
+            .route("/health", get(crate::health::health::<T>))
+            .route("/ready", get(crate::health::readiness::<T>));
 
         Self::WithState(health_router)
     }
@@ -95,6 +105,9 @@ impl Default for VersionedRoutes {
 
 
 /// Simplified service builder with sensible defaults
+///
+/// Generic parameter `T` allows custom config extensions.
+/// Use `ServiceBuilder<()>` (the default) for no custom config.
 ///
 /// All fields are optional with defaults:
 /// - config: Uses `Config::default()`
@@ -104,10 +117,13 @@ impl Default for VersionedRoutes {
 /// - cedar: None (auto-configures from config.cedar if enabled)
 ///
 /// Health and readiness endpoints are ALWAYS included (automatically added by ServiceBuilder).
-pub struct ServiceBuilder {
-    config: Option<Config>,
-    routes: Option<VersionedRoutes>,
-    state: Option<AppState>,
+pub struct ServiceBuilder<T = ()>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
+    config: Option<Config<T>>,
+    routes: Option<VersionedRoutes<T>>,
+    state: Option<AppState<T>>,
     #[cfg(feature = "grpc")]
     grpc_services: Option<tonic::service::Routes>,
     #[cfg(feature = "cedar-authz")]
@@ -116,7 +132,10 @@ pub struct ServiceBuilder {
     cedar_path_normalizer: Option<fn(&str) -> String>,
 }
 
-impl ServiceBuilder {
+impl<T> ServiceBuilder<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
     /// Create a new service builder with defaults
     pub fn new() -> Self {
         Self {
@@ -133,7 +152,7 @@ impl ServiceBuilder {
     }
 
     /// Set the service configuration (optional, defaults to Config::default())
-    pub fn with_config(mut self, config: Config) -> Self {
+    pub fn with_config(mut self, config: Config<T>) -> Self {
         self.config = Some(config);
         self
     }
@@ -145,13 +164,13 @@ impl ServiceBuilder {
     /// This makes it impossible to add unversioned routes.
     ///
     /// If not provided, defaults to VersionedRoutes::default() (empty routes).
-    pub fn with_routes(mut self, routes: VersionedRoutes) -> Self {
+    pub fn with_routes(mut self, routes: VersionedRoutes<T>) -> Self {
         self.routes = Some(routes);
         self
     }
 
     /// Set the application state (optional, defaults to AppState::default())
-    pub fn with_state(mut self, state: AppState) -> Self {
+    pub fn with_state(mut self, state: AppState<T>) -> Self {
         self.state = Some(state);
         self
     }
@@ -292,12 +311,12 @@ impl ServiceBuilder {
     ///     .build();
     /// // → Uses your config, initializes tracing, adds routes + health endpoints
     /// ```
-    pub fn build(self) -> ActonService {
+    pub fn build(self) -> ActonService<T> {
         // Load config if not provided
         let config = self.config.unwrap_or_else(|| {
-            Config::load().unwrap_or_else(|e| {
+            Config::<T>::load().unwrap_or_else(|e| {
                 eprintln!("Warning: Failed to load config: {}, using defaults", e);
-                Config::default()
+                Config::<T>::default()
             })
         });
 
@@ -318,7 +337,7 @@ impl ServiceBuilder {
             VersionedRoutes::WithoutState(router) => {
                 // Add health routes and attach state
                 use axum::routing::get;
-                let health_router: Router<AppState> = Router::new()
+                let health_router: Router<AppState<T>> = Router::new()
                     .route("/health", get(crate::health::health))
                     .route("/ready", get(crate::health::readiness));
 
@@ -419,7 +438,7 @@ impl ServiceBuilder {
     /// Apply middleware stack based on configuration
     ///
     /// Applies middleware in the correct order to ensure proper request handling
-    fn apply_middleware(app: Router, config: &Config) -> Router {
+    fn apply_middleware(app: Router, config: &Config<T>) -> Router {
         let body_limit = config.middleware.body_limit_mb * 1024 * 1024;
 
         let mut app = app;
@@ -474,7 +493,10 @@ impl ServiceBuilder {
     }
 }
 
-impl Default for ServiceBuilder {
+impl<T> Default for ServiceBuilder<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
     fn default() -> Self {
         Self::new()
     }
@@ -489,15 +511,21 @@ impl Default for ServiceBuilder {
 /// - Adding unversioned routes after construction
 /// - Bypassing the type-safe builder
 /// - Accessing the internal Router
-pub struct ActonService {
-    config: Config,
+pub struct ActonService<T = ()>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
+    config: Config<T>,
     listener_addr: std::net::SocketAddr,
     app: Router,
     #[cfg(feature = "grpc")]
     grpc_routes: Option<tonic::service::Routes>,
 }
 
-impl ActonService {
+impl<T> ActonService<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
     /// Serve the application
     ///
     /// This runs the HTTP server (and optionally gRPC server) with graceful shutdown support.
@@ -623,7 +651,7 @@ impl ActonService {
     }
 
     /// Get a reference to the service configuration
-    pub fn config(&self) -> &Config {
+    pub fn config(&self) -> &Config<T> {
         &self.config
     }
 }

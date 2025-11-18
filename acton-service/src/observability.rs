@@ -53,7 +53,10 @@ pub static METER_PROVIDER: once_cell::sync::OnceCell<SdkMeterProvider> =
 /// * `Ok(())` on successful initialization
 /// * `Err` if tracing setup fails critically
 #[cfg(feature = "observability")]
-pub fn init_tracing(config: &Config) -> Result<()> {
+pub fn init_tracing<T>(config: &Config<T>) -> Result<()>
+where
+    T: serde::Serialize + serde::de::DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
     let log_level = config.service.log_level.clone();
     let service_name = config.service.name.clone();
 
@@ -263,7 +266,10 @@ pub fn init_meter_provider(config: &Config) -> Result<()> {
 
 /// Initialize tracing without OpenTelemetry (fallback when observability feature is disabled)
 #[cfg(not(feature = "observability"))]
-pub fn init_tracing(config: &Config) -> Result<()> {
+pub fn init_tracing<T>(config: &Config<T>) -> Result<()>
+where
+    T: serde::Serialize + serde::de::DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
     let log_level = config.service.log_level.clone();
 
     tracing_subscriber::fmt()
@@ -323,7 +329,7 @@ mod tests {
 
     #[test]
     fn test_init_tracing_without_otlp() {
-        let config = Config::default();
+        let config = Config::<()>::default();
         // This should not panic and should fall back to JSON logging
         let result = init_tracing(&config);
         assert!(result.is_ok(), "Tracing initialization should succeed");
@@ -359,7 +365,7 @@ mod tests {
     #[tokio::test]
     #[cfg(feature = "otel-metrics")]
     async fn test_init_meter_provider_without_config() {
-        let config = Config::default();
+        let config = Config::<()>::default();
         // Should succeed even without OTLP config
         let result = init_meter_provider(&config);
         assert!(result.is_ok(), "Meter provider init should succeed without config");

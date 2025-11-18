@@ -11,15 +11,39 @@ use figment::{
     providers::{Env, Format, Serialized, Toml},
     Figment,
 };
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::error::Result;
 
-/// Main configuration structure
+/// Main configuration structure with optional custom extensions
+///
+/// The generic parameter `T` allows users to extend the configuration with custom fields
+/// that will be automatically loaded from the same config.toml file.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// // No custom config (default)
+/// let config = Config::<()>::load()?;
+///
+/// // With custom config
+/// #[derive(Serialize, Deserialize, Clone, Default)]
+/// struct MyCustomConfig {
+///     api_key: String,
+///     feature_flags: HashMap<String, bool>,
+/// }
+///
+/// let config = Config::<MyCustomConfig>::load()?;
+/// println!("API Key: {}", config.custom.api_key);
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Config {
+#[serde(bound(serialize = "T: Serialize", deserialize = "T: DeserializeOwned"))]
+pub struct Config<T = ()>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
     /// Service configuration
     pub service: ServiceConfig,
 
@@ -57,6 +81,13 @@ pub struct Config {
     #[cfg(feature = "cedar-authz")]
     #[serde(default)]
     pub cedar: Option<CedarConfig>,
+
+    /// Custom configuration extensions
+    ///
+    /// Any fields in config.toml that don't match the above framework fields
+    /// will be deserialized into this field. Use `()` (unit type) for no custom config.
+    #[serde(flatten)]
+    pub custom: T,
 }
 
 /// Service-level configuration
@@ -755,7 +786,10 @@ fn default_cedar_policy_cache_ttl() -> u64 {
     300 // Cache for 5 minutes
 }
 
-impl Config {
+impl<T> Config<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
     /// Load configuration from all sources
     ///
     /// Searches for config files in this order (first found is used):
@@ -764,6 +798,8 @@ impl Config {
     /// 3. System directory: /etc/acton-service/{service_name}/config.toml
     ///
     /// Environment variables (ACTON_ prefix) override all file-based configs.
+    ///
+    /// Both framework config and custom config (type T) are loaded from the same config.toml.
     pub fn load() -> Result<Self> {
         // Try to infer service name from binary name or use default
         let service_name = std::env::current_exe()
@@ -788,7 +824,7 @@ impl Config {
 
         let mut figment = Figment::new()
             // Start with defaults
-            .merge(Serialized::defaults(Config::default()));
+            .merge(Serialized::defaults(Config::<T>::default()));
 
         // Merge config files in reverse order (lowest priority first)
         // so that higher priority files override lower ones
@@ -813,7 +849,7 @@ impl Config {
     pub fn load_from(path: &str) -> Result<Self> {
         let config = Figment::new()
             // Start with defaults
-            .merge(Serialized::defaults(Config::default()))
+            .merge(Serialized::defaults(Config::<T>::default()))
             // Load from config file (if exists)
             .merge(Toml::file(path))
             // Override with environment variables
@@ -938,7 +974,10 @@ impl Config {
     }
 }
 
-impl Default for Config {
+impl<T> Default for Config<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
     fn default() -> Self {
         Self {
             service: ServiceConfig {
@@ -967,6 +1006,7 @@ impl Default for Config {
             grpc: None,
             #[cfg(feature = "cedar-authz")]
             cedar: None,
+            custom: T::default(),
         }
     }
 }
@@ -974,12 +1014,174 @@ impl Default for Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn test_default_config() {
-        let config = Config::default();
+        let config = Config::<()>::default();
         assert_eq!(config.service.port, 8080);
         assert_eq!(config.service.log_level, "info");
         assert_eq!(config.rate_limit.per_user_rpm, 200);
+    }
+
+    #[test]
+    fn test_default_config_with_unit_type() {
+        let config = Config::<()>::default();
+        assert_eq!(config.service.port, 8080);
+        assert_eq!(config.service.name, "acton-service");
+        assert_eq!(config.custom, ());
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+    struct CustomConfig {
+        api_key: String,
+        timeout_ms: u32,
+        feature_flags: HashMap<String, bool>,
+    }
+
+    #[test]
+    fn test_config_with_custom_type() {
+        let custom = CustomConfig {
+            api_key: "test-key-123".to_string(),
+            timeout_ms: 5000,
+            feature_flags: {
+                let mut map = HashMap::new();
+                map.insert("new_ui".to_string(), true);
+                map.insert("beta_features".to_string(), false);
+                map
+            },
+        };
+
+        let config = Config {
+            service: ServiceConfig {
+                name: "test-service".to_string(),
+                port: 9090,
+                log_level: "debug".to_string(),
+                timeout_secs: 30,
+                environment: "test".to_string(),
+            },
+            jwt: JwtConfig {
+                public_key_path: PathBuf::from("./test-key.pem"),
+                algorithm: "RS256".to_string(),
+                issuer: Some("test-issuer".to_string()),
+                audience: None,
+            },
+            rate_limit: RateLimitConfig {
+                per_user_rpm: 100,
+                per_client_rpm: 500,
+                window_secs: 60,
+            },
+            middleware: MiddlewareConfig::default(),
+            database: None,
+            redis: None,
+            nats: None,
+            otlp: None,
+            grpc: None,
+            #[cfg(feature = "cedar-authz")]
+            cedar: None,
+            custom,
+        };
+
+        assert_eq!(config.service.name, "test-service");
+        assert_eq!(config.custom.api_key, "test-key-123");
+        assert_eq!(config.custom.timeout_ms, 5000);
+        assert_eq!(config.custom.feature_flags.get("new_ui"), Some(&true));
+    }
+
+    #[test]
+    fn test_config_serialization_with_custom() {
+        let custom = CustomConfig {
+            api_key: "secret-key".to_string(),
+            timeout_ms: 3000,
+            feature_flags: HashMap::new(),
+        };
+
+        let config = Config {
+            service: ServiceConfig {
+                name: "test".to_string(),
+                port: 8080,
+                log_level: "info".to_string(),
+                timeout_secs: 30,
+                environment: "dev".to_string(),
+            },
+            jwt: JwtConfig {
+                public_key_path: PathBuf::from("./key.pem"),
+                algorithm: "RS256".to_string(),
+                issuer: None,
+                audience: None,
+            },
+            rate_limit: RateLimitConfig {
+                per_user_rpm: 200,
+                per_client_rpm: 1000,
+                window_secs: 60,
+            },
+            middleware: MiddlewareConfig::default(),
+            database: None,
+            redis: None,
+            nats: None,
+            otlp: None,
+            grpc: None,
+            #[cfg(feature = "cedar-authz")]
+            cedar: None,
+            custom: custom.clone(),
+        };
+
+        // Serialize to JSON
+        let json = serde_json::to_string(&config).expect("Failed to serialize");
+
+        // Deserialize back
+        let deserialized: Config<CustomConfig> =
+            serde_json::from_str(&json).expect("Failed to deserialize");
+
+        assert_eq!(deserialized.custom, custom);
+        assert_eq!(deserialized.service.name, "test");
+    }
+
+    #[test]
+    fn test_config_deserialization_with_flatten() {
+        // Simulate a JSON config with both framework and custom fields
+        let json_str = r#"{
+            "service": {
+                "name": "my-service",
+                "port": 9000,
+                "log_level": "debug",
+                "timeout_secs": 60,
+                "environment": "production"
+            },
+            "jwt": {
+                "public_key_path": "./keys/public.pem",
+                "algorithm": "RS256"
+            },
+            "rate_limit": {
+                "per_user_rpm": 150,
+                "per_client_rpm": 750,
+                "window_secs": 60
+            },
+            "middleware": {
+                "cors_mode": "restrictive",
+                "body_limit_mb": 10,
+                "compression_enabled": true
+            },
+            "api_key": "prod-api-key",
+            "timeout_ms": 10000,
+            "feature_flags": {
+                "new_dashboard": true,
+                "analytics": true
+            }
+        }"#;
+
+        let config: Config<CustomConfig> =
+            serde_json::from_str(json_str).expect("Failed to parse JSON");
+
+        // Verify framework config
+        assert_eq!(config.service.name, "my-service");
+        assert_eq!(config.service.port, 9000);
+        assert_eq!(config.service.log_level, "debug");
+
+        // Verify custom config (flattened fields)
+        assert_eq!(config.custom.api_key, "prod-api-key");
+        assert_eq!(config.custom.timeout_ms, 10000);
+        assert_eq!(config.custom.feature_flags.get("new_dashboard"), Some(&true));
+        assert_eq!(config.custom.feature_flags.get("analytics"), Some(&true));
     }
 }

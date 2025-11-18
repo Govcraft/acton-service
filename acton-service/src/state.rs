@@ -1,5 +1,6 @@
 //! Application state management
 
+use serde::{de::DeserializeOwned, Serialize};
 use std::sync::Arc;
 
 #[cfg(any(feature = "database", feature = "cache", feature = "events"))]
@@ -17,9 +18,15 @@ use async_nats::Client as NatsClient;
 use crate::{config::Config, error::Result};
 
 /// Application state shared across handlers
+///
+/// Generic parameter `T` matches the custom config type in `Config<T>`.
+/// Use `AppState<()>` (the default) for no custom config.
 #[derive(Clone)]
-pub struct AppState {
-    config: Arc<Config>,
+pub struct AppState<T = ()>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
+    config: Arc<Config<T>>,
 
     #[cfg(feature = "database")]
     db_pool: Arc<RwLock<Option<PgPool>>>,
@@ -31,10 +38,13 @@ pub struct AppState {
     nats_client: Arc<RwLock<Option<NatsClient>>>,
 }
 
-impl Default for AppState {
+impl<T> Default for AppState<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
     fn default() -> Self {
         Self {
-            config: Arc::new(Config::default()),
+            config: Arc::new(Config::<T>::default()),
             #[cfg(feature = "database")]
             db_pool: Arc::new(RwLock::new(None)),
             #[cfg(feature = "cache")]
@@ -45,12 +55,15 @@ impl Default for AppState {
     }
 }
 
-impl AppState {
+impl<T> AppState<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
     /// Create a new AppState with the given configuration
     ///
     /// This creates an AppState with no connection pools initialized.
     /// For lazy initialization of connections, use `AppStateBuilder` instead.
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config<T>) -> Self {
         Self {
             config: Arc::new(config),
             #[cfg(feature = "database")]
@@ -63,12 +76,12 @@ impl AppState {
     }
 
     /// Create a new builder for AppState
-    pub fn builder() -> AppStateBuilder {
+    pub fn builder() -> AppStateBuilder<T> {
         AppStateBuilder::new()
     }
 
     /// Get the configuration
-    pub fn config(&self) -> &Config {
+    pub fn config(&self) -> &Config<T> {
         &self.config
     }
 
@@ -161,8 +174,11 @@ impl AppState {
 }
 
 /// Builder for AppState
-pub struct AppStateBuilder {
-    config: Option<Config>,
+pub struct AppStateBuilder<T = ()>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
+    config: Option<Config<T>>,
     enable_tracing: bool,
 
     #[cfg(feature = "database")]
@@ -175,7 +191,10 @@ pub struct AppStateBuilder {
     nats_client: Option<NatsClient>,
 }
 
-impl AppStateBuilder {
+impl<T> AppStateBuilder<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
     /// Create a new builder with sensible defaults
     ///
     /// By default:
@@ -195,7 +214,7 @@ impl AppStateBuilder {
     }
 
     /// Set the configuration
-    pub fn config(mut self, config: Config) -> Self {
+    pub fn config(mut self, config: Config<T>) -> Self {
         self.config = Some(config);
         self
     }
@@ -262,7 +281,7 @@ impl AppStateBuilder {
     /// - Use provided config or load `Config::default()` if not set
     /// - Initialize tracing with sensible defaults (unless disabled or already initialized)
     /// - Set up database, cache, and event connections based on config
-    pub async fn build(self) -> Result<AppState> {
+    pub async fn build(self) -> Result<AppState<T>> {
         // Initialize tracing if enabled and not already set up
         if self.enable_tracing {
             Self::init_tracing();
@@ -430,7 +449,10 @@ impl AppStateBuilder {
     }
 }
 
-impl Default for AppStateBuilder {
+impl<T> Default for AppStateBuilder<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
     fn default() -> Self {
         Self::new()
     }
@@ -442,7 +464,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_state_builder() {
-        let config = Config::default();
+        let config = Config::<()>::default();
         let builder = AppStateBuilder::new()
             .config(config)
             .without_tracing(); // Disable tracing in tests to avoid global subscriber conflicts
@@ -455,7 +477,7 @@ mod tests {
     #[tokio::test]
     async fn test_state_builder_defaults() {
         // Test that config defaults work
-        let state = AppStateBuilder::new()
+        let state = AppStateBuilder::<()>::new()
             .without_tracing() // Disable tracing in tests
             .build()
             .await
