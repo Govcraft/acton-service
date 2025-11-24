@@ -786,6 +786,12 @@ Built with excellent open source libraries:
 
 Inspired by production challenges at scale. Built by developers who've maintained microservice architectures in production.
 
+## Sponsor
+
+If you find this project helpful, consider sponsoring the development!
+
+[![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-%E2%9D%A4-%23db61a2?logo=GitHub)](https://github.com/sponsors/Govcraft)
+
 ---
 
 **Start building production microservices with enforced best practices:**
