@@ -15,6 +15,9 @@ use deadpool_redis::Pool as RedisPool;
 #[cfg(feature = "events")]
 use async_nats::Client as NatsClient;
 
+#[cfg(feature = "acton-reactive")]
+use acton_reactive::prelude::AgentHandle;
+
 use crate::{config::Config, error::Result};
 
 /// Application state shared across handlers
@@ -36,6 +39,14 @@ where
 
     #[cfg(feature = "events")]
     nats_client: Arc<RwLock<Option<NatsClient>>>,
+
+    /// Agent broker handle for type-safe event broadcasting
+    ///
+    /// When the acton-reactive feature is enabled and an agent runtime
+    /// is initialized, HTTP handlers can use this broker to broadcast
+    /// typed events to subscribed agents.
+    #[cfg(feature = "acton-reactive")]
+    broker: Option<AgentHandle>,
 }
 
 impl<T> Default for AppState<T>
@@ -51,6 +62,8 @@ where
             redis_pool: Arc::new(RwLock::new(None)),
             #[cfg(feature = "events")]
             nats_client: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "acton-reactive")]
+            broker: None,
         }
     }
 }
@@ -72,6 +85,8 @@ where
             redis_pool: Arc::new(RwLock::new(None)),
             #[cfg(feature = "events")]
             nats_client: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "acton-reactive")]
+            broker: None,
         }
     }
 
@@ -132,6 +147,46 @@ where
         &self.nats_client
     }
 
+    /// Get the agent broker handle for event broadcasting
+    ///
+    /// Returns the broker handle if the acton-reactive runtime was initialized.
+    /// HTTP handlers can use this to broadcast typed events to subscribed agents.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use acton_service::prelude::*;
+    ///
+    /// async fn create_user_handler(
+    ///     State(state): State<Arc<AppState<()>>>,
+    ///     Json(user): Json<CreateUser>,
+    /// ) -> Result<Json<User>, AppError> {
+    ///     let user = create_user(user).await?;
+    ///
+    ///     // Broadcast event to all subscribed agents
+    ///     if let Some(broker) = state.broker() {
+    ///         broker.broadcast(UserCreatedEvent {
+    ///             user_id: user.id,
+    ///         }).await;
+    ///     }
+    ///
+    ///     Ok(Json(user))
+    /// }
+    /// ```
+    #[cfg(feature = "acton-reactive")]
+    pub fn broker(&self) -> Option<&AgentHandle> {
+        self.broker.as_ref()
+    }
+
+    /// Set the agent broker handle
+    ///
+    /// This is typically called by `ServiceBuilder` when an agent runtime
+    /// is initialized via `with_agent_runtime()`.
+    #[cfg(feature = "acton-reactive")]
+    pub fn set_broker(&mut self, broker: AgentHandle) {
+        self.broker = Some(broker);
+    }
+
     /// Get pool health metrics for all configured pools
     ///
     /// Returns a summary of connection pool health including utilization,
@@ -189,6 +244,9 @@ where
 
     #[cfg(feature = "events")]
     nats_client: Option<NatsClient>,
+
+    #[cfg(feature = "acton-reactive")]
+    broker: Option<AgentHandle>,
 }
 
 impl<T> AppStateBuilder<T>
@@ -210,6 +268,8 @@ where
             redis_pool: None,
             #[cfg(feature = "events")]
             nats_client: None,
+            #[cfg(feature = "acton-reactive")]
+            broker: None,
         }
     }
 
@@ -237,6 +297,29 @@ where
     #[cfg(feature = "events")]
     pub fn nats_client(mut self, client: NatsClient) -> Self {
         self.nats_client = Some(client);
+        self
+    }
+
+    /// Set the agent broker handle for event broadcasting
+    ///
+    /// The broker handle can be obtained from `AgentRuntime::broker()` after
+    /// initializing the acton-reactive runtime via `ServiceBuilder::with_agent_runtime()`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let runtime = service_builder.with_agent_runtime();
+    /// let broker = runtime.broker();
+    ///
+    /// let state = AppState::builder()
+    ///     .config(config)
+    ///     .broker(broker)
+    ///     .build()
+    ///     .await?;
+    /// ```
+    #[cfg(feature = "acton-reactive")]
+    pub fn broker(mut self, broker: AgentHandle) -> Self {
+        self.broker = Some(broker);
         self
     }
 
@@ -445,6 +528,8 @@ where
             redis_pool,
             #[cfg(feature = "events")]
             nats_client,
+            #[cfg(feature = "acton-reactive")]
+            broker: self.broker,
         })
     }
 }

@@ -323,6 +323,41 @@ where
         self.agent_runtime.as_mut().unwrap()
     }
 
+    /// Get the agent broker handle for event broadcasting
+    ///
+    /// Returns `Some(BrokerRef)` if `with_agent_runtime()` has been called,
+    /// `None` otherwise.
+    ///
+    /// The broker can be passed to `AppState::builder().broker()` to enable
+    /// HTTP handlers to broadcast typed events to subscribed agents.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut builder = ServiceBuilder::new("my-service");
+    ///
+    /// // Initialize the agent runtime
+    /// let runtime = builder.with_agent_runtime();
+    ///
+    /// // Spawn your event processor agents
+    /// MyEventProcessor::spawn(runtime).await?;
+    ///
+    /// // Get the broker for AppState
+    /// let broker = builder.broker().expect("runtime initialized");
+    ///
+    /// // Build state with broker access
+    /// let state = AppState::builder()
+    ///     .broker(broker)
+    ///     .build()
+    ///     .await?;
+    ///
+    /// builder.with_state(state);
+    /// ```
+    #[cfg(feature = "acton-reactive")]
+    pub fn broker(&self) -> Option<acton_reactive::prelude::AgentHandle> {
+        self.agent_runtime.as_ref().map(|r| r.broker())
+    }
+
     /// Build the service
     ///
     /// Automatically handles:
