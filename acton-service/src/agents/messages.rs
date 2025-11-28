@@ -131,6 +131,94 @@ impl PoolReady {
     }
 }
 
+/// Health status of a pool
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum HealthStatus {
+    /// Pool is healthy and operational
+    Healthy,
+    /// Pool is degraded but operational
+    Degraded,
+    /// Pool is unhealthy/disconnected
+    #[default]
+    Unhealthy,
+    /// Pool is in the process of connecting
+    Connecting,
+}
+
+/// Broadcast event for pool health status updates
+///
+/// Pool agents broadcast this message via the `AgentBroker` whenever
+/// their health status changes. The `HealthMonitorAgent` subscribes
+/// to these updates to maintain aggregated health state.
+#[derive(Clone, Debug, Default)]
+pub struct PoolHealthUpdate {
+    /// The type of pool (e.g., "database", "redis", "nats")
+    pub pool_type: String,
+    /// Current health status
+    pub status: HealthStatus,
+    /// Human-readable status message
+    pub message: String,
+}
+
+impl PoolHealthUpdate {
+    /// Create a healthy status update
+    #[must_use]
+    pub fn healthy(pool_type: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            pool_type: pool_type.into(),
+            status: HealthStatus::Healthy,
+            message: message.into(),
+        }
+    }
+
+    /// Create an unhealthy status update
+    #[must_use]
+    pub fn unhealthy(pool_type: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            pool_type: pool_type.into(),
+            status: HealthStatus::Unhealthy,
+            message: message.into(),
+        }
+    }
+
+    /// Create a connecting status update
+    #[must_use]
+    pub fn connecting(pool_type: impl Into<String>) -> Self {
+        Self {
+            pool_type: pool_type.into(),
+            status: HealthStatus::Connecting,
+            message: "Connecting...".to_string(),
+        }
+    }
+}
+
+/// Request for aggregated health status from the HealthMonitorAgent
+///
+/// Send this message to the HealthMonitorAgent to receive an
+/// [`AggregatedHealthResponse`] with the current health of all pools.
+#[derive(Clone, Debug, Default)]
+pub struct GetAggregatedHealth;
+
+/// Response containing aggregated health status from all pools
+#[derive(Clone, Debug, Default)]
+pub struct AggregatedHealthResponse {
+    /// Overall health status (unhealthy if any component is unhealthy)
+    pub overall_healthy: bool,
+    /// Individual pool health statuses
+    pub components: Vec<ComponentHealth>,
+}
+
+/// Health status of a single component/pool
+#[derive(Clone, Debug, Default)]
+pub struct ComponentHealth {
+    /// Component name (e.g., "database", "redis", "nats")
+    pub name: String,
+    /// Health status
+    pub status: HealthStatus,
+    /// Status message
+    pub message: String,
+}
+
 // =============================================================================
 // Internal messages for pool connection state management
 // These are sent by spawned connection tasks back to the agent

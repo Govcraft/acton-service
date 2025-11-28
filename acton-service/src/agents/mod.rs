@@ -38,6 +38,7 @@
 //! }
 //! ```
 
+mod health;
 mod messages;
 mod pool;
 
@@ -52,8 +53,13 @@ pub mod prelude {
 
     // Re-export agent messages
     pub use super::messages::{
-        GetPool, PoolHealthCheck, PoolHealthResponse, PoolReady, PoolReconnect, PoolResponse,
+        AggregatedHealthResponse, ComponentHealth, GetAggregatedHealth, GetPool, HealthStatus,
+        PoolHealthCheck, PoolHealthResponse, PoolHealthUpdate, PoolReady, PoolReconnect,
+        PoolResponse,
     };
+
+    // Re-export health monitor agent
+    pub use super::health::{HealthMonitorAgent, HealthMonitorState};
 
     // Re-export pool agent types
     #[cfg(feature = "database")]
@@ -68,6 +74,9 @@ pub mod prelude {
 
 // Re-export messages at module level
 pub use messages::*;
+
+// Re-export health monitor at module level
+pub use health::{HealthMonitorAgent, HealthMonitorState};
 
 // Re-export pool agents at module level
 #[cfg(feature = "database")]
