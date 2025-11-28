@@ -94,7 +94,8 @@ tower-resilience-circuitbreaker = { workspace = true, optional = true }
 tower-resilience-bulkhead = { workspace = true, optional = true }
 cedar-policy = { version = "4.7.0", default-features = false, features = ["datetime", "ipaddr"], optional = true }
 regex = "1.12.2"
-mti = "1.0.7-beta.1"
+mti = "1.0.0"
+acton-reactive = { version = "6.0.0", optional = true }
 
 [features]
 default = ["http", "observability"]
@@ -115,6 +116,7 @@ tonic-reflection = ["dep:tonic-reflection"]
 tower-resilience-circuitbreaker = ["dep:tower-resilience-circuitbreaker"]
 tower-resilience-bulkhead = ["dep:tower-resilience-bulkhead"]
 cedar-policy = ["dep:cedar-policy"]
+acton-reactive = ["dep:acton-reactive"]
 
 # Basic examples
 [[example]]

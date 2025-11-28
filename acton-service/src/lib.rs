@@ -76,6 +76,9 @@ pub mod openapi;
 #[cfg(feature = "grpc")]
 pub mod grpc;
 
+#[cfg(feature = "acton-reactive")]
+pub mod agents;
+
 /// Build-time utilities for compiling protocol buffers
 ///
 /// These are used in `build.rs` scripts, not at runtime.
@@ -154,6 +157,9 @@ pub mod prelude {
 
     #[cfg(all(feature = "grpc", feature = "governor"))]
     pub use crate::grpc::GrpcRateLimitLayer;
+
+    #[cfg(feature = "acton-reactive")]
+    pub use crate::agents::prelude as agents;
 
     pub use axum::{
         extract::{Path, Query, State},
