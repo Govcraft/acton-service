@@ -94,6 +94,7 @@ tower-resilience-circuitbreaker = { workspace = true, optional = true }
 tower-resilience-bulkhead = { workspace = true, optional = true }
 cedar-policy = { version = "4.7.0", default-features = false, features = ["datetime", "ipaddr"], optional = true }
 regex = "1.12.2"
+mti = "1.0.7-beta.1"
 
 [features]
 default = ["http", "observability"]

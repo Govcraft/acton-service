@@ -152,21 +152,21 @@ impl PoolHealthSummary {
     pub fn is_healthy(&self) -> bool {
         let database_healthy = {
             #[cfg(feature = "database")]
-            { self.database.as_ref().map_or(true, |db| db.healthy) }
+            { self.database.as_ref().is_none_or(|db| db.healthy) }
             #[cfg(not(feature = "database"))]
             { true }
         };
 
         let cache_healthy = {
             #[cfg(feature = "cache")]
-            { self.redis.as_ref().map_or(true, |redis| redis.available) }
+            { self.redis.as_ref().is_none_or(|redis| redis.available) }
             #[cfg(not(feature = "cache"))]
             { true }
         };
 
         let events_healthy = {
             #[cfg(feature = "events")]
-            { self.nats.as_ref().map_or(true, |nats| nats.connected) }
+            { self.nats.as_ref().is_none_or(|nats| nats.connected) }
             #[cfg(not(feature = "events"))]
             { true }
         };

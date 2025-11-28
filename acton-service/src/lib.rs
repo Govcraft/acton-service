@@ -48,6 +48,7 @@
 
 pub mod config;
 pub mod error;
+pub mod ids;
 pub mod middleware;
 pub mod health;
 pub mod pool_health;
@@ -89,6 +90,7 @@ pub mod prelude {
 
     pub use crate::error::{Error, Result};
     pub use crate::health::{health, readiness, pool_metrics};
+    pub use crate::ids::{MakeTypedRequestId, RequestId, RequestIdError};
     pub use crate::pool_health::PoolHealthSummary;
 
     #[cfg(feature = "database")]
