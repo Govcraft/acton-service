@@ -287,3 +287,68 @@ pub struct RevokeToken {
 #[cfg(feature = "cache")]
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CleanupExpiredTokens;
+
+// =============================================================================
+// Background Worker Agent messages
+// =============================================================================
+
+/// Message to cancel a running background task
+#[derive(Clone, Debug, Default)]
+pub struct CancelTask {
+    /// The task ID to cancel
+    pub task_id: String,
+}
+
+/// Message to query the status of a specific task
+#[derive(Clone, Debug, Default)]
+pub struct GetTaskStatus {
+    /// The task ID to query
+    pub task_id: String,
+}
+
+/// Message to query the status of all tasks
+#[derive(Clone, Debug, Default)]
+pub struct GetAllTaskStatuses;
+
+/// Response containing task status information
+#[derive(Clone, Debug, Default)]
+pub struct TaskStatusResponse {
+    /// The task ID
+    pub task_id: String,
+    /// Current status of the task
+    pub status: super::background_worker::TaskStatus,
+}
+
+// =============================================================================
+// Background Worker broadcast events
+// =============================================================================
+
+/// Broadcast event when a task is submitted
+#[derive(Clone, Debug, Default)]
+pub struct TaskSubmitted {
+    /// The task ID that was submitted
+    pub task_id: String,
+}
+
+/// Broadcast event when a task completes successfully
+#[derive(Clone, Debug, Default)]
+pub struct TaskCompleted {
+    /// The task ID that completed
+    pub task_id: String,
+}
+
+/// Broadcast event when a task fails
+#[derive(Clone, Debug, Default)]
+pub struct TaskFailed {
+    /// The task ID that failed
+    pub task_id: String,
+    /// Error message
+    pub error: String,
+}
+
+/// Broadcast event when a task is cancelled
+#[derive(Clone, Debug, Default)]
+pub struct TaskCancelled {
+    /// The task ID that was cancelled
+    pub task_id: String,
+}

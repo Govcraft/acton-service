@@ -38,6 +38,7 @@
 //! }
 //! ```
 
+mod background_worker;
 mod health;
 #[cfg(feature = "cache")]
 mod jwt_revocation;
@@ -55,13 +56,17 @@ pub mod prelude {
 
     // Re-export agent messages
     pub use super::messages::{
-        AggregatedHealthResponse, ComponentHealth, GetAggregatedHealth, GetPool, HealthStatus,
-        PoolHealthCheck, PoolHealthResponse, PoolHealthUpdate, PoolReady, PoolReconnect,
-        PoolResponse,
+        AggregatedHealthResponse, CancelTask, ComponentHealth, GetAggregatedHealth,
+        GetAllTaskStatuses, GetPool, GetTaskStatus, HealthStatus, PoolHealthCheck,
+        PoolHealthResponse, PoolHealthUpdate, PoolReady, PoolReconnect, PoolResponse,
+        TaskCancelled, TaskCompleted, TaskFailed, TaskStatusResponse, TaskSubmitted,
     };
 
     #[cfg(feature = "cache")]
     pub use super::messages::RevokeToken;
+
+    // Re-export background worker agent
+    pub use super::background_worker::{BackgroundWorker, BackgroundWorkerState, TaskStatus};
 
     // Re-export health monitor agent
     pub use super::health::{HealthMonitorAgent, HealthMonitorState};
@@ -83,6 +88,9 @@ pub mod prelude {
 
 // Re-export messages at module level
 pub use messages::*;
+
+// Re-export background worker at module level
+pub use background_worker::{BackgroundWorker, BackgroundWorkerState, TaskStatus};
 
 // Re-export health monitor at module level
 pub use health::{HealthMonitorAgent, HealthMonitorState};

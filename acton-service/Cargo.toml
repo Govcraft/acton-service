@@ -96,6 +96,8 @@ cedar-policy = { version = "4.7.0", default-features = false, features = ["datet
 regex = "1.12.2"
 mti = "1.0.0"
 acton-reactive = { version = "6.0.0", optional = true }
+tokio-util = "0.7.17"
+dashmap = "6.1.0"
 
 [features]
 default = ["http", "observability"]
