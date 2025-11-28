@@ -4,9 +4,11 @@
 //! for distributed tracing across microservices.
 
 use tower_http::{
-    request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
+    request_id::{PropagateRequestIdLayer, SetRequestIdLayer},
     sensitive_headers::SetSensitiveRequestHeadersLayer,
 };
+
+use crate::ids::MakeTypedRequestId;
 
 /// Headers to propagate between services
 pub const PROPAGATE_HEADERS: &[&str] = &[
@@ -81,9 +83,14 @@ impl RequestTrackingConfig {
     }
 }
 
-/// Create a request ID layer that generates UUIDs
-pub fn request_id_layer() -> SetRequestIdLayer<MakeRequestUuid> {
-    SetRequestIdLayer::x_request_id(MakeRequestUuid)
+/// Create a request ID layer that generates type-safe request IDs.
+///
+/// Request IDs use the TypeID format with a "req" prefix and UUIDv7,
+/// making them human-readable, type-safe, and time-sortable.
+///
+/// Example format: `req_01h455vb4pex5vsknk084sn02q`
+pub fn request_id_layer() -> SetRequestIdLayer<MakeTypedRequestId> {
+    SetRequestIdLayer::x_request_id(MakeTypedRequestId)
 }
 
 /// Create a request ID propagation layer

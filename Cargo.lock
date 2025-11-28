@@ -45,6 +45,7 @@ dependencies = [
  "futures",
  "http",
  "jsonwebtoken",
+ "mti",
  "once_cell",
  "opentelemetry",
  "opentelemetry-otlp",
@@ -2302,6 +2303,16 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "mti"
+version = "1.0.7-beta.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73e89058909957124fd8271ac984c38733f080e0f0edd93322f82d7bd6a0010a"
+dependencies = [
+ "typeid_prefix",
+ "typeid_suffix",
 ]
 
 [[package]]
@@ -4805,6 +4816,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6af6ae20167a9ece4bcb41af5b80f8a1f1df981f6391189ce00fd257af04126a"
 
 [[package]]
+name = "typeid_prefix"
+version = "1.1.1-beta.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "257608c6fd0cbb5a8e00fe11ef14e9c285eb02f9e29624aaaba79e59a829a9e2"
+
+[[package]]
+name = "typeid_suffix"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d46b723d74f5ede0160048deba99670a898b7905682a7a77be7cf8e8b75df50"
+dependencies = [
+ "uuid",
+]
+
+[[package]]
 name = "typenum"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4964,9 +4990,12 @@ version = "1.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f87b8aa10b915a06587d0dec516c282ff295b475d94abf425d62b57710070a2"
 dependencies = [
+ "atomic",
  "getrandom 0.3.4",
  "js-sys",
+ "md-5",
  "serde",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 

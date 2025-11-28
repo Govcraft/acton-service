@@ -5,8 +5,8 @@
 
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
-use uuid::Uuid;
 
+use crate::ids::RequestId;
 use crate::middleware::JwtAuth;
 
 /// Request ID interceptor
@@ -16,13 +16,13 @@ use crate::middleware::JwtAuth;
 ///
 /// The request ID is propagated in both request and response metadata.
 pub fn request_id_interceptor<T>(mut req: Request<T>) -> Result<Request<T>, Status> {
-    // Try to get existing request ID from metadata
+    // Try to get existing request ID from metadata, or generate a new one
     let request_id = req
         .metadata()
         .get("x-request-id")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string())
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
+        .unwrap_or_else(|| RequestId::new().to_string());
 
     // Insert/update request ID in metadata
     req.metadata_mut()
