@@ -27,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Testing HTTP Metrics Middleware...\n");
 
     // Initialize configuration
-    let mut config = Config::default();
+    let mut config = Config::<()>::default();
     config.service.name = "test-metrics".to_string();
     config.otlp = None; // No OTLP collector for this test
 

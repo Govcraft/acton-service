@@ -265,3 +265,25 @@ pub(crate) struct NatsClientConnected {
 pub(crate) struct NatsClientConnectionFailed {
     pub error: String,
 }
+
+// =============================================================================
+// JWT Revocation Agent messages
+// =============================================================================
+
+/// Message to revoke a JWT token
+///
+/// The agent will update its in-memory cache immediately and then
+/// persist the revocation to Redis asynchronously (write-behind pattern).
+#[cfg(feature = "cache")]
+#[derive(Clone, Debug)]
+pub struct RevokeToken {
+    /// The JWT token ID (jti claim)
+    pub token_id: String,
+    /// When the token expires (revocation can be cleaned up after this)
+    pub expires_at: std::time::SystemTime,
+}
+
+/// Internal message to trigger cleanup of expired revocations
+#[cfg(feature = "cache")]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CleanupExpiredTokens;

@@ -39,6 +39,8 @@
 //! ```
 
 mod health;
+#[cfg(feature = "cache")]
+mod jwt_revocation;
 mod messages;
 mod pool;
 
@@ -58,6 +60,9 @@ pub mod prelude {
         PoolResponse,
     };
 
+    #[cfg(feature = "cache")]
+    pub use super::messages::RevokeToken;
+
     // Re-export health monitor agent
     pub use super::health::{HealthMonitorAgent, HealthMonitorState};
 
@@ -70,6 +75,10 @@ pub mod prelude {
 
     #[cfg(feature = "events")]
     pub use super::pool::{NatsPoolAgent, NatsPoolState};
+
+    // Re-export JWT revocation service
+    #[cfg(feature = "cache")]
+    pub use super::jwt_revocation::{JwtRevocationService, JwtRevocationState};
 }
 
 // Re-export messages at module level
@@ -87,3 +96,7 @@ pub use pool::{RedisPoolAgent, RedisPoolState};
 
 #[cfg(feature = "events")]
 pub use pool::{NatsPoolAgent, NatsPoolState};
+
+// Re-export JWT revocation service at module level
+#[cfg(feature = "cache")]
+pub use jwt_revocation::{JwtRevocationService, JwtRevocationState};

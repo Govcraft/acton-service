@@ -1029,7 +1029,7 @@ mod tests {
         let config = Config::<()>::default();
         assert_eq!(config.service.port, 8080);
         assert_eq!(config.service.name, "acton-service");
-        assert_eq!(config.custom, ());
+        // config.custom is () - no assertion needed for unit type
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]

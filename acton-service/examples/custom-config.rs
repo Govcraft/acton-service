@@ -7,7 +7,7 @@
 //! Run with: cargo run --example custom-config
 
 use acton_service::prelude::*;
-use axum::{extract::State, routing::get, Json};
+use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -15,12 +15,15 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct MyCustomConfig {
     /// API key for external service
+    #[serde(default)]
     external_api_key: String,
 
     /// Feature flags
+    #[serde(default)]
     feature_flags: HashMap<String, bool>,
 
     /// Custom timeout in milliseconds
+    #[serde(default)]
     custom_timeout_ms: u32,
 
     /// Custom retry settings
@@ -86,60 +89,52 @@ async fn config_info(State(state): State<AppState<MyCustomConfig>>) -> Json<Conf
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Load custom config explicitly
-    // In production, you can use Config::<MyCustomConfig>::load() to load from
-    // config.toml automatically with XDG directory support
-    let config = Config::<MyCustomConfig> {
-        service: ServiceConfig {
-            name: "my-custom-service".to_string(),
-            port: 8080,
-            log_level: "info".to_string(),
-            timeout_secs: 30,
-            environment: "dev".to_string(),
+    // Load config using defaults and then customize
+    // In production, use Config::<MyCustomConfig>::load() to load from config.toml
+    let mut config = Config::<MyCustomConfig>::default();
+
+    // Customize the service settings
+    config.service.name = "my-custom-service".to_string();
+    config.service.port = 8080;
+    config.service.environment = "dev".to_string();
+
+    // Set custom configuration
+    config.custom = MyCustomConfig {
+        external_api_key: "my-secret-key-123".to_string(),
+        custom_timeout_ms: 5000,
+        feature_flags: {
+            let mut flags = HashMap::new();
+            flags.insert("new_dashboard".to_string(), true);
+            flags.insert("analytics".to_string(), false);
+            flags
         },
-        jwt: JwtConfig::default(),
-        rate_limit: RateLimitConfig::default(),
-        middleware: MiddlewareConfig::default(),
-        database: None,
-        redis: None,
-        nats: None,
-        otlp: None,
-        grpc: None,
-        #[cfg(feature = "cedar-authz")]
-        cedar: None,
-        custom: MyCustomConfig {
-            external_api_key: "my-secret-key-123".to_string(),
-            custom_timeout_ms: 5000,
-            feature_flags: {
-                let mut flags = HashMap::new();
-                flags.insert("new_dashboard".to_string(), true);
-                flags.insert("analytics".to_string(), false);
-                flags
-            },
-            retry_config: RetryConfig {
-                max_attempts: 5,
-                backoff_ms: 2000,
-            },
+        retry_config: RetryConfig {
+            max_attempts: 5,
+            backoff_ms: 2000,
         },
     };
 
     // Build AppState with custom config
-    let state = AppState::new(config);
+    let state = AppState::new(config.clone());
 
-    let routes = VersionedApiBuilder::new()
-        .with_base_path("/api")
-        .add_version(ApiVersion::V1, |router| {
-            router.route("/config-info", get(config_info))
-        })
-        .build_routes_with_state(state.clone());
+    // Create routes using standard axum Router with the correct state type
+    let app = Router::new()
+        .route("/api/v1/config-info", get(config_info))
+        .route("/health", get(health))
+        .route("/ready", get(readiness))
+        .with_state(state);
 
     println!("🚀 Starting service with custom configuration extensions...");
     println!("🔗 Try: http://localhost:8080/api/v1/config-info");
 
-    ServiceBuilder::<MyCustomConfig>::new()
-        .with_state(state)
-        .with_routes(routes)
-        .build()
-        .serve()
+    // Run the server directly using axum
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", config.service.port))
         .await
+        .map_err(|e| Error::Internal(format!("Failed to bind: {}", e)))?;
+
+    axum::serve(listener, app)
+        .await
+        .map_err(|e| Error::Internal(format!("Server error: {}", e)))?;
+
+    Ok(())
 }
