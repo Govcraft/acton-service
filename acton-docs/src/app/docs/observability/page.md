@@ -79,9 +79,9 @@ Multiple ID types serve different purposes in distributed systems:
 
 **Request ID** (`x-request-id`):
 - Unique per HTTP request to this specific service
-- New ID generated for each incoming request
+- New ID generated for each incoming request using [TypeID format](https://github.com/jetify-com/typeid) with UUIDv7 for time-sortability
 - Use for: Debugging single requests, correlating logs within one service
-- Example: `"req_1a2b3c4d"`
+- Example: `"req_01h455vb4pex5vsknk084sn02q"` (prefix `req_` + base32-encoded UUIDv7)
 
 **Trace ID** (`x-trace-id`):
 - Unique per end-to-end transaction across ALL services
@@ -242,12 +242,14 @@ Logs are automatically formatted as JSON with consistent fields:
   "level": "INFO",
   "target": "my_service::handlers",
   "message": "User created successfully",
-  "request_id": "01HQWE2XKJY8W7S6G5D4F3E2A1",
+  "request_id": "req_01h455vb4pex5vsknk084sn02q",
   "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
   "span_id": "00f067aa0ba902b7",
   "correlation_id": "user-signup-flow"
 }
 ```
+
+Request IDs use [TypeID format](https://github.com/jetify-com/typeid): `req_` prefix + base32-encoded UUIDv7 for human-readable, time-sortable identifiers.
 
 ### Correlation ID Propagation
 

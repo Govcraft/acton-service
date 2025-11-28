@@ -296,7 +296,7 @@ Observability means understanding your system's internal state by examining outp
   "timestamp": "2024-01-15T10:30:45Z",
   "level": "INFO",
   "message": "Request processed",
-  "request_id": "req_abc123",
+  "request_id": "req_01h455vb4pex5vsknk084sn02q",
   "trace_id": "trace_xyz789",
   "path": "/api/v1/users",
   "method": "GET",
@@ -304,6 +304,8 @@ Observability means understanding your system's internal state by examining outp
   "latency_ms": 45
 }
 ```
+
+Note: Request IDs use [TypeID format](https://github.com/jetify-com/typeid) with a `req_` prefix and UUIDv7 suffix for time-sortability.
 
 **Automatic in acton-service** - every request logged with correlation IDs.
 

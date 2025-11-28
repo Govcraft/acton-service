@@ -79,7 +79,7 @@ Learn more: [Rate Limiting](/docs/rate-limiting)
 ### Observability
 
 **Request Tracking**
-- UUID-based request ID generation and propagation
+- TypeID-based request ID generation (`req_` prefix with UUIDv7) for human-readable, time-sortable identifiers
 - Automatic correlation across service boundaries
 - Essential for debugging distributed transactions
 
