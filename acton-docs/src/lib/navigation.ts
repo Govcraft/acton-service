@@ -29,6 +29,7 @@ export const navigation = [
       { title: 'Cedar Authorization', href: '/docs/cedar-auth' },
       { title: 'Rate Limiting', href: '/docs/rate-limiting' },
       { title: 'Resilience Patterns', href: '/docs/resilience' },
+      { title: 'Web App Integration', href: '/docs/web-app-integration' },
     ],
   },
   {
