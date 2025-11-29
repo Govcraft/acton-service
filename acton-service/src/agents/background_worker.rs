@@ -401,9 +401,8 @@ impl BackgroundWorker {
     }
 }
 
-// Broadcast event constructors - for future use with event broadcasting
+// Broadcast event constructors for task lifecycle events
 
-#[allow(dead_code)]
 impl TaskSubmitted {
     /// Create a new task submitted event
     #[must_use]
@@ -414,7 +413,6 @@ impl TaskSubmitted {
     }
 }
 
-#[allow(dead_code)]
 impl TaskCompleted {
     /// Create a new task completed event
     #[must_use]
@@ -425,7 +423,6 @@ impl TaskCompleted {
     }
 }
 
-#[allow(dead_code)]
 impl TaskFailed {
     /// Create a new task failed event
     #[must_use]
@@ -437,7 +434,6 @@ impl TaskFailed {
     }
 }
 
-#[allow(dead_code)]
 impl TaskCancelled {
     /// Create a new task cancelled event
     #[must_use]

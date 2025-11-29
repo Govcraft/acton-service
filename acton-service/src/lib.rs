@@ -76,8 +76,14 @@ pub mod openapi;
 #[cfg(feature = "grpc")]
 pub mod grpc;
 
-// Agent module is internal - only BackgroundWorker and broker types are exposed via prelude
-mod agents;
+/// Agent-based reactive components for connection pool management
+///
+/// This module provides reactive, actor-based alternatives to traditional
+/// connection pool patterns. Agents are the default way to manage connections
+/// when using `ServiceBuilder::build_with_agents()`.
+///
+/// See [`agents::prelude`] for convenient imports.
+pub mod agents;
 
 /// Build-time utilities for compiling protocol buffers
 ///
@@ -158,10 +164,23 @@ pub mod prelude {
     #[cfg(all(feature = "grpc", feature = "governor"))]
     pub use crate::grpc::GrpcRateLimitLayer;
 
-    // User-facing agent types (internal pool agents are not exported)
-    pub use crate::agents::{BackgroundWorker, TaskStatus};
-    // Re-export AgentHandle for broker access
-    pub use acton_reactive::prelude::AgentHandle;
+    // Agent types for reactive connection management
+    pub use crate::agents::{
+        BackgroundWorker, HealthMonitorAgent, TaskStatus,
+        GetAggregatedHealth, AggregatedHealthResponse, HealthStatus,
+    };
+
+    #[cfg(feature = "database")]
+    pub use crate::agents::DatabasePoolAgent;
+
+    #[cfg(feature = "cache")]
+    pub use crate::agents::RedisPoolAgent;
+
+    #[cfg(feature = "events")]
+    pub use crate::agents::NatsPoolAgent;
+
+    // Re-export core acton-reactive types for agent access
+    pub use acton_reactive::prelude::{AgentHandle, AgentRuntime, ActonApp};
 
     pub use axum::{
         extract::{Path, Query, State},

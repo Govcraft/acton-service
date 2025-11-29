@@ -1,8 +1,14 @@
 //! Pool agent implementations for reactive connection management
 //!
-//! These agents provide message-passing based alternatives to traditional
-//! `Arc<RwLock<Option<Pool>>>` patterns, eliminating lock contention and
-//! enabling graceful lifecycle management.
+//! These agents manage connection pools using the actor pattern, providing
+//! automatic reconnection, health monitoring, and graceful shutdown.
+//!
+//! ## Shared State Architecture
+//!
+//! Pool agents can optionally receive a shared `Arc<RwLock<Option<Pool>>>`
+//! reference during spawn. When the pool connects, the agent updates this
+//! shared storage, allowing `AppState::db()` etc. to access pools directly
+//! without message passing overhead.
 //!
 //! ## Pattern: Spawn and Send Message
 //!
@@ -13,6 +19,9 @@
 //! 1. Spawn the non-Sync connection work with `tokio::spawn`
 //! 2. Send a message to self when the connection completes
 //! 3. Handle that message in a `mutate_on` handler to update agent state
+
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 use acton_reactive::prelude::*;
 
@@ -30,6 +39,10 @@ const MAX_RECONNECT_ATTEMPTS: u32 = 10;
 #[cfg(feature = "database")]
 use super::messages::{DatabasePoolConnected, DatabasePoolConnectionFailed};
 
+/// Shared pool storage type for database connections
+#[cfg(feature = "database")]
+pub type SharedDbPool = Arc<RwLock<Option<sqlx::PgPool>>>;
+
 /// State for the database pool agent
 #[cfg(feature = "database")]
 #[derive(Debug, Default)]
@@ -42,6 +55,8 @@ pub struct DatabasePoolState {
     pub reconnect_attempts: u32,
     /// Whether the agent is currently attempting to connect
     pub connecting: bool,
+    /// Shared storage that AppState reads from directly
+    pub shared_pool: Option<SharedDbPool>,
 }
 
 /// Agent-based PostgreSQL connection pool manager
@@ -62,15 +77,24 @@ impl DatabasePoolAgent {
     ///
     /// The agent will immediately begin connecting to the database.
     /// Subscribe to [`PoolReady`] events to be notified when the pool is available.
+    ///
+    /// # Arguments
+    ///
+    /// * `runtime` - The agent runtime to spawn into
+    /// * `config` - Database connection configuration
+    /// * `shared_pool` - Optional shared storage that will be updated when the pool connects.
+    ///   When provided, `AppState::db()` can read the pool directly without agent communication.
     pub async fn spawn(
         runtime: &mut AgentRuntime,
         config: crate::config::DatabaseConfig,
+        shared_pool: Option<SharedDbPool>,
     ) -> anyhow::Result<AgentHandle> {
         let mut agent = runtime.new_agent::<DatabasePoolState>();
 
         // Initialize state before starting
         agent.model.config = Some(config);
         agent.model.connecting = true;
+        agent.model.shared_pool = shared_pool;
 
         // Handle GetPool requests - respond with current pool state
         agent.act_on::<GetPool>(|agent, envelope| {
@@ -118,13 +142,24 @@ impl DatabasePoolAgent {
 
         // Handle pool connected message (sent from spawned task)
         agent.mutate_on::<DatabasePoolConnected>(|agent, envelope| {
-            agent.model.pool = Some(envelope.message().pool.clone());
+            let pool = envelope.message().pool.clone();
+            agent.model.pool = Some(pool.clone());
             agent.model.connecting = false;
             agent.model.reconnect_attempts = 0;
-            tracing::info!("Database pool connected and stored in agent state");
 
+            // Update shared storage if configured
+            let shared_pool = agent.model.shared_pool.clone();
             let broker = agent.broker().clone();
+
             AgentReply::from_async(async move {
+                // Update shared storage for direct AppState access
+                if let Some(shared) = shared_pool {
+                    *shared.write().await = Some(pool);
+                    tracing::info!("Database pool connected and stored in shared state");
+                } else {
+                    tracing::info!("Database pool connected (no shared state)");
+                }
+
                 broker.broadcast(PoolReady::database()).await;
                 broker
                     .broadcast(PoolHealthUpdate::healthy("database", "Connected"))
@@ -267,6 +302,10 @@ impl DatabasePoolAgent {
 #[cfg(feature = "cache")]
 use super::messages::{RedisPoolConnected, RedisPoolConnectionFailed};
 
+/// Shared pool storage type for Redis connections
+#[cfg(feature = "cache")]
+pub type SharedRedisPool = Arc<RwLock<Option<deadpool_redis::Pool>>>;
+
 /// State for the Redis pool agent
 #[cfg(feature = "cache")]
 #[derive(Debug, Default)]
@@ -279,6 +318,8 @@ pub struct RedisPoolState {
     pub reconnect_attempts: u32,
     /// Whether the agent is currently attempting to connect
     pub connecting: bool,
+    /// Shared storage that AppState reads from directly
+    pub shared_pool: Option<SharedRedisPool>,
 }
 
 /// Agent-based Redis connection pool manager
@@ -291,15 +332,23 @@ pub struct RedisPoolAgent;
 #[cfg(feature = "cache")]
 impl RedisPoolAgent {
     /// Spawn a new Redis pool agent with the given configuration
+    ///
+    /// # Arguments
+    ///
+    /// * `runtime` - The agent runtime to spawn into
+    /// * `config` - Redis connection configuration
+    /// * `shared_pool` - Optional shared storage that will be updated when the pool connects.
     pub async fn spawn(
         runtime: &mut AgentRuntime,
         config: crate::config::RedisConfig,
+        shared_pool: Option<SharedRedisPool>,
     ) -> anyhow::Result<AgentHandle> {
         let mut agent = runtime.new_agent::<RedisPoolState>();
 
         // Initialize state before starting
         agent.model.config = Some(config);
         agent.model.connecting = true;
+        agent.model.shared_pool = shared_pool;
 
         // Handle GetPool requests
         agent.act_on::<GetPool>(|agent, envelope| {
@@ -347,13 +396,24 @@ impl RedisPoolAgent {
 
         // Handle pool connected message
         agent.mutate_on::<RedisPoolConnected>(|agent, envelope| {
-            agent.model.pool = Some(envelope.message().pool.clone());
+            let pool = envelope.message().pool.clone();
+            agent.model.pool = Some(pool.clone());
             agent.model.connecting = false;
             agent.model.reconnect_attempts = 0;
-            tracing::info!("Redis pool connected and stored in agent state");
 
+            // Update shared storage if configured
+            let shared_pool = agent.model.shared_pool.clone();
             let broker = agent.broker().clone();
+
             AgentReply::from_async(async move {
+                // Update shared storage for direct AppState access
+                if let Some(shared) = shared_pool {
+                    *shared.write().await = Some(pool);
+                    tracing::info!("Redis pool connected and stored in shared state");
+                } else {
+                    tracing::info!("Redis pool connected (no shared state)");
+                }
+
                 broker.broadcast(PoolReady::redis()).await;
                 broker
                     .broadcast(PoolHealthUpdate::healthy("redis", "Connected"))
@@ -486,6 +546,10 @@ impl RedisPoolAgent {
 #[cfg(feature = "events")]
 use super::messages::{NatsClientConnected, NatsClientConnectionFailed};
 
+/// Shared client storage type for NATS connections
+#[cfg(feature = "events")]
+pub type SharedNatsClient = Arc<RwLock<Option<async_nats::Client>>>;
+
 /// State for the NATS pool agent
 #[cfg(feature = "events")]
 #[derive(Debug, Default)]
@@ -498,6 +562,8 @@ pub struct NatsPoolState {
     pub reconnect_attempts: u32,
     /// Whether the agent is currently attempting to connect
     pub connecting: bool,
+    /// Shared storage that AppState reads from directly
+    pub shared_client: Option<SharedNatsClient>,
 }
 
 /// Agent-based NATS client manager
@@ -509,15 +575,23 @@ pub struct NatsPoolAgent;
 #[cfg(feature = "events")]
 impl NatsPoolAgent {
     /// Spawn a new NATS pool agent with the given configuration
+    ///
+    /// # Arguments
+    ///
+    /// * `runtime` - The agent runtime to spawn into
+    /// * `config` - NATS connection configuration
+    /// * `shared_client` - Optional shared storage that will be updated when the client connects.
     pub async fn spawn(
         runtime: &mut AgentRuntime,
         config: crate::config::NatsConfig,
+        shared_client: Option<SharedNatsClient>,
     ) -> anyhow::Result<AgentHandle> {
         let mut agent = runtime.new_agent::<NatsPoolState>();
 
         // Initialize state before starting
         agent.model.config = Some(config);
         agent.model.connecting = true;
+        agent.model.shared_client = shared_client;
 
         // Handle GetPool requests
         agent.act_on::<GetPool>(|agent, envelope| {
@@ -566,13 +640,24 @@ impl NatsPoolAgent {
 
         // Handle client connected message
         agent.mutate_on::<NatsClientConnected>(|agent, envelope| {
-            agent.model.client = Some(envelope.message().client.clone());
+            let client = envelope.message().client.clone();
+            agent.model.client = Some(client.clone());
             agent.model.connecting = false;
             agent.model.reconnect_attempts = 0;
-            tracing::info!("NATS client connected and stored in agent state");
 
+            // Update shared storage if configured
+            let shared_client = agent.model.shared_client.clone();
             let broker = agent.broker().clone();
+
             AgentReply::from_async(async move {
+                // Update shared storage for direct AppState access
+                if let Some(shared) = shared_client {
+                    *shared.write().await = Some(client);
+                    tracing::info!("NATS client connected and stored in shared state");
+                } else {
+                    tracing::info!("NATS client connected (no shared state)");
+                }
+
                 broker.broadcast(PoolReady::nats()).await;
                 broker
                     .broadcast(PoolHealthUpdate::healthy("nats", "Connected"))
