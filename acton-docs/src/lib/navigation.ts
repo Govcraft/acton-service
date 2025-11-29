@@ -13,6 +13,7 @@ export const navigation = [
     title: 'Core Concepts',
     links: [
       { title: 'Concepts', href: '/docs/concepts' },
+      { title: 'Reactive Architecture', href: '/docs/reactive-architecture' },
       { title: 'API Versioning', href: '/docs/api-versioning' },
       { title: 'HTTP + gRPC Support', href: '/docs/dual-protocol' },
       { title: 'gRPC Guide', href: '/docs/grpc-guide' },
