@@ -49,10 +49,7 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use super::messages::{
-    CancelTask, GetAllTaskStatuses, GetTaskStatus, TaskCancelled, TaskCompleted, TaskFailed,
-    TaskStatusResponse, TaskSubmitted,
-};
+use super::messages::{CancelTask, GetAllTaskStatuses, GetTaskStatus, TaskStatusResponse};
 
 /// Status of a background task
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -398,48 +395,5 @@ impl BackgroundWorker {
     #[must_use]
     pub fn handle(&self) -> &AgentHandle {
         &self.agent_handle
-    }
-}
-
-// Broadcast event constructors for task lifecycle events
-
-impl TaskSubmitted {
-    /// Create a new task submitted event
-    #[must_use]
-    pub fn new(task_id: impl Into<String>) -> Self {
-        Self {
-            task_id: task_id.into(),
-        }
-    }
-}
-
-impl TaskCompleted {
-    /// Create a new task completed event
-    #[must_use]
-    pub fn new(task_id: impl Into<String>) -> Self {
-        Self {
-            task_id: task_id.into(),
-        }
-    }
-}
-
-impl TaskFailed {
-    /// Create a new task failed event
-    #[must_use]
-    pub fn new(task_id: impl Into<String>, error: impl Into<String>) -> Self {
-        Self {
-            task_id: task_id.into(),
-            error: error.into(),
-        }
-    }
-}
-
-impl TaskCancelled {
-    /// Create a new task cancelled event
-    #[must_use]
-    pub fn new(task_id: impl Into<String>) -> Self {
-        Self {
-            task_id: task_id.into(),
-        }
     }
 }

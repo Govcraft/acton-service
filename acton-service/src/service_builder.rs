@@ -282,75 +282,22 @@ where
         self
     }
 
-    /// Enable agent-based reactive components
+    /// Initialize the agent runtime (internal use only)
     ///
-    /// This initializes the acton-reactive runtime for spawning pool agents
-    /// and other reactive components. The runtime is automatically shut down
-    /// when the service stops.
-    ///
-    /// Returns a mutable reference to the `AgentRuntime`, allowing you to spawn
-    /// pool agents during the build phase.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use acton_service::prelude::*;
-    /// use acton_service::agents::prelude::*;
-    ///
-    /// let mut builder = ServiceBuilder::new();
-    /// let runtime = builder.with_agent_runtime();
-    ///
-    /// // Spawn pool agents during build
-    /// let db_handle = DatabasePoolAgent::spawn(runtime, db_config).await?;
-    /// let redis_handle = RedisPoolAgent::spawn(runtime, redis_config).await?;
-    ///
-    /// // Build the service - agents will be gracefully shut down on service stop
-    /// let service = builder
-    ///     .with_routes(routes)
-    ///     .with_state(state)
-    ///     .build();
-    ///
-    /// service.serve().await?;
-    /// ```
-    pub fn with_agent_runtime(&mut self) -> &mut acton_reactive::prelude::AgentRuntime {
+    /// Returns a mutable reference to the `AgentRuntime` for spawning agents.
+    /// Called automatically by `build()` when connection pools are configured.
+    #[cfg(any(feature = "database", feature = "cache", feature = "events"))]
+    fn init_agent_runtime(&mut self) -> &mut acton_reactive::prelude::AgentRuntime {
         if self.agent_runtime.is_none() {
-            tracing::info!("Initializing acton-reactive agent runtime");
+            tracing::debug!("Initializing acton-reactive agent runtime");
             self.agent_runtime = Some(acton_reactive::prelude::ActonApp::launch());
         }
         self.agent_runtime.as_mut().unwrap()
     }
 
-    /// Get the agent broker handle for event broadcasting
-    ///
-    /// Returns `Some(BrokerRef)` if `with_agent_runtime()` has been called,
-    /// `None` otherwise.
-    ///
-    /// The broker can be passed to `AppState::builder().broker()` to enable
-    /// HTTP handlers to broadcast typed events to subscribed agents.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let mut builder = ServiceBuilder::new("my-service");
-    ///
-    /// // Initialize the agent runtime
-    /// let runtime = builder.with_agent_runtime();
-    ///
-    /// // Spawn your event processor agents
-    /// MyEventProcessor::spawn(runtime).await?;
-    ///
-    /// // Get the broker for AppState
-    /// let broker = builder.broker().expect("runtime initialized");
-    ///
-    /// // Build state with broker access
-    /// let state = AppState::builder()
-    ///     .broker(broker)
-    ///     .build()
-    ///     .await?;
-    ///
-    /// builder.with_state(state);
-    /// ```
-    pub fn broker(&self) -> Option<acton_reactive::prelude::AgentHandle> {
+    /// Get the agent broker handle (internal use only)
+    #[cfg(any(feature = "database", feature = "cache", feature = "events"))]
+    fn broker(&self) -> Option<acton_reactive::prelude::AgentHandle> {
         self.agent_runtime.as_ref().map(|r| r.broker())
     }
 
@@ -359,25 +306,26 @@ where
     /// Automatically handles:
     /// - **Config loading**: Calls `Config::load()` if not provided (falls back to `Config::default()` on error)
     /// - **Tracing initialization**: Initializes tracing with the loaded config
+    /// - **Pool agent spawning**: Spawns internal agents for database/redis/nats when configured
     /// - **Health endpoints**: Always includes `/health` and `/ready` endpoints
     ///
     /// Uses defaults for any fields not set:
     /// - config: `Config::load()` → `Config::default()` if load fails
     /// - routes: `VersionedRoutes::default()` (health + readiness only)
-    /// - state: `AppState::default()`
+    /// - state: `AppState::default()` with agent-managed pools
     ///
     /// # Examples
     ///
     /// ```rust,ignore
     /// // Minimal - everything is automatic
     /// let service = ServiceBuilder::new().build();
-    /// // → Loads config, initializes tracing, adds health endpoints
+    /// // → Loads config, initializes tracing, spawns pool agents, adds health endpoints
     ///
     /// // With custom routes (most common)
     /// let service = ServiceBuilder::new()
     ///     .with_routes(versioned_routes)
     ///     .build();
-    /// // → Loads config, initializes tracing, adds your routes + health endpoints
+    /// // → Pool agents automatically manage database/redis/nats connections
     ///
     /// // Override config (e.g., for testing)
     /// let custom_config = Config { /* ... */ };
@@ -385,11 +333,11 @@ where
     ///     .with_config(custom_config)
     ///     .with_routes(routes)
     ///     .build();
-    /// // → Uses your config, initializes tracing, adds routes + health endpoints
+    /// // → Uses your config, spawns appropriate pool agents
     /// ```
-    pub fn build(self) -> ActonService<T> {
+    pub fn build(mut self) -> ActonService<T> {
         // Load config if not provided
-        let config = self.config.unwrap_or_else(|| {
+        let config = self.config.take().unwrap_or_else(|| {
             Config::<T>::load().unwrap_or_else(|e| {
                 eprintln!("Warning: Failed to load config: {}, using defaults", e);
                 Config::<T>::default()
@@ -401,8 +349,171 @@ where
             eprintln!("Warning: Failed to initialize tracing: {}", e);
         }
 
+        // Determine if we need to spawn pool agents
+        #[cfg(feature = "database")]
+        let needs_db_agent = config.database.is_some();
+
+        #[cfg(feature = "cache")]
+        let needs_redis_agent = config.redis.is_some();
+
+        #[cfg(feature = "events")]
+        let needs_nats_agent = config.nats.is_some();
+
+        #[cfg(any(feature = "database", feature = "cache", feature = "events"))]
+        let needs_agents = {
+            #[cfg(feature = "database")]
+            let db = needs_db_agent;
+            #[cfg(not(feature = "database"))]
+            let db = false;
+
+            #[cfg(feature = "cache")]
+            let redis = needs_redis_agent;
+            #[cfg(not(feature = "cache"))]
+            let redis = false;
+
+            #[cfg(feature = "events")]
+            let nats = needs_nats_agent;
+            #[cfg(not(feature = "events"))]
+            let nats = false;
+
+            db || redis || nats
+        };
+
+        // Initialize agent runtime and spawn pool agents if needed
+        #[cfg(feature = "database")]
+        let shared_db_pool: Option<crate::agents::SharedDbPool> = if needs_db_agent {
+            Some(std::sync::Arc::new(tokio::sync::RwLock::new(None)))
+        } else {
+            None
+        };
+
+        #[cfg(feature = "cache")]
+        let shared_redis_pool: Option<crate::agents::SharedRedisPool> = if needs_redis_agent {
+            Some(std::sync::Arc::new(tokio::sync::RwLock::new(None)))
+        } else {
+            None
+        };
+
+        #[cfg(feature = "events")]
+        let shared_nats_client: Option<crate::agents::SharedNatsClient> = if needs_nats_agent {
+            Some(std::sync::Arc::new(tokio::sync::RwLock::new(None)))
+        } else {
+            None
+        };
+
+        // Agent handles for AppState
+        #[cfg(feature = "database")]
+        let mut db_agent_handle: Option<acton_reactive::prelude::AgentHandle> = None;
+        #[cfg(feature = "cache")]
+        let mut redis_agent_handle: Option<acton_reactive::prelude::AgentHandle> = None;
+        #[cfg(feature = "events")]
+        let mut nats_agent_handle: Option<acton_reactive::prelude::AgentHandle> = None;
+
+        #[cfg(any(feature = "database", feature = "cache", feature = "events"))]
+        let broker_handle = if needs_agents {
+            // Initialize the agent runtime
+            let runtime = self.init_agent_runtime();
+
+            // Use block_in_place to spawn agents (they're async)
+            if let Ok(_handle) = tokio::runtime::Handle::try_current() {
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        // Spawn database pool agent
+                        #[cfg(feature = "database")]
+                        if let Some(ref db_config) = config.database {
+                            match crate::agents::DatabasePoolAgent::spawn(
+                                runtime,
+                                db_config.clone(),
+                                shared_db_pool.clone(),
+                            ).await {
+                                Ok(handle) => {
+                                    tracing::info!("Database pool agent spawned");
+                                    db_agent_handle = Some(handle);
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Failed to spawn database pool agent: {}", e);
+                                }
+                            }
+                        }
+
+                        // Spawn Redis pool agent
+                        #[cfg(feature = "cache")]
+                        if let Some(ref redis_config) = config.redis {
+                            match crate::agents::RedisPoolAgent::spawn(
+                                runtime,
+                                redis_config.clone(),
+                                shared_redis_pool.clone(),
+                            ).await {
+                                Ok(handle) => {
+                                    tracing::info!("Redis pool agent spawned");
+                                    redis_agent_handle = Some(handle);
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Failed to spawn Redis pool agent: {}", e);
+                                }
+                            }
+                        }
+
+                        // Spawn NATS pool agent
+                        #[cfg(feature = "events")]
+                        if let Some(ref nats_config) = config.nats {
+                            match crate::agents::NatsPoolAgent::spawn(
+                                runtime,
+                                nats_config.clone(),
+                                shared_nats_client.clone(),
+                            ).await {
+                                Ok(handle) => {
+                                    tracing::info!("NATS pool agent spawned");
+                                    nats_agent_handle = Some(handle);
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Failed to spawn NATS pool agent: {}", e);
+                                }
+                            }
+                        }
+                    });
+                });
+            }
+
+            self.broker()
+        } else {
+            None
+        };
+
+        #[cfg(not(any(feature = "database", feature = "cache", feature = "events")))]
+        let broker_handle: Option<acton_reactive::prelude::AgentHandle> = None;
+
         let routes = self.routes.unwrap_or_default();
-        let state = self.state.unwrap_or_else(|| AppState::new(config.clone()));
+
+        // Build AppState with agent-managed pools
+        let state = if let Some(provided_state) = self.state {
+            provided_state
+        } else {
+            let mut state = AppState::new(config.clone());
+
+            // Set broker handle for event broadcasting
+            if let Some(broker) = broker_handle {
+                state.set_broker(broker);
+            }
+
+            // Set shared pool storage (agents will update these when connected)
+            #[cfg(feature = "database")]
+            if let Some(pool) = shared_db_pool {
+                state.set_db_pool_storage(pool);
+            }
+
+            #[cfg(feature = "cache")]
+            if let Some(pool) = shared_redis_pool {
+                state.set_redis_pool_storage(pool);
+            }
+
+            #[cfg(feature = "events")]
+            if let Some(client) = shared_nats_client {
+                state.set_nats_client_storage(client);
+            }
+
+            state
+        };
 
         // Handle both types of versioned routes
         let app = match routes {

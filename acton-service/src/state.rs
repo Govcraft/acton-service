@@ -75,19 +75,6 @@ where
 
     /// Agent broker handle for type-safe event broadcasting
     broker: Option<AgentHandle>,
-
-    // Agent handles for reactive pool management
-    #[cfg(feature = "database")]
-    db_agent: Option<AgentHandle>,
-
-    #[cfg(feature = "cache")]
-    redis_agent: Option<AgentHandle>,
-
-    #[cfg(feature = "events")]
-    nats_agent: Option<AgentHandle>,
-
-    /// Health monitor agent for aggregated health queries
-    health_monitor: Option<AgentHandle>,
 }
 
 impl<T> Default for AppState<T>
@@ -104,13 +91,6 @@ where
             #[cfg(feature = "events")]
             nats_client: Arc::new(RwLock::new(None)),
             broker: None,
-            #[cfg(feature = "database")]
-            db_agent: None,
-            #[cfg(feature = "cache")]
-            redis_agent: None,
-            #[cfg(feature = "events")]
-            nats_agent: None,
-            health_monitor: None,
         }
     }
 }
@@ -133,13 +113,6 @@ where
             #[cfg(feature = "events")]
             nats_client: Arc::new(RwLock::new(None)),
             broker: None,
-            #[cfg(feature = "database")]
-            db_agent: None,
-            #[cfg(feature = "cache")]
-            redis_agent: None,
-            #[cfg(feature = "events")]
-            nats_agent: None,
-            health_monitor: None,
         }
     }
 
@@ -174,10 +147,13 @@ where
         &self.db_pool
     }
 
-    /// Get the database agent handle for direct messaging
+    /// Set the database pool storage (internal use by ServiceBuilder)
+    ///
+    /// This replaces the internal pool storage with the provided shared storage.
+    /// Pool agents will update this storage when connections are established.
     #[cfg(feature = "database")]
-    pub fn db_agent(&self) -> Option<&AgentHandle> {
-        self.db_agent.as_ref()
+    pub(crate) fn set_db_pool_storage(&mut self, storage: Arc<RwLock<Option<PgPool>>>) {
+        self.db_pool = storage;
     }
 
     /// Get the Redis pool
@@ -199,10 +175,13 @@ where
         &self.redis_pool
     }
 
-    /// Get the Redis agent handle for direct messaging
+    /// Set the Redis pool storage (internal use by ServiceBuilder)
+    ///
+    /// This replaces the internal pool storage with the provided shared storage.
+    /// Pool agents will update this storage when connections are established.
     #[cfg(feature = "cache")]
-    pub fn redis_agent(&self) -> Option<&AgentHandle> {
-        self.redis_agent.as_ref()
+    pub(crate) fn set_redis_pool_storage(&mut self, storage: Arc<RwLock<Option<RedisPool>>>) {
+        self.redis_pool = storage;
     }
 
     /// Get the NATS client
@@ -224,10 +203,13 @@ where
         &self.nats_client
     }
 
-    /// Get the NATS agent handle for direct messaging
+    /// Set the NATS client storage (internal use by ServiceBuilder)
+    ///
+    /// This replaces the internal client storage with the provided shared storage.
+    /// Pool agents will update this storage when connections are established.
     #[cfg(feature = "events")]
-    pub fn nats_agent(&self) -> Option<&AgentHandle> {
-        self.nats_agent.as_ref()
+    pub(crate) fn set_nats_client_storage(&mut self, storage: Arc<RwLock<Option<NatsClient>>>) {
+        self.nats_client = storage;
     }
 
     /// Get the agent broker handle for event broadcasting
@@ -260,70 +242,9 @@ where
         self.broker.as_ref()
     }
 
-    /// Set the agent broker handle
-    ///
-    /// This is typically called by `ServiceBuilder` when an agent runtime
-    /// is initialized via `with_agent_runtime()`.
-    pub fn set_broker(&mut self, broker: AgentHandle) {
+    /// Set the agent broker handle (internal use only)
+    pub(crate) fn set_broker(&mut self, broker: AgentHandle) {
         self.broker = Some(broker);
-    }
-
-    /// Get the health monitor agent handle
-    ///
-    /// When configured, the health monitor aggregates health status from all
-    /// pool agents. Use this to query aggregated health without direct I/O.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use acton_service::prelude::*;
-    ///
-    /// async fn health_check(State(state): State<AppState<()>>) -> impl IntoResponse {
-    ///     if let Some(monitor) = state.health_monitor() {
-    ///         // Query aggregated health via agent
-    ///         monitor.send(GetAggregatedHealth).await;
-    ///     }
-    /// }
-    /// ```
-    pub fn health_monitor(&self) -> Option<&AgentHandle> {
-        self.health_monitor.as_ref()
-    }
-
-    /// Check if agent-based pool management is enabled
-    ///
-    /// Returns true if any pool agents or health monitor is configured.
-    pub fn has_agents(&self) -> bool {
-        self.health_monitor.is_some()
-            || {
-                #[cfg(feature = "database")]
-                {
-                    self.db_agent.is_some()
-                }
-                #[cfg(not(feature = "database"))]
-                {
-                    false
-                }
-            }
-            || {
-                #[cfg(feature = "cache")]
-                {
-                    self.redis_agent.is_some()
-                }
-                #[cfg(not(feature = "cache"))]
-                {
-                    false
-                }
-            }
-            || {
-                #[cfg(feature = "events")]
-                {
-                    self.nats_agent.is_some()
-                }
-                #[cfg(not(feature = "events"))]
-                {
-                    false
-                }
-            }
     }
 
     /// Get pool health metrics for all configured pools
@@ -383,19 +304,6 @@ where
 
     #[cfg(feature = "events")]
     nats_client: Option<NatsClient>,
-
-    broker: Option<AgentHandle>,
-
-    #[cfg(feature = "database")]
-    db_agent: Option<AgentHandle>,
-
-    #[cfg(feature = "cache")]
-    redis_agent: Option<AgentHandle>,
-
-    #[cfg(feature = "events")]
-    nats_agent: Option<AgentHandle>,
-
-    health_monitor: Option<AgentHandle>,
 }
 
 impl<T> AppStateBuilder<T>
@@ -417,14 +325,6 @@ where
             redis_pool: None,
             #[cfg(feature = "events")]
             nats_client: None,
-            broker: None,
-            #[cfg(feature = "database")]
-            db_agent: None,
-            #[cfg(feature = "cache")]
-            redis_agent: None,
-            #[cfg(feature = "events")]
-            nats_agent: None,
-            health_monitor: None,
         }
     }
 
@@ -452,56 +352,6 @@ where
     #[cfg(feature = "events")]
     pub fn nats_client(mut self, client: NatsClient) -> Self {
         self.nats_client = Some(client);
-        self
-    }
-
-    /// Set the agent broker handle for event broadcasting
-    ///
-    /// The broker handle can be obtained from `AgentRuntime::broker()` after
-    /// initializing the acton-reactive runtime via `ServiceBuilder::with_agent_runtime()`.
-    pub fn broker(mut self, broker: AgentHandle) -> Self {
-        self.broker = Some(broker);
-        self
-    }
-
-    /// Set the database pool agent handle
-    ///
-    /// The agent manages the database connection lifecycle including
-    /// reconnection, health monitoring, and graceful shutdown. The agent
-    /// populates the shared pool storage when connected.
-    #[cfg(feature = "database")]
-    pub fn db_agent(mut self, agent: AgentHandle) -> Self {
-        self.db_agent = Some(agent);
-        self
-    }
-
-    /// Set the Redis pool agent handle
-    ///
-    /// The agent manages the Redis connection lifecycle including
-    /// reconnection, health monitoring, and graceful shutdown. The agent
-    /// populates the shared pool storage when connected.
-    #[cfg(feature = "cache")]
-    pub fn redis_agent(mut self, agent: AgentHandle) -> Self {
-        self.redis_agent = Some(agent);
-        self
-    }
-
-    /// Set the NATS pool agent handle
-    ///
-    /// The agent manages the NATS connection lifecycle including
-    /// reconnection, health monitoring, and graceful shutdown. The agent
-    /// populates the shared client storage when connected.
-    #[cfg(feature = "events")]
-    pub fn nats_agent(mut self, agent: AgentHandle) -> Self {
-        self.nats_agent = Some(agent);
-        self
-    }
-
-    /// Set the health monitor agent handle
-    ///
-    /// The health monitor aggregates health status from all pool agents.
-    pub fn health_monitor(mut self, agent: AgentHandle) -> Self {
-        self.health_monitor = Some(agent);
         self
     }
 
@@ -556,12 +406,9 @@ where
         // Use provided config or default
         let config = self.config.unwrap_or_default();
 
-        // Skip traditional pool initialization if agents are provided
+        // Initialize pool storage
         #[cfg(feature = "database")]
-        let db_pool = if self.db_agent.is_some() {
-            // Agent will manage the pool - don't initialize traditional storage
-            Arc::new(RwLock::new(None))
-        } else if let Some(pool) = self.db_pool {
+        let db_pool = if let Some(pool) = self.db_pool {
             // Pool was provided explicitly
             Arc::new(RwLock::new(Some(pool)))
         } else if let Some(db_config) = &config.database {
@@ -610,10 +457,7 @@ where
         };
 
         #[cfg(feature = "cache")]
-        let redis_pool = if self.redis_agent.is_some() {
-            // Agent will manage the pool
-            Arc::new(RwLock::new(None))
-        } else if let Some(pool) = self.redis_pool {
+        let redis_pool = if let Some(pool) = self.redis_pool {
             // Pool was provided explicitly
             Arc::new(RwLock::new(Some(pool)))
         } else if let Some(redis_config) = &config.redis {
@@ -662,10 +506,7 @@ where
         };
 
         #[cfg(feature = "events")]
-        let nats_client = if self.nats_agent.is_some() {
-            // Agent will manage the client
-            Arc::new(RwLock::new(None))
-        } else if let Some(client) = self.nats_client {
+        let nats_client = if let Some(client) = self.nats_client {
             // Client was provided explicitly
             Arc::new(RwLock::new(Some(client)))
         } else if let Some(nats_config) = &config.nats {
@@ -721,14 +562,7 @@ where
             redis_pool,
             #[cfg(feature = "events")]
             nats_client,
-            broker: self.broker,
-            #[cfg(feature = "database")]
-            db_agent: self.db_agent,
-            #[cfg(feature = "cache")]
-            redis_agent: self.redis_agent,
-            #[cfg(feature = "events")]
-            nats_agent: self.nats_agent,
-            health_monitor: self.health_monitor,
+            broker: None,
         })
     }
 }
@@ -768,16 +602,5 @@ mod tests {
             .unwrap();
 
         assert_eq!(state.config().service.name, "acton-service");
-    }
-
-    #[tokio::test]
-    async fn test_has_agents_default() {
-        let state = AppStateBuilder::<()>::new()
-            .without_tracing()
-            .build()
-            .await
-            .unwrap();
-
-        assert!(!state.has_agents());
     }
 }

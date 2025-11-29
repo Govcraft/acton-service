@@ -5,10 +5,9 @@
 //!
 //! ## Shared State Architecture
 //!
-//! Pool agents can optionally receive a shared `Arc<RwLock<Option<Pool>>>`
-//! reference during spawn. When the pool connects, the agent updates this
-//! shared storage, allowing `AppState::db()` etc. to access pools directly
-//! without message passing overhead.
+//! Pool agents receive a shared `Arc<RwLock<Option<Pool>>>` reference during spawn.
+//! When the pool connects, the agent updates this shared storage, allowing
+//! `AppState::db()` etc. to access pools directly without message passing overhead.
 //!
 //! ## Pattern: Spawn and Send Message
 //!
@@ -20,22 +19,16 @@
 //! 2. Send a message to self when the connection completes
 //! 3. Handle that message in a `mutate_on` handler to update agent state
 
-use std::sync::Arc;
-use tokio::sync::RwLock;
-
-use acton_reactive::prelude::*;
-
-use super::messages::{
-    GetPool, PoolHealthCheck, PoolHealthResponse, PoolHealthUpdate, PoolReady, PoolReconnect,
-};
-
-/// Maximum number of reconnection attempts before giving up
-const MAX_RECONNECT_ATTEMPTS: u32 = 10;
-
 // ============================================================================
 // Database Pool Agent
 // ============================================================================
 
+#[cfg(feature = "database")]
+use std::sync::Arc;
+#[cfg(feature = "database")]
+use tokio::sync::RwLock;
+#[cfg(feature = "database")]
+use acton_reactive::prelude::*;
 #[cfg(feature = "database")]
 use super::messages::{DatabasePoolConnected, DatabasePoolConnectionFailed};
 
@@ -51,8 +44,6 @@ pub struct DatabasePoolState {
     pub pool: Option<sqlx::PgPool>,
     /// Configuration for the database connection
     pub config: Option<crate::config::DatabaseConfig>,
-    /// Number of reconnection attempts since last successful connection
-    pub reconnect_attempts: u32,
     /// Whether the agent is currently attempting to connect
     pub connecting: bool,
     /// Shared storage that AppState reads from directly
@@ -64,9 +55,9 @@ pub struct DatabasePoolState {
 /// This agent manages a database connection pool using message passing
 /// instead of shared mutable state. Benefits include:
 ///
-/// - **No lock contention**: Pool access via async messages
-/// - **Automatic reconnection**: Built-in retry with exponential backoff
-/// - **Health monitoring**: Query health status via messages
+/// - **No lock contention**: Pool access via shared state with minimal locking
+/// - **Automatic connection**: Connection established on agent start
+/// - **Health monitoring**: Broadcasts health status via message broker
 /// - **Graceful shutdown**: Pool closed on agent stop
 #[cfg(feature = "database")]
 pub struct DatabasePoolAgent;
@@ -82,8 +73,8 @@ impl DatabasePoolAgent {
     ///
     /// * `runtime` - The agent runtime to spawn into
     /// * `config` - Database connection configuration
-    /// * `shared_pool` - Optional shared storage that will be updated when the pool connects.
-    ///   When provided, `AppState::db()` can read the pool directly without agent communication.
+    /// * `shared_pool` - Shared storage that will be updated when the pool connects.
+    ///   `AppState::db()` reads the pool directly from this storage.
     pub async fn spawn(
         runtime: &mut AgentRuntime,
         config: crate::config::DatabaseConfig,
@@ -96,60 +87,14 @@ impl DatabasePoolAgent {
         agent.model.connecting = true;
         agent.model.shared_pool = shared_pool;
 
-        // Handle GetPool requests - respond with current pool state
-        agent.act_on::<GetPool>(|agent, envelope| {
-            let pool = agent.model.pool.clone();
-            let connecting = agent.model.connecting;
-            let reply_envelope = envelope.reply_envelope();
-
-            AgentReply::from_async(async move {
-                use super::messages::PoolResponse;
-                let response = if let Some(p) = pool {
-                    PoolResponse::Available(p)
-                } else if connecting {
-                    PoolResponse::Connecting
-                } else {
-                    PoolResponse::NotConnected
-                };
-                reply_envelope.send(response).await;
-            })
-        });
-
-        // Handle health check requests
-        agent.act_on::<PoolHealthCheck>(|agent, envelope| {
-            let pool = agent.model.pool.clone();
-            let config = agent.model.config.clone();
-            let reply_envelope = envelope.reply_envelope();
-
-            AgentReply::from_async(async move {
-                let response = if let Some(ref p) = pool {
-                    let size = p.size();
-                    let idle = p.num_idle() as u32;
-                    let max = config.map(|c| c.max_connections).unwrap_or(10);
-                    let active = size.saturating_sub(idle);
-
-                    PoolHealthResponse::healthy(format!(
-                        "Connected: {}/{} active",
-                        active, max
-                    ))
-                    .with_connections(active, idle)
-                } else {
-                    PoolHealthResponse::unhealthy("Not connected")
-                };
-                reply_envelope.send(response).await;
-            })
-        });
-
         // Handle pool connected message (sent from spawned task)
         agent.mutate_on::<DatabasePoolConnected>(|agent, envelope| {
             let pool = envelope.message().pool.clone();
             agent.model.pool = Some(pool.clone());
             agent.model.connecting = false;
-            agent.model.reconnect_attempts = 0;
 
             // Update shared storage if configured
             let shared_pool = agent.model.shared_pool.clone();
-            let broker = agent.broker().clone();
 
             AgentReply::from_async(async move {
                 // Update shared storage for direct AppState access
@@ -159,11 +104,6 @@ impl DatabasePoolAgent {
                 } else {
                     tracing::info!("Database pool connected (no shared state)");
                 }
-
-                broker.broadcast(PoolReady::database()).await;
-                broker
-                    .broadcast(PoolHealthUpdate::healthy("database", "Connected"))
-                    .await;
             })
         });
 
@@ -173,87 +113,21 @@ impl DatabasePoolAgent {
             agent.model.connecting = false;
             tracing::error!("Database pool connection failed: {}", error_msg);
 
-            let broker = agent.broker().clone();
-            AgentReply::from_async(async move {
-                broker
-                    .broadcast(PoolHealthUpdate::unhealthy("database", error_msg))
-                    .await;
-            })
-        });
-
-        // Handle reconnection requests
-        agent.mutate_on::<PoolReconnect>(|agent, _envelope| {
-            let config = agent.model.config.clone();
-            let current_attempts = agent.model.reconnect_attempts;
-
-            if current_attempts >= MAX_RECONNECT_ATTEMPTS {
-                tracing::warn!(
-                    "Database pool reconnect: max attempts ({}) reached",
-                    MAX_RECONNECT_ATTEMPTS
-                );
-                return AgentReply::immediate();
-            }
-
-            agent.model.connecting = true;
-            agent.model.reconnect_attempts = current_attempts + 1;
-            let self_handle = agent.handle().clone();
-
-            AgentReply::from_async(async move {
-                if let Some(cfg) = config {
-                    tracing::info!(
-                        "Database pool reconnecting (attempt {})",
-                        current_attempts + 1
-                    );
-
-                    // Spawn the non-Sync connection work
-                    let result = tokio::spawn(async move {
-                        crate::database::create_pool(&cfg).await
-                    })
-                    .await;
-
-                    match result {
-                        Ok(Ok(pool)) => {
-                            self_handle.send(DatabasePoolConnected { pool }).await;
-                        }
-                        Ok(Err(e)) => {
-                            self_handle
-                                .send(DatabasePoolConnectionFailed {
-                                    error: e.to_string(),
-                                })
-                                .await;
-                        }
-                        Err(e) => {
-                            self_handle
-                                .send(DatabasePoolConnectionFailed {
-                                    error: format!("Connection task panicked: {}", e),
-                                })
-                                .await;
-                        }
-                    }
-                }
-            })
+            AgentReply::immediate()
         });
 
         // Initialize connection on startup using spawn pattern
         agent.after_start(|agent| {
             let config = agent.model.config.clone();
             let self_handle = agent.handle().clone();
-            let broker = agent.broker().clone();
 
             AgentReply::from_async(async move {
                 if let Some(cfg) = config {
                     tracing::info!("Database pool agent starting, connecting to database...");
 
-                    // Broadcast connecting status
-                    broker
-                        .broadcast(PoolHealthUpdate::connecting("database"))
-                        .await;
-
                     // Spawn the non-Sync connection work
-                    let result = tokio::spawn(async move {
-                        crate::database::create_pool(&cfg).await
-                    })
-                    .await;
+                    let result = tokio::spawn(async move { crate::database::create_pool(&cfg).await })
+                        .await;
 
                     match result {
                         Ok(Ok(pool)) => {
@@ -299,6 +173,12 @@ impl DatabasePoolAgent {
 // Redis Pool Agent
 // ============================================================================
 
+#[cfg(all(feature = "cache", not(feature = "database")))]
+use std::sync::Arc;
+#[cfg(all(feature = "cache", not(feature = "database")))]
+use tokio::sync::RwLock;
+#[cfg(all(feature = "cache", not(feature = "database")))]
+use acton_reactive::prelude::*;
 #[cfg(feature = "cache")]
 use super::messages::{RedisPoolConnected, RedisPoolConnectionFailed};
 
@@ -314,8 +194,6 @@ pub struct RedisPoolState {
     pub pool: Option<deadpool_redis::Pool>,
     /// Configuration for the Redis connection
     pub config: Option<crate::config::RedisConfig>,
-    /// Number of reconnection attempts since last successful connection
-    pub reconnect_attempts: u32,
     /// Whether the agent is currently attempting to connect
     pub connecting: bool,
     /// Shared storage that AppState reads from directly
@@ -325,7 +203,7 @@ pub struct RedisPoolState {
 /// Agent-based Redis connection pool manager
 ///
 /// Similar to [`DatabasePoolAgent`], this agent manages a Redis connection
-/// pool using message passing instead of shared mutable state.
+/// pool with automatic connection and graceful shutdown.
 #[cfg(feature = "cache")]
 pub struct RedisPoolAgent;
 
@@ -337,7 +215,7 @@ impl RedisPoolAgent {
     ///
     /// * `runtime` - The agent runtime to spawn into
     /// * `config` - Redis connection configuration
-    /// * `shared_pool` - Optional shared storage that will be updated when the pool connects.
+    /// * `shared_pool` - Shared storage that will be updated when the pool connects.
     pub async fn spawn(
         runtime: &mut AgentRuntime,
         config: crate::config::RedisConfig,
@@ -350,60 +228,14 @@ impl RedisPoolAgent {
         agent.model.connecting = true;
         agent.model.shared_pool = shared_pool;
 
-        // Handle GetPool requests
-        agent.act_on::<GetPool>(|agent, envelope| {
-            let pool = agent.model.pool.clone();
-            let connecting = agent.model.connecting;
-            let reply_envelope = envelope.reply_envelope();
-
-            AgentReply::from_async(async move {
-                use super::messages::PoolResponse;
-                let response = if let Some(p) = pool {
-                    PoolResponse::Available(p)
-                } else if connecting {
-                    PoolResponse::Connecting
-                } else {
-                    PoolResponse::NotConnected
-                };
-                reply_envelope.send(response).await;
-            })
-        });
-
-        // Handle health check requests
-        agent.act_on::<PoolHealthCheck>(|agent, envelope| {
-            let pool = agent.model.pool.clone();
-            let config = agent.model.config.clone();
-            let reply_envelope = envelope.reply_envelope();
-
-            AgentReply::from_async(async move {
-                let response = if let Some(ref p) = pool {
-                    let status = p.status();
-                    let max = config.map(|c| c.max_connections).unwrap_or(10);
-                    let available = status.available;
-                    let active = max.saturating_sub(available);
-
-                    PoolHealthResponse::healthy(format!(
-                        "Connected: {}/{} available",
-                        available, max
-                    ))
-                    .with_connections(active as u32, available as u32)
-                } else {
-                    PoolHealthResponse::unhealthy("Not connected")
-                };
-                reply_envelope.send(response).await;
-            })
-        });
-
         // Handle pool connected message
         agent.mutate_on::<RedisPoolConnected>(|agent, envelope| {
             let pool = envelope.message().pool.clone();
             agent.model.pool = Some(pool.clone());
             agent.model.connecting = false;
-            agent.model.reconnect_attempts = 0;
 
             // Update shared storage if configured
             let shared_pool = agent.model.shared_pool.clone();
-            let broker = agent.broker().clone();
 
             AgentReply::from_async(async move {
                 // Update shared storage for direct AppState access
@@ -413,11 +245,6 @@ impl RedisPoolAgent {
                 } else {
                     tracing::info!("Redis pool connected (no shared state)");
                 }
-
-                broker.broadcast(PoolReady::redis()).await;
-                broker
-                    .broadcast(PoolHealthUpdate::healthy("redis", "Connected"))
-                    .await;
             })
         });
 
@@ -427,82 +254,20 @@ impl RedisPoolAgent {
             agent.model.connecting = false;
             tracing::error!("Redis pool connection failed: {}", error_msg);
 
-            let broker = agent.broker().clone();
-            AgentReply::from_async(async move {
-                broker
-                    .broadcast(PoolHealthUpdate::unhealthy("redis", error_msg))
-                    .await;
-            })
-        });
-
-        // Handle reconnection requests
-        agent.mutate_on::<PoolReconnect>(|agent, _envelope| {
-            let config = agent.model.config.clone();
-            let current_attempts = agent.model.reconnect_attempts;
-
-            if current_attempts >= MAX_RECONNECT_ATTEMPTS {
-                tracing::warn!(
-                    "Redis pool reconnect: max attempts ({}) reached",
-                    MAX_RECONNECT_ATTEMPTS
-                );
-                return AgentReply::immediate();
-            }
-
-            agent.model.connecting = true;
-            agent.model.reconnect_attempts = current_attempts + 1;
-            let self_handle = agent.handle().clone();
-
-            AgentReply::from_async(async move {
-                if let Some(cfg) = config {
-                    tracing::info!("Redis pool reconnecting (attempt {})", current_attempts + 1);
-
-                    let result = tokio::spawn(async move {
-                        crate::cache::create_pool(&cfg).await
-                    })
-                    .await;
-
-                    match result {
-                        Ok(Ok(pool)) => {
-                            self_handle.send(RedisPoolConnected { pool }).await;
-                        }
-                        Ok(Err(e)) => {
-                            self_handle
-                                .send(RedisPoolConnectionFailed {
-                                    error: e.to_string(),
-                                })
-                                .await;
-                        }
-                        Err(e) => {
-                            self_handle
-                                .send(RedisPoolConnectionFailed {
-                                    error: format!("Connection task panicked: {}", e),
-                                })
-                                .await;
-                        }
-                    }
-                }
-            })
+            AgentReply::immediate()
         });
 
         // Initialize connection on startup
         agent.after_start(|agent| {
             let config = agent.model.config.clone();
             let self_handle = agent.handle().clone();
-            let broker = agent.broker().clone();
 
             AgentReply::from_async(async move {
                 if let Some(cfg) = config {
                     tracing::info!("Redis pool agent starting, connecting to Redis...");
 
-                    // Broadcast connecting status
-                    broker
-                        .broadcast(PoolHealthUpdate::connecting("redis"))
-                        .await;
-
-                    let result = tokio::spawn(async move {
-                        crate::cache::create_pool(&cfg).await
-                    })
-                    .await;
+                    let result =
+                        tokio::spawn(async move { crate::cache::create_pool(&cfg).await }).await;
 
                     match result {
                         Ok(Ok(pool)) => {
@@ -543,6 +308,12 @@ impl RedisPoolAgent {
 // NATS Pool Agent
 // ============================================================================
 
+#[cfg(all(feature = "events", not(feature = "database"), not(feature = "cache")))]
+use std::sync::Arc;
+#[cfg(all(feature = "events", not(feature = "database"), not(feature = "cache")))]
+use tokio::sync::RwLock;
+#[cfg(all(feature = "events", not(feature = "database"), not(feature = "cache")))]
+use acton_reactive::prelude::*;
 #[cfg(feature = "events")]
 use super::messages::{NatsClientConnected, NatsClientConnectionFailed};
 
@@ -558,8 +329,6 @@ pub struct NatsPoolState {
     pub client: Option<async_nats::Client>,
     /// Configuration for the NATS connection
     pub config: Option<crate::config::NatsConfig>,
-    /// Number of reconnection attempts since last successful connection
-    pub reconnect_attempts: u32,
     /// Whether the agent is currently attempting to connect
     pub connecting: bool,
     /// Shared storage that AppState reads from directly
@@ -568,7 +337,7 @@ pub struct NatsPoolState {
 
 /// Agent-based NATS client manager
 ///
-/// Manages a NATS client connection using message passing.
+/// Manages a NATS client connection with automatic connection and graceful shutdown.
 #[cfg(feature = "events")]
 pub struct NatsPoolAgent;
 
@@ -580,7 +349,7 @@ impl NatsPoolAgent {
     ///
     /// * `runtime` - The agent runtime to spawn into
     /// * `config` - NATS connection configuration
-    /// * `shared_client` - Optional shared storage that will be updated when the client connects.
+    /// * `shared_client` - Shared storage that will be updated when the client connects.
     pub async fn spawn(
         runtime: &mut AgentRuntime,
         config: crate::config::NatsConfig,
@@ -593,61 +362,14 @@ impl NatsPoolAgent {
         agent.model.connecting = true;
         agent.model.shared_client = shared_client;
 
-        // Handle GetPool requests
-        agent.act_on::<GetPool>(|agent, envelope| {
-            let client = agent.model.client.clone();
-            let connecting = agent.model.connecting;
-            let reply_envelope = envelope.reply_envelope();
-
-            AgentReply::from_async(async move {
-                use super::messages::PoolResponse;
-                let response = if let Some(c) = client {
-                    PoolResponse::Available(c)
-                } else if connecting {
-                    PoolResponse::Connecting
-                } else {
-                    PoolResponse::NotConnected
-                };
-                reply_envelope.send(response).await;
-            })
-        });
-
-        // Handle health check requests
-        agent.act_on::<PoolHealthCheck>(|agent, envelope| {
-            let client = agent.model.client.clone();
-            let reply_envelope = envelope.reply_envelope();
-
-            AgentReply::from_async(async move {
-                let response = if let Some(ref c) = client {
-                    let state = c.connection_state();
-                    match state {
-                        async_nats::connection::State::Connected => {
-                            PoolHealthResponse::healthy("Connected")
-                        }
-                        async_nats::connection::State::Disconnected => {
-                            PoolHealthResponse::unhealthy("Disconnected")
-                        }
-                        async_nats::connection::State::Pending => {
-                            PoolHealthResponse::unhealthy("Pending connection")
-                        }
-                    }
-                } else {
-                    PoolHealthResponse::unhealthy("Not connected")
-                };
-                reply_envelope.send(response).await;
-            })
-        });
-
         // Handle client connected message
         agent.mutate_on::<NatsClientConnected>(|agent, envelope| {
             let client = envelope.message().client.clone();
             agent.model.client = Some(client.clone());
             agent.model.connecting = false;
-            agent.model.reconnect_attempts = 0;
 
             // Update shared storage if configured
             let shared_client = agent.model.shared_client.clone();
-            let broker = agent.broker().clone();
 
             AgentReply::from_async(async move {
                 // Update shared storage for direct AppState access
@@ -657,11 +379,6 @@ impl NatsPoolAgent {
                 } else {
                     tracing::info!("NATS client connected (no shared state)");
                 }
-
-                broker.broadcast(PoolReady::nats()).await;
-                broker
-                    .broadcast(PoolHealthUpdate::healthy("nats", "Connected"))
-                    .await;
             })
         });
 
@@ -671,82 +388,20 @@ impl NatsPoolAgent {
             agent.model.connecting = false;
             tracing::error!("NATS client connection failed: {}", error_msg);
 
-            let broker = agent.broker().clone();
-            AgentReply::from_async(async move {
-                broker
-                    .broadcast(PoolHealthUpdate::unhealthy("nats", error_msg))
-                    .await;
-            })
-        });
-
-        // Handle reconnection requests
-        agent.mutate_on::<PoolReconnect>(|agent, _envelope| {
-            let config = agent.model.config.clone();
-            let current_attempts = agent.model.reconnect_attempts;
-
-            if current_attempts >= MAX_RECONNECT_ATTEMPTS {
-                tracing::warn!(
-                    "NATS client reconnect: max attempts ({}) reached",
-                    MAX_RECONNECT_ATTEMPTS
-                );
-                return AgentReply::immediate();
-            }
-
-            agent.model.connecting = true;
-            agent.model.reconnect_attempts = current_attempts + 1;
-            let self_handle = agent.handle().clone();
-
-            AgentReply::from_async(async move {
-                if let Some(cfg) = config {
-                    tracing::info!("NATS client reconnecting (attempt {})", current_attempts + 1);
-
-                    let result = tokio::spawn(async move {
-                        crate::events::create_client(&cfg).await
-                    })
-                    .await;
-
-                    match result {
-                        Ok(Ok(client)) => {
-                            self_handle.send(NatsClientConnected { client }).await;
-                        }
-                        Ok(Err(e)) => {
-                            self_handle
-                                .send(NatsClientConnectionFailed {
-                                    error: e.to_string(),
-                                })
-                                .await;
-                        }
-                        Err(e) => {
-                            self_handle
-                                .send(NatsClientConnectionFailed {
-                                    error: format!("Connection task panicked: {}", e),
-                                })
-                                .await;
-                        }
-                    }
-                }
-            })
+            AgentReply::immediate()
         });
 
         // Initialize connection on startup
         agent.after_start(|agent| {
             let config = agent.model.config.clone();
             let self_handle = agent.handle().clone();
-            let broker = agent.broker().clone();
 
             AgentReply::from_async(async move {
                 if let Some(cfg) = config {
                     tracing::info!("NATS pool agent starting, connecting to NATS...");
 
-                    // Broadcast connecting status
-                    broker
-                        .broadcast(PoolHealthUpdate::connecting("nats"))
-                        .await;
-
-                    let result = tokio::spawn(async move {
-                        crate::events::create_client(&cfg).await
-                    })
-                    .await;
+                    let result =
+                        tokio::spawn(async move { crate::events::create_client(&cfg).await }).await;
 
                     match result {
                         Ok(Ok(client)) => {
