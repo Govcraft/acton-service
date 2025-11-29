@@ -21,6 +21,10 @@ Build event-driven microservices with NATS JetStream for reliable message delive
 
 acton-service provides production-ready NATS integration through `async-nats` with automatic connection management, JetStream support, and health monitoring. NATS enables event-driven architectures with publish/subscribe patterns, stream processing, and guaranteed message delivery.
 
+{% callout type="note" title="Agent-Managed Connections" %}
+NATS client connections are managed internally by a **NatsPoolAgent** that handles connection lifecycle, health monitoring, and graceful shutdown. You interact with the client via `state.nats()` - the agent works transparently behind the scenes. See [Reactive Architecture](/docs/reactive-architecture) for implementation details.
+{% /callout %}
+
 ## Installation
 
 Enable the events feature:

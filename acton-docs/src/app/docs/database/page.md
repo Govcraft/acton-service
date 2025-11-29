@@ -19,6 +19,10 @@ Integrate PostgreSQL databases with compile-time checked queries, automatic conn
 
 acton-service provides production-ready PostgreSQL integration through SQLx with automatic connection pool management, health checks, and compile-time query verification. Database connections are managed automatically through the `AppState` with zero configuration required for development.
 
+{% callout type="note" title="Agent-Managed Pools" %}
+Database connection pools are managed internally by a **DatabasePoolAgent** that handles connection lifecycle, health monitoring, and graceful shutdown. You interact with pools via `state.db()` - the agent works transparently behind the scenes. See [Reactive Architecture](/docs/reactive-architecture) for implementation details.
+{% /callout %}
+
 ## Installation
 
 Enable the database feature:

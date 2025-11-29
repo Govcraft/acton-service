@@ -21,6 +21,10 @@ Integrate Redis for distributed caching, session storage, and rate limiting with
 
 acton-service provides production-ready Redis integration through `redis-rs` with Deadpool connection pooling, automatic health checks, and built-in support for distributed rate limiting. Redis connections are managed automatically through the `AppState` with zero configuration required for development.
 
+{% callout type="note" title="Agent-Managed Pools" %}
+Redis connection pools are managed internally by a **RedisPoolAgent** that handles connection lifecycle, health monitoring, and graceful shutdown. You interact with pools via `state.redis()` - the agent works transparently behind the scenes. See [Reactive Architecture](/docs/reactive-architecture) for implementation details.
+{% /callout %}
+
 ## Installation
 
 Enable the cache feature:
