@@ -131,7 +131,6 @@ where
     cedar: Option<crate::middleware::cedar::CedarAuthz>,
     #[cfg(feature = "cedar-authz")]
     cedar_path_normalizer: Option<fn(&str) -> String>,
-    #[cfg(feature = "acton-reactive")]
     agent_runtime: Option<acton_reactive::prelude::AgentRuntime>,
 }
 
@@ -151,7 +150,6 @@ where
             cedar: None,
             #[cfg(feature = "cedar-authz")]
             cedar_path_normalizer: None,
-            #[cfg(feature = "acton-reactive")]
             agent_runtime: None,
         }
     }
@@ -314,7 +312,6 @@ where
     ///
     /// service.serve().await?;
     /// ```
-    #[cfg(feature = "acton-reactive")]
     pub fn with_agent_runtime(&mut self) -> &mut acton_reactive::prelude::AgentRuntime {
         if self.agent_runtime.is_none() {
             tracing::info!("Initializing acton-reactive agent runtime");
@@ -353,7 +350,6 @@ where
     ///
     /// builder.with_state(state);
     /// ```
-    #[cfg(feature = "acton-reactive")]
     pub fn broker(&self) -> Option<acton_reactive::prelude::AgentHandle> {
         self.agent_runtime.as_ref().map(|r| r.broker())
     }
@@ -512,8 +508,7 @@ where
             app,
             #[cfg(feature = "grpc")]
             grpc_routes: self.grpc_services,
-            #[cfg(feature = "acton-reactive")]
-            agent_runtime: self.agent_runtime,
+                    agent_runtime: self.agent_runtime,
         }
     }
 
@@ -605,7 +600,6 @@ where
     app: Router,
     #[cfg(feature = "grpc")]
     grpc_routes: Option<tonic::service::Routes>,
-    #[cfg(feature = "acton-reactive")]
     agent_runtime: Option<acton_reactive::prelude::AgentRuntime>,
 }
 
@@ -721,8 +715,7 @@ where
                     tracing::info!("Server shutdown complete");
 
                     // Shutdown agent runtime after server stops (gRPC path)
-                    #[cfg(feature = "acton-reactive")]
-                    if let Some(mut runtime) = self.agent_runtime {
+                                    if let Some(mut runtime) = self.agent_runtime {
                         tracing::info!("Shutting down agent runtime...");
                         if let Err(e) = runtime.shutdown_all().await {
                             tracing::error!("Agent runtime shutdown error: {}", e);
@@ -747,8 +740,7 @@ where
         tracing::info!("Server shutdown complete");
 
         // Shutdown agent runtime after server stops (HTTP-only path)
-        #[cfg(feature = "acton-reactive")]
-        if let Some(mut runtime) = self.agent_runtime {
+            if let Some(mut runtime) = self.agent_runtime {
             tracing::info!("Shutting down agent runtime...");
             if let Err(e) = runtime.shutdown_all().await {
                 tracing::error!("Agent runtime shutdown error: {}", e);

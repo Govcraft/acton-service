@@ -76,8 +76,8 @@ pub mod openapi;
 #[cfg(feature = "grpc")]
 pub mod grpc;
 
-#[cfg(feature = "acton-reactive")]
-pub mod agents;
+// Agent module is internal - only BackgroundWorker and broker types are exposed via prelude
+mod agents;
 
 /// Build-time utilities for compiling protocol buffers
 ///
@@ -158,8 +158,10 @@ pub mod prelude {
     #[cfg(all(feature = "grpc", feature = "governor"))]
     pub use crate::grpc::GrpcRateLimitLayer;
 
-    #[cfg(feature = "acton-reactive")]
-    pub use crate::agents::prelude as agents;
+    // User-facing agent types (internal pool agents are not exported)
+    pub use crate::agents::{BackgroundWorker, TaskStatus};
+    // Re-export AgentHandle for broker access
+    pub use acton_reactive::prelude::AgentHandle;
 
     pub use axum::{
         extract::{Path, Query, State},

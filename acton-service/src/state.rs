@@ -15,7 +15,6 @@ use deadpool_redis::Pool as RedisPool;
 #[cfg(feature = "events")]
 use async_nats::Client as NatsClient;
 
-#[cfg(feature = "acton-reactive")]
 use acton_reactive::prelude::AgentHandle;
 
 use crate::{config::Config, error::Result};
@@ -45,8 +44,7 @@ where
     /// When the acton-reactive feature is enabled and an agent runtime
     /// is initialized, HTTP handlers can use this broker to broadcast
     /// typed events to subscribed agents.
-    #[cfg(feature = "acton-reactive")]
-    broker: Option<AgentHandle>,
+        broker: Option<AgentHandle>,
 }
 
 impl<T> Default for AppState<T>
@@ -62,8 +60,7 @@ where
             redis_pool: Arc::new(RwLock::new(None)),
             #[cfg(feature = "events")]
             nats_client: Arc::new(RwLock::new(None)),
-            #[cfg(feature = "acton-reactive")]
-            broker: None,
+                        broker: None,
         }
     }
 }
@@ -85,8 +82,7 @@ where
             redis_pool: Arc::new(RwLock::new(None)),
             #[cfg(feature = "events")]
             nats_client: Arc::new(RwLock::new(None)),
-            #[cfg(feature = "acton-reactive")]
-            broker: None,
+                        broker: None,
         }
     }
 
@@ -173,8 +169,7 @@ where
     ///     Ok(Json(user))
     /// }
     /// ```
-    #[cfg(feature = "acton-reactive")]
-    pub fn broker(&self) -> Option<&AgentHandle> {
+        pub fn broker(&self) -> Option<&AgentHandle> {
         self.broker.as_ref()
     }
 
@@ -182,8 +177,7 @@ where
     ///
     /// This is typically called by `ServiceBuilder` when an agent runtime
     /// is initialized via `with_agent_runtime()`.
-    #[cfg(feature = "acton-reactive")]
-    pub fn set_broker(&mut self, broker: AgentHandle) {
+        pub fn set_broker(&mut self, broker: AgentHandle) {
         self.broker = Some(broker);
     }
 
@@ -245,8 +239,7 @@ where
     #[cfg(feature = "events")]
     nats_client: Option<NatsClient>,
 
-    #[cfg(feature = "acton-reactive")]
-    broker: Option<AgentHandle>,
+        broker: Option<AgentHandle>,
 }
 
 impl<T> AppStateBuilder<T>
@@ -268,8 +261,7 @@ where
             redis_pool: None,
             #[cfg(feature = "events")]
             nats_client: None,
-            #[cfg(feature = "acton-reactive")]
-            broker: None,
+                        broker: None,
         }
     }
 
@@ -317,8 +309,7 @@ where
     ///     .build()
     ///     .await?;
     /// ```
-    #[cfg(feature = "acton-reactive")]
-    pub fn broker(mut self, broker: AgentHandle) -> Self {
+        pub fn broker(mut self, broker: AgentHandle) -> Self {
         self.broker = Some(broker);
         self
     }
@@ -528,8 +519,7 @@ where
             redis_pool,
             #[cfg(feature = "events")]
             nats_client,
-            #[cfg(feature = "acton-reactive")]
-            broker: self.broker,
+                        broker: self.broker,
         })
     }
 }
