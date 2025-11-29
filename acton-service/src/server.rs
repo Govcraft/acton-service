@@ -55,7 +55,10 @@ impl Server {
             // Compression - always enabled (minimal overhead)
             .layer(CompressionLayer::new())
             // Request timeout
-            .layer(TimeoutLayer::new(Duration::from_secs(self.config.service.timeout_secs)))
+            .layer(TimeoutLayer::with_status_code(
+                http::StatusCode::REQUEST_TIMEOUT,
+                Duration::from_secs(self.config.service.timeout_secs),
+            ))
             // Request body size limit - configurable via config
             .layer(RequestBodyLimitLayer::new(body_limit))
             // Tracing (always enabled)

@@ -115,6 +115,7 @@ where
 /// - state: Uses `AppState::default()`
 /// - grpc_services: None (gRPC server disabled by default)
 /// - cedar: None (auto-configures from config.cedar if enabled)
+/// - agent_runtime: None (agent-based reactive components disabled by default)
 ///
 /// Health and readiness endpoints are ALWAYS included (automatically added by ServiceBuilder).
 pub struct ServiceBuilder<T = ()>
@@ -130,6 +131,8 @@ where
     cedar: Option<crate::middleware::cedar::CedarAuthz>,
     #[cfg(feature = "cedar-authz")]
     cedar_path_normalizer: Option<fn(&str) -> String>,
+    #[cfg(feature = "acton-reactive")]
+    agent_runtime: Option<acton_reactive::prelude::AgentRuntime>,
 }
 
 impl<T> ServiceBuilder<T>
@@ -148,6 +151,8 @@ where
             cedar: None,
             #[cfg(feature = "cedar-authz")]
             cedar_path_normalizer: None,
+            #[cfg(feature = "acton-reactive")]
+            agent_runtime: None,
         }
     }
 
@@ -278,6 +283,81 @@ where
         self.cedar_path_normalizer = Some(normalizer);
         self
     }
+
+    /// Enable agent-based reactive components
+    ///
+    /// This initializes the acton-reactive runtime for spawning pool agents
+    /// and other reactive components. The runtime is automatically shut down
+    /// when the service stops.
+    ///
+    /// Returns a mutable reference to the `AgentRuntime`, allowing you to spawn
+    /// pool agents during the build phase.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use acton_service::prelude::*;
+    /// use acton_service::agents::prelude::*;
+    ///
+    /// let mut builder = ServiceBuilder::new();
+    /// let runtime = builder.with_agent_runtime();
+    ///
+    /// // Spawn pool agents during build
+    /// let db_handle = DatabasePoolAgent::spawn(runtime, db_config).await?;
+    /// let redis_handle = RedisPoolAgent::spawn(runtime, redis_config).await?;
+    ///
+    /// // Build the service - agents will be gracefully shut down on service stop
+    /// let service = builder
+    ///     .with_routes(routes)
+    ///     .with_state(state)
+    ///     .build();
+    ///
+    /// service.serve().await?;
+    /// ```
+    #[cfg(feature = "acton-reactive")]
+    pub fn with_agent_runtime(&mut self) -> &mut acton_reactive::prelude::AgentRuntime {
+        if self.agent_runtime.is_none() {
+            tracing::info!("Initializing acton-reactive agent runtime");
+            self.agent_runtime = Some(acton_reactive::prelude::ActonApp::launch());
+        }
+        self.agent_runtime.as_mut().unwrap()
+    }
+
+    /// Get the agent broker handle for event broadcasting
+    ///
+    /// Returns `Some(BrokerRef)` if `with_agent_runtime()` has been called,
+    /// `None` otherwise.
+    ///
+    /// The broker can be passed to `AppState::builder().broker()` to enable
+    /// HTTP handlers to broadcast typed events to subscribed agents.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut builder = ServiceBuilder::new("my-service");
+    ///
+    /// // Initialize the agent runtime
+    /// let runtime = builder.with_agent_runtime();
+    ///
+    /// // Spawn your event processor agents
+    /// MyEventProcessor::spawn(runtime).await?;
+    ///
+    /// // Get the broker for AppState
+    /// let broker = builder.broker().expect("runtime initialized");
+    ///
+    /// // Build state with broker access
+    /// let state = AppState::builder()
+    ///     .broker(broker)
+    ///     .build()
+    ///     .await?;
+    ///
+    /// builder.with_state(state);
+    /// ```
+    #[cfg(feature = "acton-reactive")]
+    pub fn broker(&self) -> Option<acton_reactive::prelude::AgentHandle> {
+        self.agent_runtime.as_ref().map(|r| r.broker())
+    }
+
     /// Build the service
     ///
     /// Automatically handles:
@@ -432,6 +512,8 @@ where
             app,
             #[cfg(feature = "grpc")]
             grpc_routes: self.grpc_services,
+            #[cfg(feature = "acton-reactive")]
+            agent_runtime: self.agent_runtime,
         }
     }
 
@@ -461,7 +543,10 @@ where
         }
 
         // Request timeout
-        app = app.layer(TimeoutLayer::new(Duration::from_secs(config.service.timeout_secs)));
+        app = app.layer(TimeoutLayer::with_status_code(
+            http::StatusCode::REQUEST_TIMEOUT,
+            Duration::from_secs(config.service.timeout_secs),
+        ));
 
         // Request body size limit - configurable
         app = app.layer(RequestBodyLimitLayer::new(body_limit));
@@ -520,6 +605,8 @@ where
     app: Router,
     #[cfg(feature = "grpc")]
     grpc_routes: Option<tonic::service::Routes>,
+    #[cfg(feature = "acton-reactive")]
+    agent_runtime: Option<acton_reactive::prelude::AgentRuntime>,
 }
 
 impl<T> ActonService<T>
@@ -632,6 +719,17 @@ where
                     }
 
                     tracing::info!("Server shutdown complete");
+
+                    // Shutdown agent runtime after server stops (gRPC path)
+                    #[cfg(feature = "acton-reactive")]
+                    if let Some(mut runtime) = self.agent_runtime {
+                        tracing::info!("Shutting down agent runtime...");
+                        if let Err(e) = runtime.shutdown_all().await {
+                            tracing::error!("Agent runtime shutdown error: {}", e);
+                        }
+                        tracing::info!("Agent runtime shutdown complete");
+                    }
+
                     return Ok(());
                 }
             }
@@ -647,6 +745,17 @@ where
             .await?;
 
         tracing::info!("Server shutdown complete");
+
+        // Shutdown agent runtime after server stops (HTTP-only path)
+        #[cfg(feature = "acton-reactive")]
+        if let Some(mut runtime) = self.agent_runtime {
+            tracing::info!("Shutting down agent runtime...");
+            if let Err(e) = runtime.shutdown_all().await {
+                tracing::error!("Agent runtime shutdown error: {}", e);
+            }
+            tracing::info!("Agent runtime shutdown complete");
+        }
+
         Ok(())
     }
 
