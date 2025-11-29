@@ -338,6 +338,107 @@ acquire_timeout_secs = 30  # Wait for available connection
 
 ---
 
+## Event Broker
+
+The reactive architecture includes an **Event Broker** that enables HTTP handlers to broadcast typed events to subscribed agents within your service. This is different from external event systems (like NATS) - the broker is for internal, in-process communication.
+
+### Accessing the Broker
+
+The broker is available via `AppState` when the reactive runtime is initialized:
+
+```rust
+use acton_service::prelude::*;
+use acton_reactive::prelude::*;
+
+async fn create_user_handler(
+    State(state): State<AppState>,
+    Json(user): Json<CreateUserRequest>,
+) -> Result<Json<User>, ApiError> {
+    // Create the user
+    let user = create_user(&state, user).await?;
+
+    // Broadcast event to subscribed agents
+    if let Some(broker) = state.broker() {
+        broker.broadcast(UserCreatedEvent {
+            user_id: user.id,
+            email: user.email.clone(),
+        }).await;
+    }
+
+    Ok(Json(user))
+}
+```
+
+### Defining Events
+
+Events are simple structs that implement `Clone`:
+
+```rust
+#[derive(Clone, Debug)]
+pub struct UserCreatedEvent {
+    pub user_id: i64,
+    pub email: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct OrderCompletedEvent {
+    pub order_id: i64,
+    pub user_id: i64,
+    pub total: f64,
+}
+```
+
+### Subscribing Agents
+
+Create agents that react to broadcasted events:
+
+```rust
+use acton_reactive::prelude::*;
+
+pub struct NotificationAgent {
+    // Agent state
+}
+
+impl NotificationAgent {
+    pub async fn spawn(runtime: &mut AgentRuntime) -> Result<AgentHandle> {
+        let agent = runtime
+            .new_agent::<Self>()
+            .with_handler(|agent: &mut Self, event: UserCreatedEvent| async move {
+                // React to user creation
+                send_welcome_email(&event.email).await?;
+                Ok(())
+            })
+            .spawn()
+            .await?;
+
+        Ok(agent)
+    }
+}
+```
+
+### Use Cases
+
+The event broker is ideal for:
+
+- **Background processing** - Trigger background work from HTTP handlers
+- **Decoupled notifications** - Send emails/webhooks without blocking requests
+- **Audit logging** - Record actions in a separate agent
+- **Cache invalidation** - Notify cache agents of data changes
+- **Real-time updates** - Push changes to WebSocket handlers
+
+### Broker vs. NATS
+
+| Feature | Event Broker | NATS |
+|---------|--------------|------|
+| Scope | In-process | Distributed |
+| Use case | Internal agent communication | Cross-service messaging |
+| Persistence | None | JetStream streams |
+| Performance | Zero network overhead | Network latency |
+
+Use the **Event Broker** for internal coordination and **NATS** for cross-service communication.
+
+---
+
 ## Next Steps
 
 - **[Background Worker](/docs/background-worker)** - Learn about managed background task execution
