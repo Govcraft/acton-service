@@ -21,6 +21,7 @@ export const navigation = [
       { title: 'Health Checks', href: '/docs/health-checks' },
       { title: 'Configuration', href: '/docs/configuration' },
       { title: 'Observability', href: '/docs/observability' },
+      { title: 'Request IDs', href: '/docs/request-ids' },
     ],
   },
   {
