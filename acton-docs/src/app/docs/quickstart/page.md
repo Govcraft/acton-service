@@ -106,9 +106,17 @@ You created a microservice with these features enabled by default:
 
 ✅ **Automatic tracing** - OpenTelemetry tracing configured
 
+✅ **TypeID Request IDs** - Time-sortable request identifiers for log correlation
+
 ✅ **Graceful shutdown** - Signal handling (SIGTERM, SIGINT)
 
+✅ **Reactive pool management** - Agent-based connection pools (when configured)
+
 ✅ **Default configuration** - Works with sensible defaults
+
+{% callout type="note" title="Reactive Architecture" %}
+When you add database, Redis, or NATS configuration, `ServiceBuilder::build()` automatically spawns internal agents to manage connection pools. You access pools via `state.db()`, `state.redis()`, etc. - the agents work transparently behind the scenes. See [Reactive Architecture](/docs/reactive-architecture) for details.
+{% /callout %}
 
 ## What's Next?
 

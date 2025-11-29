@@ -588,6 +588,16 @@ optional = true
 lazy_init = true
 ```
 
+{% callout type="note" title="Automatic Agent Spawning" %}
+When `ServiceBuilder::build()` detects configured connection pools, it automatically spawns **pool agents** to manage them. These agents:
+
+- **Handle connection lifecycle** - Automatic connection, reconnection, and graceful shutdown
+- **Update shared state** - Pools are accessible via `state.db()`, `state.redis()`, `state.nats()`
+- **Report health status** - Pool health is reflected in `/ready` endpoint
+
+You never interact with agents directly - they work transparently behind `AppState`. See [Reactive Architecture](/docs/reactive-architecture) for implementation details.
+{% /callout %}
+
 ### Understanding lazy_init
 
 {% callout type="note" title="Default Behavior" %}
