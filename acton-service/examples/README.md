@@ -18,6 +18,14 @@ Simple getting-started examples demonstrating core functionality:
 
 **Best for**: First-time users, understanding basic patterns
 
+### 🤖 Agent Examples
+
+Reactive agent-based components:
+
+- **[background-worker.rs](./background-worker.rs)** - Managed background task execution with tracking, cancellation, and graceful shutdown
+
+**Best for**: Understanding the reactive agent system, background task management
+
 ### 🔐 [Authorization](./authorization/)
 
 Fine-grained access control using AWS Cedar policies:
@@ -72,6 +80,9 @@ All examples can be run using `cargo run --example <name>`:
 cargo run --manifest-path=acton-service/Cargo.toml --example simple-api
 cargo run --manifest-path=acton-service/Cargo.toml --example users-api
 cargo run --manifest-path=acton-service/Cargo.toml --example ping-pong
+
+# Agent examples
+cargo run --manifest-path=acton-service/Cargo.toml --example background-worker
 
 # Authorization (requires features)
 cargo run --manifest-path=acton-service/Cargo.toml --example cedar-authz --features cedar-authz,cache
