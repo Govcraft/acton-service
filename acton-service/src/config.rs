@@ -1029,7 +1029,8 @@ mod tests {
         let config = Config::<()>::default();
         assert_eq!(config.service.port, 8080);
         assert_eq!(config.service.name, "acton-service");
-        assert_eq!(config.custom, ());
+        // config.custom is () which has no meaningful value to assert
+        let _: () = config.custom;
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]

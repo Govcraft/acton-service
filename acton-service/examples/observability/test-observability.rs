@@ -10,7 +10,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test 1: JSON logging only (no OTLP)
     println!("Test 1: Initializing with JSON logging only");
-    let mut config = Config::default();
+    let mut config = Config::<()>::default();
     config.service.name = "test-observability".to_string();
     config.otlp = None;
 

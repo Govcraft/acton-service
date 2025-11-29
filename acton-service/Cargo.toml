@@ -12,6 +12,10 @@ readme = "../README.md"
 keywords = ["microservice", "framework", "grpc", "rest", "versioning"]
 categories = ["web-programming::http-server", "asynchronous", "network-programming"]
 
+# These are used by generated protobuf code from tonic::include_proto!
+[package.metadata.cargo-machete]
+ignored = ["prost", "tonic-prost"]
+
 [dependencies]
 # Async runtime
 tokio = { workspace = true }
@@ -21,18 +25,12 @@ tokio-stream = { workspace = true, optional = true }
 axum = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
-
-# Tower resilience and middleware (optional)
-tower-resilience = { workspace = true, optional = true }
 tower-otel-http-metrics = { workspace = true, optional = true }
-tower_governor = { workspace = true, optional = true }
 
 # gRPC framework (optional)
 tonic = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
 tonic-prost = { workspace = true, optional = true }
-tonic-build = { workspace = true, optional = true }
-prost-build = { version = "0.14.1", optional = true }
 tonic-prost-build = { workspace = true, optional = true }
 
 # Database (optional)
@@ -65,7 +63,6 @@ tracing-opentelemetry = { workspace = true, optional = true }
 
 # Error handling
 thiserror = { workspace = true }
-anyhow = { workspace = true }
 
 # Time
 chrono = { workspace = true }
@@ -99,14 +96,14 @@ mti = "1.0.7-beta.1"
 [features]
 default = ["http", "observability"]
 http = []
-grpc = ["dep:tonic", "dep:prost", "dep:tonic-prost", "dep:tonic-build", "dep:prost-build", "dep:tonic-prost-build", "dep:tokio-stream", "dep:tonic-health", "dep:tonic-reflection"]
+grpc = ["dep:tonic", "dep:prost", "dep:tonic-prost", "dep:tonic-prost-build", "dep:tokio-stream", "dep:tonic-health", "dep:tonic-reflection"]
 database = ["dep:sqlx"]
 cache = ["dep:redis", "dep:deadpool-redis"]
 events = ["dep:async-nats"]
 observability = ["dep:opentelemetry", "dep:opentelemetry-otlp", "dep:opentelemetry_sdk", "dep:tracing-opentelemetry"]
-resilience = ["dep:tower-resilience", "dep:tower-resilience-circuitbreaker", "dep:tower-resilience-bulkhead"]
+resilience = [ "dep:tower-resilience-circuitbreaker", "dep:tower-resilience-bulkhead"]
 otel-metrics = ["dep:tower-otel-http-metrics", "observability"]
-governor = ["dep:tower_governor"]
+governor = []
 openapi = ["dep:utoipa", "dep:utoipa-swagger-ui"]
 cedar-authz = ["dep:cedar-policy", "cache"]
 full = ["http", "grpc", "database", "cache", "events", "observability", "resilience", "otel-metrics", "governor", "openapi", "cedar-authz"]

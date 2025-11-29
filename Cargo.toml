@@ -34,11 +34,7 @@ tower-http = { version = "0.6.6", features = [
     "sensitive-headers",
     "set-header",
 ] }
-
-# Tower resilience and middleware
-tower-resilience = "0.3.8"
 tower-otel-http-metrics = "0.16.0"
-tower_governor = "0.8.0"
 
 # gRPC framework
 tonic = { version = "0.14.2", features = ["transport"] }

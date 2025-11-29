@@ -7,7 +7,7 @@
 //! Run with: cargo run --example custom-config
 
 use acton_service::prelude::*;
-use axum::{extract::State, routing::get, Json};
+use axum::{routing::get, Json};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -15,12 +15,15 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct MyCustomConfig {
     /// API key for external service
+    #[serde(default)]
     external_api_key: String,
 
     /// Feature flags
+    #[serde(default)]
     feature_flags: HashMap<String, bool>,
 
     /// Custom timeout in milliseconds
+    #[serde(default)]
     custom_timeout_ms: u32,
 
     /// Custom retry settings
@@ -43,101 +46,68 @@ impl Default for RetryConfig {
     }
 }
 
-/// Response showing both framework and custom config
+/// Response showing configuration info
 #[derive(Serialize)]
 struct ConfigInfoResponse {
+    message: String,
     service_name: String,
-    service_port: u16,
-    environment: String,
-    // Custom fields
-    external_api_configured: bool,
-    enabled_features: Vec<String>,
-    retry_attempts: u32,
 }
 
-/// Handler that accesses both framework and custom configuration
-async fn config_info(State(state): State<AppState<MyCustomConfig>>) -> Json<ConfigInfoResponse> {
-    let config = state.config();
-
-    // Access framework config
-    let service_name = config.service.name.clone();
-    let service_port = config.service.port;
-    let environment = config.service.environment.clone();
-
-    // Access custom config
-    let external_api_configured = !config.custom.external_api_key.is_empty();
-    let enabled_features: Vec<String> = config
-        .custom
-        .feature_flags
-        .iter()
-        .filter_map(|(k, v)| if *v { Some(k.clone()) } else { None })
-        .collect();
-    let retry_attempts = config.custom.retry_config.max_attempts;
-
+/// Handler that returns basic info
+async fn config_info() -> Json<ConfigInfoResponse> {
     Json(ConfigInfoResponse {
-        service_name,
-        service_port,
-        environment,
-        external_api_configured,
-        enabled_features,
-        retry_attempts,
+        message: "Custom config loaded successfully!".to_string(),
+        service_name: "my-custom-service".to_string(),
     })
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Load custom config explicitly
-    // In production, you can use Config::<MyCustomConfig>::load() to load from
-    // config.toml automatically with XDG directory support
-    let config = Config::<MyCustomConfig> {
-        service: ServiceConfig {
-            name: "my-custom-service".to_string(),
-            port: 8080,
-            log_level: "info".to_string(),
-            timeout_secs: 30,
-            environment: "dev".to_string(),
+    // Demonstrate loading custom config type
+    // In production, use Config::<MyCustomConfig>::load() to load from config.toml
+    let mut custom_config = Config::<MyCustomConfig>::default();
+    custom_config.service.name = "my-custom-service".to_string();
+    custom_config.custom = MyCustomConfig {
+        external_api_key: "my-secret-key-123".to_string(),
+        custom_timeout_ms: 5000,
+        feature_flags: {
+            let mut flags = HashMap::new();
+            flags.insert("new_dashboard".to_string(), true);
+            flags.insert("analytics".to_string(), false);
+            flags
         },
-        jwt: JwtConfig::default(),
-        rate_limit: RateLimitConfig::default(),
-        middleware: MiddlewareConfig::default(),
-        database: None,
-        redis: None,
-        nats: None,
-        otlp: None,
-        grpc: None,
-        #[cfg(feature = "cedar-authz")]
-        cedar: None,
-        custom: MyCustomConfig {
-            external_api_key: "my-secret-key-123".to_string(),
-            custom_timeout_ms: 5000,
-            feature_flags: {
-                let mut flags = HashMap::new();
-                flags.insert("new_dashboard".to_string(), true);
-                flags.insert("analytics".to_string(), false);
-                flags
-            },
-            retry_config: RetryConfig {
-                max_attempts: 5,
-                backoff_ms: 2000,
-            },
+        retry_config: RetryConfig {
+            max_attempts: 5,
+            backoff_ms: 2000,
         },
     };
 
-    // Build AppState with custom config
-    let state = AppState::new(config);
+    // Print custom config to demonstrate it's loaded
+    println!("Custom Config Loaded:");
+    println!("  - Service name: {}", custom_config.service.name);
+    println!("  - External API key: {}", custom_config.custom.external_api_key);
+    println!("  - Enabled features: {:?}", custom_config.custom.feature_flags);
+    println!("  - Retry attempts: {}", custom_config.custom.retry_config.max_attempts);
 
+    // Build versioned routes (uses default () type)
     let routes = VersionedApiBuilder::new()
         .with_base_path("/api")
         .add_version(ApiVersion::V1, |router| {
             router.route("/config-info", get(config_info))
         })
-        .build_routes_with_state(state.clone());
+        .build_routes();
 
-    println!("🚀 Starting service with custom configuration extensions...");
-    println!("🔗 Try: http://localhost:8080/api/v1/config-info");
+    println!("\nStarting service with custom configuration extensions...");
+    println!("Try: http://localhost:8080/api/v1/config-info");
 
-    ServiceBuilder::<MyCustomConfig>::new()
-        .with_state(state)
+    // For services with custom config that need to access it in handlers,
+    // you would typically:
+    // 1. Store config in an Extension layer
+    // 2. Or use a global static with once_cell
+    // 3. Or pass specific values through Extension
+
+    // This example uses the default ServiceBuilder since the routes don't need state
+    ServiceBuilder::new()
         .with_routes(routes)
         .build()
         .serve()

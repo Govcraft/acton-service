@@ -23,25 +23,15 @@ tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
-thiserror = { workspace = true }
 
 # CLI-specific dependencies
 clap = { version = "4.5.29", features = ["derive", "cargo", "env", "unicode", "wrap_help"] }
 dialoguer = { version = "0.11.0", features = ["fuzzy-select"] }
 indicatif = "0.17.9"
-console = "0.15.10"
 colored = "2.2.0"
-toml = "0.8.23"
-
-# File operations
-walkdir = "2.5.0"
-ignore = "0.4.24"
 
 # Config and paths
 directories = "5.0.1"
-
-# Process execution
-duct = "0.13.7"
 
 # DateTime
 chrono = { workspace = true }
