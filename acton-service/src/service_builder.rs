@@ -131,7 +131,7 @@ where
     cedar: Option<crate::middleware::cedar::CedarAuthz>,
     #[cfg(feature = "cedar-authz")]
     cedar_path_normalizer: Option<fn(&str) -> String>,
-    agent_runtime: Option<acton_reactive::prelude::AgentRuntime>,
+    agent_runtime: Option<acton_reactive::prelude::ActorRuntime>,
 }
 
 impl<T> ServiceBuilder<T>
@@ -284,10 +284,10 @@ where
 
     /// Initialize the agent runtime (internal use only)
     ///
-    /// Returns a mutable reference to the `AgentRuntime` for spawning agents.
+    /// Returns a mutable reference to the `ActorRuntime` for spawning agents.
     /// Called automatically by `build()` when connection pools are configured.
     #[cfg(any(feature = "database", feature = "cache", feature = "events"))]
-    fn init_agent_runtime(&mut self) -> &mut acton_reactive::prelude::AgentRuntime {
+    fn init_agent_runtime(&mut self) -> &mut acton_reactive::prelude::ActorRuntime {
         if self.agent_runtime.is_none() {
             tracing::debug!("Initializing acton-reactive agent runtime");
             self.agent_runtime = Some(acton_reactive::prelude::ActonApp::launch());
@@ -297,7 +297,7 @@ where
 
     /// Get the agent broker handle (internal use only)
     #[cfg(any(feature = "database", feature = "cache", feature = "events"))]
-    fn broker(&self) -> Option<acton_reactive::prelude::AgentHandle> {
+    fn broker(&self) -> Option<acton_reactive::prelude::ActorHandle> {
         self.agent_runtime.as_ref().map(|r| r.broker())
     }
 
@@ -403,11 +403,11 @@ where
 
         // Agent handles for AppState
         #[cfg(feature = "database")]
-        let mut db_agent_handle: Option<acton_reactive::prelude::AgentHandle> = None;
+        let mut db_agent_handle: Option<acton_reactive::prelude::ActorHandle> = None;
         #[cfg(feature = "cache")]
-        let mut redis_agent_handle: Option<acton_reactive::prelude::AgentHandle> = None;
+        let mut redis_agent_handle: Option<acton_reactive::prelude::ActorHandle> = None;
         #[cfg(feature = "events")]
-        let mut nats_agent_handle: Option<acton_reactive::prelude::AgentHandle> = None;
+        let mut nats_agent_handle: Option<acton_reactive::prelude::ActorHandle> = None;
 
         #[cfg(any(feature = "database", feature = "cache", feature = "events"))]
         let broker_handle = if needs_agents {
@@ -481,7 +481,7 @@ where
         };
 
         #[cfg(not(any(feature = "database", feature = "cache", feature = "events")))]
-        let broker_handle: Option<acton_reactive::prelude::AgentHandle> = None;
+        let broker_handle: Option<acton_reactive::prelude::ActorHandle> = None;
 
         let routes = self.routes.unwrap_or_default();
 
@@ -711,7 +711,7 @@ where
     app: Router,
     #[cfg(feature = "grpc")]
     grpc_routes: Option<tonic::service::Routes>,
-    agent_runtime: Option<acton_reactive::prelude::AgentRuntime>,
+    agent_runtime: Option<acton_reactive::prelude::ActorRuntime>,
 }
 
 impl<T> ActonService<T>

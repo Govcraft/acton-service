@@ -76,11 +76,11 @@ impl DatabasePoolAgent {
     /// * `shared_pool` - Shared storage that will be updated when the pool connects.
     ///   `AppState::db()` reads the pool directly from this storage.
     pub async fn spawn(
-        runtime: &mut AgentRuntime,
+        runtime: &mut ActorRuntime,
         config: crate::config::DatabaseConfig,
         shared_pool: Option<SharedDbPool>,
-    ) -> anyhow::Result<AgentHandle> {
-        let mut agent = runtime.new_agent::<DatabasePoolState>();
+    ) -> anyhow::Result<ActorHandle> {
+        let mut agent = runtime.new_actor::<DatabasePoolState>();
 
         // Initialize state before starting
         agent.model.config = Some(config);
@@ -96,7 +96,7 @@ impl DatabasePoolAgent {
             // Update shared storage if configured
             let shared_pool = agent.model.shared_pool.clone();
 
-            AgentReply::from_async(async move {
+            Reply::pending(async move {
                 // Update shared storage for direct AppState access
                 if let Some(shared) = shared_pool {
                     *shared.write().await = Some(pool);
@@ -113,7 +113,7 @@ impl DatabasePoolAgent {
             agent.model.connecting = false;
             tracing::error!("Database pool connection failed: {}", error_msg);
 
-            AgentReply::immediate()
+            Reply::ready()
         });
 
         // Initialize connection on startup using spawn pattern
@@ -121,7 +121,7 @@ impl DatabasePoolAgent {
             let config = agent.model.config.clone();
             let self_handle = agent.handle().clone();
 
-            AgentReply::from_async(async move {
+            Reply::pending(async move {
                 if let Some(cfg) = config {
                     tracing::info!("Database pool agent starting, connecting to database...");
 
@@ -155,7 +155,7 @@ impl DatabasePoolAgent {
         // Graceful cleanup on shutdown
         agent.before_stop(|agent| {
             let pool = agent.model.pool.clone();
-            AgentReply::from_async(async move {
+            Reply::pending(async move {
                 if let Some(p) = pool {
                     tracing::info!("Database pool agent stopping, closing connections...");
                     p.close().await;
@@ -217,11 +217,11 @@ impl RedisPoolAgent {
     /// * `config` - Redis connection configuration
     /// * `shared_pool` - Shared storage that will be updated when the pool connects.
     pub async fn spawn(
-        runtime: &mut AgentRuntime,
+        runtime: &mut ActorRuntime,
         config: crate::config::RedisConfig,
         shared_pool: Option<SharedRedisPool>,
-    ) -> anyhow::Result<AgentHandle> {
-        let mut agent = runtime.new_agent::<RedisPoolState>();
+    ) -> anyhow::Result<ActorHandle> {
+        let mut agent = runtime.new_actor::<RedisPoolState>();
 
         // Initialize state before starting
         agent.model.config = Some(config);
@@ -237,7 +237,7 @@ impl RedisPoolAgent {
             // Update shared storage if configured
             let shared_pool = agent.model.shared_pool.clone();
 
-            AgentReply::from_async(async move {
+            Reply::pending(async move {
                 // Update shared storage for direct AppState access
                 if let Some(shared) = shared_pool {
                     *shared.write().await = Some(pool);
@@ -254,7 +254,7 @@ impl RedisPoolAgent {
             agent.model.connecting = false;
             tracing::error!("Redis pool connection failed: {}", error_msg);
 
-            AgentReply::immediate()
+            Reply::ready()
         });
 
         // Initialize connection on startup
@@ -262,7 +262,7 @@ impl RedisPoolAgent {
             let config = agent.model.config.clone();
             let self_handle = agent.handle().clone();
 
-            AgentReply::from_async(async move {
+            Reply::pending(async move {
                 if let Some(cfg) = config {
                     tracing::info!("Redis pool agent starting, connecting to Redis...");
 
@@ -294,7 +294,7 @@ impl RedisPoolAgent {
 
         // Cleanup on shutdown
         agent.before_stop(|_agent| {
-            AgentReply::from_async(async move {
+            Reply::pending(async move {
                 tracing::info!("Redis pool agent stopping");
             })
         });
@@ -351,11 +351,11 @@ impl NatsPoolAgent {
     /// * `config` - NATS connection configuration
     /// * `shared_client` - Shared storage that will be updated when the client connects.
     pub async fn spawn(
-        runtime: &mut AgentRuntime,
+        runtime: &mut ActorRuntime,
         config: crate::config::NatsConfig,
         shared_client: Option<SharedNatsClient>,
-    ) -> anyhow::Result<AgentHandle> {
-        let mut agent = runtime.new_agent::<NatsPoolState>();
+    ) -> anyhow::Result<ActorHandle> {
+        let mut agent = runtime.new_actor::<NatsPoolState>();
 
         // Initialize state before starting
         agent.model.config = Some(config);
@@ -371,7 +371,7 @@ impl NatsPoolAgent {
             // Update shared storage if configured
             let shared_client = agent.model.shared_client.clone();
 
-            AgentReply::from_async(async move {
+            Reply::pending(async move {
                 // Update shared storage for direct AppState access
                 if let Some(shared) = shared_client {
                     *shared.write().await = Some(client);
@@ -388,7 +388,7 @@ impl NatsPoolAgent {
             agent.model.connecting = false;
             tracing::error!("NATS client connection failed: {}", error_msg);
 
-            AgentReply::immediate()
+            Reply::ready()
         });
 
         // Initialize connection on startup
@@ -396,7 +396,7 @@ impl NatsPoolAgent {
             let config = agent.model.config.clone();
             let self_handle = agent.handle().clone();
 
-            AgentReply::from_async(async move {
+            Reply::pending(async move {
                 if let Some(cfg) = config {
                     tracing::info!("NATS pool agent starting, connecting to NATS...");
 
@@ -429,7 +429,7 @@ impl NatsPoolAgent {
         // Close client on shutdown
         agent.before_stop(|agent| {
             let client = agent.model.client.clone();
-            AgentReply::from_async(async move {
+            Reply::pending(async move {
                 if let Some(c) = client {
                     tracing::info!("NATS pool agent stopping, closing connection...");
                     drop(c);

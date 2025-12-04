@@ -43,7 +43,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use acton_reactive::prelude::*;
+use acton_reactive::prelude::{Reply, *};
 use dashmap::DashMap;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -95,7 +95,7 @@ pub struct BackgroundWorkerState {
 #[derive(Clone)]
 pub struct BackgroundWorker {
     /// Handle for sending messages to the agent
-    agent_handle: AgentHandle,
+    agent_handle: ActorHandle,
     /// Shared task map for direct access
     tasks: Arc<DashMap<String, TaskInfo>>,
     /// Root cancellation token for creating child tokens
@@ -106,14 +106,14 @@ impl BackgroundWorker {
     /// Spawn a new background worker agent
     ///
     /// The worker will manage background tasks with graceful shutdown support.
-    pub async fn spawn(runtime: &mut AgentRuntime) -> anyhow::Result<Self> {
+    pub async fn spawn(runtime: &mut ActorRuntime) -> anyhow::Result<Self> {
         let tasks: Arc<DashMap<String, TaskInfo>> = Arc::new(DashMap::new());
         let root_token = CancellationToken::new();
 
         let tasks_for_shutdown = tasks.clone();
         let root_token_for_agent = root_token.clone();
 
-        let mut agent = runtime.new_agent::<BackgroundWorkerState>();
+        let mut agent = runtime.new_actor::<BackgroundWorkerState>();
 
         // Store root token in agent state
         agent.model.root_token = Some(root_token.clone());
@@ -124,7 +124,7 @@ impl BackgroundWorker {
             let msg = envelope.message().clone();
             let tasks = tasks_for_cancel.clone();
 
-            AgentReply::from_async(async move {
+            Reply::pending(async move {
                 if let Some(task_info) = tasks.get(&msg.task_id) {
                     task_info.cancellation_token.cancel();
                     tracing::info!(task_id = %msg.task_id, "Task cancellation requested");
@@ -393,7 +393,7 @@ impl BackgroundWorker {
 
     /// Get the agent handle for direct message sending
     #[must_use]
-    pub fn handle(&self) -> &AgentHandle {
+    pub fn handle(&self) -> &ActorHandle {
         &self.agent_handle
     }
 }

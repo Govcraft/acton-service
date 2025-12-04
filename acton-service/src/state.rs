@@ -32,7 +32,7 @@ use deadpool_redis::Pool as RedisPool;
 #[cfg(feature = "events")]
 use async_nats::Client as NatsClient;
 
-use acton_reactive::prelude::AgentHandle;
+use acton_reactive::prelude::ActorHandle;
 
 use crate::{config::Config, error::Result};
 
@@ -74,7 +74,7 @@ where
     nats_client: Arc<RwLock<Option<NatsClient>>>,
 
     /// Agent broker handle for type-safe event broadcasting
-    broker: Option<AgentHandle>,
+    broker: Option<ActorHandle>,
 }
 
 impl<T> Default for AppState<T>
@@ -238,12 +238,12 @@ where
     ///     Ok(Json(user))
     /// }
     /// ```
-    pub fn broker(&self) -> Option<&AgentHandle> {
+    pub fn broker(&self) -> Option<&ActorHandle> {
         self.broker.as_ref()
     }
 
     /// Set the agent broker handle (internal use only)
-    pub(crate) fn set_broker(&mut self, broker: AgentHandle) {
+    pub(crate) fn set_broker(&mut self, broker: ActorHandle) {
         self.broker = Some(broker);
     }
 

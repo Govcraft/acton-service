@@ -38,9 +38,7 @@ dependencies = [
 
 [[package]]
 name = "acton-macro"
-version = "6.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92e5f0518dea229f10bb0d6fc5cca8262c8ab169c398baa70bb3e5b4365f0262"
+version = "0.7.0"
 dependencies = [
  "quote",
  "syn",
@@ -48,9 +46,7 @@ dependencies = [
 
 [[package]]
 name = "acton-reactive"
-version = "6.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "145634eea6ab967917b738185bb39bf1b32548d4dfb184435276a6c9614f3d8b"
+version = "0.7.0"
 dependencies = [
  "acton-ern",
  "acton-macro",
@@ -4217,7 +4213,6 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
- "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",
