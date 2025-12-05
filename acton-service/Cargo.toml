@@ -92,7 +92,7 @@ tower-resilience-bulkhead = { workspace = true, optional = true }
 cedar-policy = { version = "4.7.0", default-features = false, features = ["datetime", "ipaddr"], optional = true }
 regex = "1.12.2"
 mti = "1.0.0"
-acton-reactive = { path = "/home/rodzilla/projects/acton-reactive/acton-reactive" }
+acton-reactive = { version = "7.0.0"}
 tokio-util = "0.7.17"
 dashmap = "6.1.0"
 anyhow.workspace = true

@@ -38,7 +38,9 @@ dependencies = [
 
 [[package]]
 name = "acton-macro"
-version = "0.7.0"
+version = "7.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b791509aec583da85996124021a6f928e1ba595c730363a410897eab6514ffe7"
 dependencies = [
  "quote",
  "syn",
@@ -46,7 +48,9 @@ dependencies = [
 
 [[package]]
 name = "acton-reactive"
-version = "0.7.0"
+version = "7.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b2a3d14c604c35d3607a60aaa0d916288809f03317456713e3136c10b235db9"
 dependencies = [
  "acton-ern",
  "acton-macro",
