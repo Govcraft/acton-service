@@ -182,5 +182,32 @@ pub mod prelude {
     };
 
     pub use serde::{Deserialize, Serialize};
-    pub use tracing::{debug, error, info, warn};
+
+    // Re-export tracing macros and types
+    pub use tracing::{debug, error, info, instrument, trace, warn, Level, Span};
+
+    // Re-export tokio for async runtime
+    pub use tokio;
+
+    // Re-export async-trait for async trait definitions
+    pub use async_trait::async_trait;
+
+    // Re-export error handling utilities
+    pub use thiserror::Error;
+    pub use anyhow::{self, Context as AnyhowContext};
+
+    // Re-export time utilities
+    pub use chrono::{DateTime, Duration as ChronoDuration, NaiveDateTime, Utc};
+
+    // Re-export UUID
+    pub use uuid::Uuid;
+
+    // Re-export futures utilities
+    pub use futures::{future, stream, Future, Stream, StreamExt, TryFutureExt, TryStreamExt};
+
+    // Re-export HTTP types
+    pub use http::{Method, Uri};
+
+    // Re-export acton-reactive prelude for actor system
+    pub use acton_reactive::prelude::*;
 }
