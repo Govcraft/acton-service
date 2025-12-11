@@ -131,7 +131,7 @@ required-features = ["http"]
 [[example]]
 name = "ping-pong"
 path = "examples/basic/ping-pong.rs"
-required-features = ["http"]
+required-features = ["grpc"]
 
 # gRPC examples
 [[example]]
