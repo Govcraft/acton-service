@@ -288,11 +288,9 @@ where
     /// Called automatically by `build()` when connection pools are configured.
     #[cfg(any(feature = "database", feature = "cache", feature = "events"))]
     fn init_agent_runtime(&mut self) -> &mut acton_reactive::prelude::ActorRuntime {
-        if self.agent_runtime.is_none() {
-            tracing::debug!("Initializing acton-reactive agent runtime");
-            self.agent_runtime = Some(acton_reactive::prelude::ActonApp::launch());
-        }
-        self.agent_runtime.as_mut().unwrap()
+        // Note: agent_runtime should already be initialized in the async block
+        // before this is called
+        self.agent_runtime.as_mut().expect("Agent runtime not initialized")
     }
 
     /// Get the agent broker handle (internal use only)
@@ -411,13 +409,16 @@ where
 
         #[cfg(any(feature = "database", feature = "cache", feature = "events"))]
         let broker_handle = if needs_agents {
-            // Initialize the agent runtime
-            let runtime = self.init_agent_runtime();
-
-            // Use block_in_place to spawn agents (they're async)
+            // Use block_in_place to run async code in sync context
+            // Initialize agent runtime inside the async block using launch_async()
             if let Ok(_handle) = tokio::runtime::Handle::try_current() {
                 tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(async {
+                        // Initialize the agent runtime using launch_async() for async context
+                        tracing::debug!("Initializing acton-reactive agent runtime");
+                        self.agent_runtime = Some(acton_reactive::prelude::ActonApp::launch_async().await);
+                        let runtime = self.init_agent_runtime();
+
                         // Spawn database pool agent
                         #[cfg(feature = "database")]
                         if let Some(ref db_config) = config.database {

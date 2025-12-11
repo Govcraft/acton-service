@@ -162,6 +162,12 @@ name = "test-observability"
 path = "examples/observability/test-observability.rs"
 required-features = ["observability"]
 
+# Database examples
+[[example]]
+name = "database-api"
+path = "examples/database/database-api.rs"
+required-features = ["database"]
+
 [build-dependencies]
 prost-build = "0.14.1"
 tonic-build.workspace = true

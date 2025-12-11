@@ -1,0 +1,27 @@
+# Docker Compose for database example
+#
+# Start with: docker compose up -d
+# Stop with: docker compose down
+# Reset with: docker compose down -v && docker compose up -d
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: acton-example-postgres
+    environment:
+      POSTGRES_USER: acton
+      POSTGRES_PASSWORD: acton_secret
+      POSTGRES_DB: acton_example
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U acton -d acton_example"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
