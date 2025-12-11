@@ -1,10 +1,20 @@
-//! Example: Using Custom Configuration Extensions
+//! Example: Using Custom Configuration Extensions with Versioned APIs
 //!
 //! This example demonstrates how to extend the framework's Config with your own
-//! custom configuration fields. Custom fields are automatically loaded from the
-//! same config.toml file using #[serde(flatten)].
+//! custom configuration fields while using the type-safe versioned API builder.
+//!
+//! Key features demonstrated:
+//! - Custom configuration that extends the framework config
+//! - Type-safe API versioning with `VersionedApiBuilder<T>`
+//! - Automatic health/readiness endpoints
+//! - ServiceBuilder with custom config type
 //!
 //! Run with: cargo run --example custom-config
+//!
+//! Test with:
+//!   curl http://localhost:8080/health
+//!   curl http://localhost:8080/ready
+//!   curl http://localhost:8080/api/v1/config-info
 
 use acton_service::prelude::*;
 use axum::{extract::State, Json};
@@ -114,27 +124,26 @@ async fn main() -> Result<()> {
         },
     };
 
-    // Build AppState with custom config
-    let state = AppState::new(config.clone());
+    // Create versioned API routes using the generic VersionedApiBuilder
+    // Use with_config() when handlers need access to custom configuration
+    let routes = VersionedApiBuilder::<MyCustomConfig>::with_config()
+        .with_base_path("/api")
+        .add_version(ApiVersion::V1, |routes| {
+            routes.route("/config-info", get(config_info))
+        })
+        .build_routes(); // Returns VersionedRoutes<MyCustomConfig>
 
-    // Create routes using standard axum Router with the correct state type
-    let app = Router::new()
-        .route("/api/v1/config-info", get(config_info))
-        .route("/health", get(health))
-        .route("/ready", get(readiness))
-        .with_state(state);
-
-    println!("Starting service with custom configuration extensions...");
-    println!("Try: http://localhost:8080/api/v1/config-info");
-
-    // Run the server directly using axum
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", config.service.port))
-        .await
-        .map_err(|e| Error::Internal(format!("Failed to bind: {}", e)))?;
-
-    axum::serve(listener, app)
-        .await
-        .map_err(|e| Error::Internal(format!("Server error: {}", e)))?;
+    // Build and serve using ServiceBuilder with custom config
+    // ServiceBuilder automatically:
+    // - Uses the provided config
+    // - Initializes tracing/logging based on config
+    // - Includes health and readiness endpoints from routes
+    ServiceBuilder::<MyCustomConfig>::new()
+        .with_config(config)
+        .with_routes(routes) // Type-safe: only accepts VersionedRoutes<MyCustomConfig>
+        .build()
+        .serve()
+        .await?;
 
     Ok(())
 }

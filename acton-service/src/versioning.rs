@@ -45,7 +45,7 @@ use axum::{
     response::{IntoResponse, Response},
     Router,
 };
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::fmt;
 use tracing::warn;
 
@@ -352,6 +352,10 @@ pub fn extract_version_from_path(path: &str) -> Option<ApiVersion> {
 /// This builder ensures that all routes are versioned and provides a structured
 /// way to manage multiple API versions with deprecation support.
 ///
+/// The generic parameter `T` represents your custom configuration type that extends
+/// the framework's base configuration. Use `()` (the default) if you don't need
+/// custom configuration.
+///
 /// # Example
 ///
 /// ```rust,ignore
@@ -361,32 +365,88 @@ pub fn extract_version_from_path(path: &str) -> Option<ApiVersion> {
 /// async fn list_users_v1() -> &'static str { "Users V1" }
 /// async fn list_users_v2() -> &'static str { "Users V2" }
 ///
+/// // Without custom config (default)
 /// let api = VersionedApiBuilder::new()
 ///     .add_version(ApiVersion::V1, |routes| {
 ///         routes.route("/users", get(list_users_v1))
 ///     })
-///     .add_version_deprecated(
-///         ApiVersion::V2,
-///         |routes| routes.route("/users", get(list_users_v2)),
-///         DeprecationInfo::new(ApiVersion::V1, ApiVersion::V2)
-///             .with_sunset_date("2026-12-31T23:59:59Z")
-///     )
-///     .build();
+///     .build_routes();
+///
+/// // With custom config
+/// let api = VersionedApiBuilder::<MyCustomConfig>::new()
+///     .add_version(ApiVersion::V1, |routes| {
+///         routes.route("/users", get(list_users_v1))
+///     })
+///     .build_routes();  // Returns VersionedRoutes<MyCustomConfig>
 /// ```
-pub struct VersionedApiBuilder {
-    versions: Vec<(ApiVersion, Router, Option<DeprecationInfo>)>,
+pub struct VersionedApiBuilder<T = ()>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
+    versions: Vec<(ApiVersion, Router<crate::state::AppState<T>>, Option<DeprecationInfo>)>,
     base_path: Option<String>,
 }
 
-impl Default for VersionedApiBuilder {
+impl Default for VersionedApiBuilder<()> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl VersionedApiBuilder {
+impl VersionedApiBuilder<()> {
     /// Create a new versioned API builder
+    ///
+    /// Use this for services without custom configuration. Handlers can still
+    /// access the framework's `AppState` for health checks and standard features.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let routes = VersionedApiBuilder::new()
+    ///     .with_base_path("/api")
+    ///     .add_version(ApiVersion::V1, |routes| {
+    ///         routes.route("/users", get(list_users))
+    ///     })
+    ///     .build_routes();
+    /// ```
     pub fn new() -> Self {
+        Self {
+            versions: Vec::new(),
+            base_path: None,
+        }
+    }
+}
+
+impl<T> VersionedApiBuilder<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
+    /// Create a new versioned API builder with custom configuration type
+    ///
+    /// Use this when your handlers need access to custom configuration via
+    /// `State<AppState<YourCustomConfig>>`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// #[derive(Clone, Default, Serialize, Deserialize)]
+    /// struct MyConfig {
+    ///     api_key: String,
+    /// }
+    ///
+    /// async fn handler(State(state): State<AppState<MyConfig>>) -> impl IntoResponse {
+    ///     let api_key = &state.config().custom.api_key;
+    ///     // ...
+    /// }
+    ///
+    /// let routes = VersionedApiBuilder::<MyConfig>::with_config()
+    ///     .with_base_path("/api")
+    ///     .add_version(ApiVersion::V1, |routes| {
+    ///         routes.route("/data", get(handler))
+    ///     })
+    ///     .build_routes();
+    /// ```
+    pub fn with_config() -> Self {
         Self {
             versions: Vec::new(),
             base_path: None,
@@ -403,7 +463,7 @@ impl VersionedApiBuilder {
     ///     .add_version(ApiVersion::V1, |routes| {
     ///         routes.route("/users", get(handler))
     ///     })
-    ///     .build();
+    ///     .build_routes();
     /// ```
     pub fn with_base_path(mut self, path: impl Into<String>) -> Self {
         let path = path.into();
@@ -419,20 +479,23 @@ impl VersionedApiBuilder {
 
     /// Add a non-deprecated API version
     ///
+    /// The closure receives a `Router<AppState<T>>` so handlers can use
+    /// `State<AppState<T>>` to access configuration.
+    ///
     /// # Example
     ///
     /// ```rust,ignore
     /// let api = VersionedApiBuilder::new()
-    ///     .add_version(ApiVersion::V2, |routes| {
+    ///     .add_version(ApiVersion::V1, |routes| {
     ///         routes
     ///             .route("/users", get(list_users))
     ///             .route("/users/{id}", get(get_user))
     ///     })
-    ///     .build();
+    ///     .build_routes();
     /// ```
     pub fn add_version<F>(mut self, version: ApiVersion, routes: F) -> Self
     where
-        F: FnOnce(Router) -> Router,
+        F: FnOnce(Router<crate::state::AppState<T>>) -> Router<crate::state::AppState<T>>,
     {
         let router = routes(Router::new());
         self.versions.push((version, router, None));
@@ -454,7 +517,7 @@ impl VersionedApiBuilder {
     ///         |routes| routes.route("/users", get(list_users_v1)),
     ///         deprecation
     ///     )
-    ///     .build();
+    ///     .build_routes();
     /// ```
     pub fn add_version_deprecated<F>(
         mut self,
@@ -463,7 +526,7 @@ impl VersionedApiBuilder {
         deprecation: DeprecationInfo,
     ) -> Self
     where
-        F: FnOnce(Router) -> Router,
+        F: FnOnce(Router<crate::state::AppState<T>>) -> Router<crate::state::AppState<T>>,
     {
         let router = routes(Router::new());
         self.versions.push((version, router, Some(deprecation)));
@@ -488,61 +551,93 @@ impl VersionedApiBuilder {
         self
     }
 
-    /// Build the versioned API router
-    ///
-    /// Returns a Router with all versions properly nested under their
-    /// version paths with deprecation middleware applied where configured.
-    pub fn build(self) -> Router {
-        let mut router = Router::new();
-
-        for (version, version_router, deprecation) in self.versions {
-            let versioned = if let Some(deprecation) = deprecation {
-                versioned_router(version, version_router)
-                    .deprecated(deprecation)
-                    .into_router()
-            } else {
-                versioned_router(version, version_router).into_router()
-            };
-
-            let version_path = format!("/{}", version.as_path_segment());
-
-            router = if let Some(ref base) = self.base_path {
-                // Nest under base path + version: /api/v1, /api/v2, etc.
-                let full_path = format!("{}{}", base, version_path);
-                router.nest(&full_path, versioned)
-            } else {
-                // Nest directly under version: /v1, /v2, etc.
-                router.nest(&version_path, versioned)
-            };
-        }
-
-        router
-    }
-
     /// Build versioned routes (opaque VersionedRoutes type)
     ///
-    /// This creates a `VersionedRoutes` with all your versioned business routes
+    /// This creates a `VersionedRoutes<T>` with all your versioned business routes
     /// plus automatic health and readiness endpoints at /health and /ready.
     /// This is the ONLY public way to create `VersionedRoutes`.
     ///
-    /// Returns VersionedRoutes::WithState since health handlers require AppState.
-    pub fn build_routes(self) -> crate::service_builder::VersionedRoutes {
+    /// The returned `VersionedRoutes<T>` is parameterized by your custom config type,
+    /// ensuring type safety when used with `ServiceBuilder<T>`.
+    pub fn build_routes(self) -> crate::service_builder::VersionedRoutes<T> {
         use axum::routing::get;
-        use axum::Router;
 
-        // Get versioned routes (Router<()>)
-        let versioned_router = self.build();
+        // Start with health routes
+        let mut router: Router<crate::state::AppState<T>> = Router::new()
+            .route("/health", get(crate::health::health::<T>))
+            .route("/ready", get(crate::health::readiness::<T>));
 
-        // Create a new Router<AppState> and add health routes
-        let health_router: Router<crate::state::AppState> = Router::new()
-            .route("/health", get(crate::health::health))
-            .route("/ready", get(crate::health::readiness));
+        // Add all versioned routes
+        for (version, version_router, deprecation) in self.versions {
+            let version_path = format!("/{}", version.as_path_segment());
+            let full_path = if let Some(ref base) = self.base_path {
+                format!("{}{}", base, version_path)
+            } else {
+                version_path
+            };
 
-        // Use fallback_service to include the versioned routes
-        // This preserves both the health routes and the versioned API routes
-        let router_with_health = health_router.fallback_service(versioned_router);
+            // Apply deprecation middleware if needed
+            let versioned = if let Some(deprecation) = deprecation {
+                version_router.layer(middleware::from_fn(move |req: Request, next: Next| {
+                    let deprecation = deprecation.clone();
+                    async move {
+                        // Log deprecated API usage
+                        let path = req.uri().path().to_string();
+                        if let Some(sunset) = &deprecation.sunset_date {
+                            warn!(
+                                path = %path,
+                                deprecated_version = %deprecation.version,
+                                replacement_version = %deprecation.replacement,
+                                sunset_date = %sunset,
+                                message = deprecation.message.as_deref().unwrap_or(""),
+                                "Deprecated API version accessed"
+                            );
+                        } else {
+                            warn!(
+                                path = %path,
+                                deprecated_version = %deprecation.version,
+                                replacement_version = %deprecation.replacement,
+                                message = deprecation.message.as_deref().unwrap_or(""),
+                                "Deprecated API version accessed"
+                            );
+                        }
 
-        crate::service_builder::VersionedRoutes::from_router_with_state(router_with_health)
+                        let mut response = next.run(req).await;
+
+                        // Add deprecation headers
+                        let headers = response.headers_mut();
+                        if let Ok(value) = HeaderValue::from_str(&deprecation.deprecation_header()) {
+                            headers.insert("Deprecation", value);
+                        }
+                        if let Some(sunset) = deprecation.sunset_header() {
+                            if let Ok(value) = HeaderValue::from_str(&sunset) {
+                                headers.insert("Sunset", value);
+                            }
+                        }
+                        if let Ok(value) = HeaderValue::from_str(&deprecation.link_header()) {
+                            headers.insert(header::LINK, value);
+                        }
+                        if let Some(ref message) = deprecation.message {
+                            let warning = format!(
+                                "299 - \"API version {} is deprecated. Please migrate to version {}. {}\"",
+                                deprecation.version, deprecation.replacement, message
+                            );
+                            if let Ok(value) = HeaderValue::from_str(&warning) {
+                                headers.insert(header::WARNING, value);
+                            }
+                        }
+
+                        response
+                    }
+                }))
+            } else {
+                version_router
+            };
+
+            router = router.nest(&full_path, versioned);
+        }
+
+        crate::service_builder::VersionedRoutes::from_router_with_state(router)
     }
 
     /// Get the number of versions registered

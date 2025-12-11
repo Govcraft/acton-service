@@ -958,9 +958,9 @@ where
     ///
     /// # Example
     /// ```no_run
-    /// use acton_service::Config;
+    /// use acton_service::prelude::Config;
     ///
-    /// let mut config = Config::load().unwrap();
+    /// let mut config = Config::<()>::load().unwrap();
     /// config.with_development_cors(); // Only for local development!
     /// ```
     pub fn with_development_cors(&mut self) -> &mut Self {
