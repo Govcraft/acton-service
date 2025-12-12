@@ -175,7 +175,7 @@ A cache of database connections that can be reused rather than creating new conn
 A Rust SQL library with compile-time query verification. Checks your SQL queries against your database schema during compilation, catching errors before runtime.
 
 ### Compile-time Verification
-SQLx feature that validates SQL queries during `cargo build` by connecting to a development database. Requires `DATABASE_URL` environment variable. Use offline mode for CI/CD.
+SQLx feature that validates SQL queries during `cargo build` by connecting to a development database. acton-service automatically propagates `ACTON_DATABASE_URL` to SQLx. Use offline mode for CI/CD.
 
 ### Migration
 A version-controlled change to your database schema (add table, add column, etc.). SQLx supports migration files that can be applied automatically on service startup.

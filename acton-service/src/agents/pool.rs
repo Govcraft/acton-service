@@ -28,6 +28,8 @@ use std::sync::Arc;
 #[cfg(feature = "database")]
 use tokio::sync::RwLock;
 #[cfg(feature = "database")]
+use tokio_util::sync::CancellationToken;
+#[cfg(feature = "database")]
 use acton_reactive::prelude::*;
 #[cfg(feature = "database")]
 use super::messages::{DatabasePoolConnected, DatabasePoolConnectionFailed};
@@ -48,6 +50,8 @@ pub struct DatabasePoolState {
     pub connecting: bool,
     /// Shared storage that AppState reads from directly
     pub shared_pool: Option<SharedDbPool>,
+    /// Cancellation token for graceful shutdown during connection retries
+    pub cancel_token: Option<CancellationToken>,
 }
 
 /// Agent-based PostgreSQL connection pool manager
@@ -82,10 +86,14 @@ impl DatabasePoolAgent {
     ) -> anyhow::Result<ActorHandle> {
         let mut agent = runtime.new_actor::<DatabasePoolState>();
 
+        // Create cancellation token for graceful shutdown during connection retries
+        let cancel_token = CancellationToken::new();
+
         // Initialize state before starting
         agent.model.config = Some(config);
         agent.model.connecting = true;
         agent.model.shared_pool = shared_pool;
+        agent.model.cancel_token = Some(cancel_token);
 
         // Handle pool connected message (sent from spawned task)
         agent.mutate_on::<DatabasePoolConnected>(|agent, envelope| {
@@ -117,45 +125,74 @@ impl DatabasePoolAgent {
         });
 
         // Initialize connection on startup using spawn pattern
+        // NOTE: We spawn the task but DON'T await it here. The task sends messages
+        // back to the agent when it completes. This allows before_stop to run
+        // immediately when shutdown is requested, which cancels the token and
+        // causes the spawned task to exit via tokio::select!.
         agent.after_start(|agent| {
             let config = agent.model.config.clone();
+            let cancel_token = agent.model.cancel_token.clone();
             let self_handle = agent.handle().clone();
 
-            Reply::pending(async move {
-                if let Some(cfg) = config {
-                    tracing::info!("Database pool agent starting, connecting to database...");
+            if let Some(cfg) = config {
+                tracing::info!("Database pool agent starting, connecting to database...");
 
-                    // Spawn the non-Sync connection work
-                    let result = tokio::spawn(async move { crate::database::create_pool(&cfg).await })
-                        .await;
+                // Spawn the connection work - it will send a message back when done
+                tokio::spawn(async move {
+                    // Race connection against cancellation
+                    tokio::select! {
+                        biased;
 
-                    match result {
-                        Ok(Ok(pool)) => {
-                            self_handle.send(DatabasePoolConnected { pool }).await;
-                        }
-                        Ok(Err(e)) => {
+                        // Cancellation branch - triggered by before_stop
+                        () = async {
+                            if let Some(ref token) = cancel_token {
+                                token.cancelled().await;
+                            } else {
+                                // No token, never cancel via this branch
+                                std::future::pending::<()>().await;
+                            }
+                        } => {
+                            tracing::info!("Database connection cancelled during shutdown");
                             self_handle
                                 .send(DatabasePoolConnectionFailed {
-                                    error: e.to_string(),
+                                    error: "Connection cancelled during shutdown".to_string(),
                                 })
                                 .await;
                         }
-                        Err(e) => {
-                            self_handle
-                                .send(DatabasePoolConnectionFailed {
-                                    error: format!("Connection task panicked: {}", e),
-                                })
-                                .await;
+
+                        // Connection branch
+                        result = crate::database::create_pool(&cfg) => {
+                            match result {
+                                Ok(pool) => {
+                                    self_handle.send(DatabasePoolConnected { pool }).await;
+                                }
+                                Err(e) => {
+                                    self_handle
+                                        .send(DatabasePoolConnectionFailed {
+                                            error: e.to_string(),
+                                        })
+                                        .await;
+                                }
+                            }
                         }
                     }
-                }
-            })
+                });
+            }
+
+            Reply::ready()
         });
 
         // Graceful cleanup on shutdown
         agent.before_stop(|agent| {
             let pool = agent.model.pool.clone();
+            let cancel_token = agent.model.cancel_token.clone();
             Reply::pending(async move {
+                // Cancel any ongoing connection retries first
+                if let Some(token) = cancel_token {
+                    token.cancel();
+                    tracing::debug!("Database connection retry cancelled");
+                }
+
                 if let Some(p) = pool {
                     tracing::info!("Database pool agent stopping, closing connections...");
                     p.close().await;

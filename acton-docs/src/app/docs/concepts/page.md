@@ -68,7 +68,7 @@ ServiceBuilder::new().with_routes(app)
 
 **2. SQL Query Verification** (with SQLx)
 - If you use the `database` feature, SQL queries are verified against your schema
-- Requires `DATABASE_URL` environment variable during `cargo build`
+- Uses `ACTON_DATABASE_URL` environment variable during `cargo build` (automatically propagated to SQLx)
 - Catches SQL errors at compile time instead of runtime
 
 ### At Service Startup

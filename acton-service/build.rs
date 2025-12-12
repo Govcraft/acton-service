@@ -1,4 +1,17 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Propagate ACTON_DATABASE_URL to DATABASE_URL for SQLx compile-time query checks.
+    // This allows users to use a single environment variable (ACTON_DATABASE_URL) for both
+    // runtime connections and SQLx's compile-time verification macros (query!, query_as!).
+    // Only set DATABASE_URL if it's not already set (user's explicit DATABASE_URL takes precedence).
+    #[cfg(feature = "database")]
+    {
+        if std::env::var("DATABASE_URL").is_err() {
+            if let Ok(acton_url) = std::env::var("ACTON_DATABASE_URL") {
+                println!("cargo:rustc-env=DATABASE_URL={}", acton_url);
+            }
+        }
+    }
+
     #[cfg(feature = "grpc")]
     {
         // Compile example protos

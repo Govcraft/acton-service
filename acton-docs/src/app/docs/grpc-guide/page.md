@@ -993,17 +993,20 @@ error: couldn't find `my_service_descriptor` in `OUT_DIR`
 - Package `myservice.v1` → descriptor `my_service_descriptor`
 - Replace dots with underscores, add `_descriptor` suffix
 
-### Build Fails Without DATABASE_URL
+### Build Fails Without ACTON_DATABASE_URL
 
-SQLx compile-time verification requires database during build.
+SQLx compile-time verification requires database during build. acton-service automatically propagates `ACTON_DATABASE_URL` to SQLx.
 
-**Solution:** Use SQLx offline mode:
+**Solution:** Either set `ACTON_DATABASE_URL` or use SQLx offline mode:
 
 ```bash
-# Generate sqlx-data.json
-cargo sqlx prepare
+# Option 1: Set environment variable
+export ACTON_DATABASE_URL="postgres://localhost/dev_db"
+cargo build
 
-# Build without database
+# Option 2: Use offline mode
+cargo sqlx prepare  # Generate sqlx-data.json
+export SQLX_OFFLINE=true
 cargo build
 ```
 

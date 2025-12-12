@@ -126,6 +126,10 @@ sqlx::query_as!(User, "SELECT id, nmae FROM users")
 
 ### Setup for Local Development
 
+{% callout type="note" title="Unified Environment Variable" %}
+acton-service automatically propagates `ACTON_DATABASE_URL` to SQLx's `DATABASE_URL` during compilation. You only need to set **one** environment variable for both runtime connections and compile-time query verification.
+{% /callout %}
+
 **Step 1: Ensure PostgreSQL is running**
 ```bash
 # macOS (Homebrew)
@@ -146,27 +150,28 @@ createdb myapp_dev
 psql -U postgres -c "CREATE DATABASE myapp_dev;"
 ```
 
-**Step 3: Set DATABASE_URL environment variable**
+**Step 3: Set ACTON_DATABASE_URL environment variable**
 
 ```bash
 # Add to ~/.bashrc or ~/.zshrc for permanent effect
-export DATABASE_URL="postgres://username:password@localhost/myapp_dev"
+export ACTON_DATABASE_URL="postgres://username:password@localhost/myapp_dev"
 
-# Or use .env file (requires dotenv)
-echo "DATABASE_URL=postgres://localhost/myapp_dev" > .env
+# Or use .env file
+echo "ACTON_DATABASE_URL=postgres://localhost/myapp_dev" > .env
 ```
 
 **Step 4: Run migrations (if using)**
 
 ```bash
-sqlx migrate run
+# sqlx-cli still requires DATABASE_URL directly
+DATABASE_URL=$ACTON_DATABASE_URL sqlx migrate run
 ```
 
 **Step 5: Build with compile-time verification**
 
 ```bash
 cargo build
-# SQLx connects to DATABASE_URL and verifies all queries
+# acton-service's build.rs propagates ACTON_DATABASE_URL to SQLx automatically
 ```
 
 ### Offline Mode (For CI/CD)
@@ -189,7 +194,7 @@ cargo sqlx prepare
 # Set offline mode
 export SQLX_OFFLINE=true
 
-# Build succeeds without DATABASE_URL
+# Build succeeds without ACTON_DATABASE_URL
 cargo build
 ```
 
@@ -226,7 +231,7 @@ build:
 
 ### When Compile-Time Verification Fails
 
-**Problem:** Build fails because DATABASE_URL is unavailable or points to wrong database.
+**Problem:** Build fails because `ACTON_DATABASE_URL` is unavailable or points to wrong database.
 
 **Solutions:**
 
@@ -238,7 +243,7 @@ build:
 
 2. **Point to development database**
    ```bash
-   export DATABASE_URL="postgres://localhost/dev_db"
+   export ACTON_DATABASE_URL="postgres://localhost/dev_db"
    cargo build
    ```
 
@@ -276,7 +281,7 @@ sqlx::query(&query)
 **DON'T:**
 - ❌ Skip compile-time checks unless absolutely necessary
 - ❌ Forget to update offline data after migrations
-- ❌ Commit sensitive credentials in DATABASE_URL (use localhost in docs)
+- ❌ Commit sensitive credentials in `ACTON_DATABASE_URL` (use localhost in docs)
 
 ## Health Checks
 
