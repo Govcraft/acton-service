@@ -67,7 +67,6 @@ pub mod cache;
 #[cfg(feature = "events")]
 pub mod events;
 
-#[cfg(feature = "observability")]
 pub mod observability;
 
 #[cfg(feature = "openapi")]

@@ -6,7 +6,15 @@
 //! - Distributed tracing with span propagation
 //! - Graceful fallback when OTLP is not configured
 
+use std::sync::Once;
+
 use crate::{config::Config, error::Result};
+
+/// Global guard ensuring tracing is initialized exactly once across the entire application.
+///
+/// This is used by both `observability::init_tracing()` and `AppState::Builder` to
+/// coordinate tracing initialization, preventing conflicts when both paths are used.
+static TRACING_INIT: Once = Once::new();
 
 #[cfg(feature = "observability")]
 use {
@@ -57,66 +65,75 @@ pub fn init_tracing<T>(config: &Config<T>) -> Result<()>
 where
     T: serde::Serialize + serde::de::DeserializeOwned + Clone + Default + Send + Sync + 'static,
 {
+    // Check if already initialized by another path (e.g., AppState::Builder)
+    if TRACING_INIT.is_completed() {
+        return Ok(());
+    }
+
     let log_level = config.service.log_level.clone();
     let service_name = config.service.name.clone();
+    let otlp_config = config.otlp.clone();
 
-    // Set global trace context propagator for distributed tracing
-    global::set_text_map_propagator(TraceContextPropagator::new());
+    // Use shared Once to ensure single initialization across all code paths
+    TRACING_INIT.call_once(|| {
+        // Set global trace context propagator for distributed tracing
+        global::set_text_map_propagator(TraceContextPropagator::new());
 
-    // Build subscriber with JSON formatting
-    // Respect RUST_LOG environment variable if set, otherwise use config
-    let fmt_layer = tracing_subscriber::fmt::layer()
-        .json()
-        .with_filter(
-            EnvFilter::try_from_default_env()
-                .or_else(|_| EnvFilter::try_new(&log_level))
-                .unwrap_or_else(|_| EnvFilter::new("info")),
-        );
+        // Build subscriber with JSON formatting
+        // Respect RUST_LOG environment variable if set, otherwise use config
+        let fmt_layer = tracing_subscriber::fmt::layer()
+            .json()
+            .with_filter(
+                EnvFilter::try_from_default_env()
+                    .or_else(|_| EnvFilter::try_new(&log_level))
+                    .unwrap_or_else(|_| EnvFilter::new("info")),
+            );
 
-    // Try to initialize OpenTelemetry if configured
-    if let Some(otlp_config) = &config.otlp {
-        if otlp_config.enabled {
-            match init_otlp_tracer(otlp_config, &service_name) {
-                Ok(tracer_provider) => {
-                    // Create tracer directly from provider for type compatibility
-                    let tracer = tracer_provider.tracer(service_name.clone());
-                    let telemetry_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+        // Try to initialize OpenTelemetry if configured
+        if let Some(otlp_config) = &otlp_config {
+            if otlp_config.enabled {
+                match init_otlp_tracer(otlp_config, &service_name) {
+                    Ok(tracer_provider) => {
+                        // Create tracer directly from provider for type compatibility
+                        let tracer = tracer_provider.tracer(service_name.clone());
+                        let telemetry_layer = tracing_opentelemetry::layer().with_tracer(tracer);
 
-                    tracing_subscriber::registry()
-                        .with(fmt_layer)
-                        .with(telemetry_layer)
-                        .init();
+                        tracing_subscriber::registry()
+                            .with(fmt_layer)
+                            .with(telemetry_layer)
+                            .init();
 
-                    // Store provider for shutdown and set global
-                    let _ = TRACER_PROVIDER.set(tracer_provider.clone());
-                    global::set_tracer_provider(tracer_provider);
+                        // Store provider for shutdown and set global
+                        let _ = TRACER_PROVIDER.set(tracer_provider.clone());
+                        global::set_tracer_provider(tracer_provider);
 
-                    tracing::info!(
-                        service = %service_name,
-                        otlp_endpoint = %otlp_config.endpoint,
-                        "OpenTelemetry tracing initialized with OTLP export"
-                    );
+                        tracing::info!(
+                            service = %service_name,
+                            otlp_endpoint = %otlp_config.endpoint,
+                            "OpenTelemetry tracing initialized with OTLP export"
+                        );
 
-                    return Ok(());
-                }
-                Err(e) => {
-                    // Log error but continue with JSON-only logging
-                    eprintln!(
-                        "Failed to initialize OTLP exporter (falling back to JSON logging): {}",
-                        e
-                    );
+                        return;
+                    }
+                    Err(e) => {
+                        // Log error but continue with JSON-only logging
+                        eprintln!(
+                            "Failed to initialize OTLP exporter (falling back to JSON logging): {}",
+                            e
+                        );
+                    }
                 }
             }
         }
-    }
 
-    // Fallback: JSON logging only (no OTLP)
-    tracing_subscriber::registry().with(fmt_layer).init();
+        // Fallback: JSON logging only (no OTLP)
+        tracing_subscriber::registry().with(fmt_layer).init();
 
-    tracing::info!(
-        service = %service_name,
-        "Tracing initialized with JSON logging (OTLP not configured)"
-    );
+        tracing::info!(
+            service = %service_name,
+            "Tracing initialized with JSON logging (OTLP not configured)"
+        );
+    });
 
     Ok(())
 }
@@ -270,21 +287,50 @@ pub fn init_tracing<T>(config: &Config<T>) -> Result<()>
 where
     T: serde::Serialize + serde::de::DeserializeOwned + Clone + Default + Send + Sync + 'static,
 {
+    use tracing_subscriber::EnvFilter;
+
+    // Check if already initialized by another path (e.g., AppState::Builder)
+    if TRACING_INIT.is_completed() {
+        return Ok(());
+    }
+
     let log_level = config.service.log_level.clone();
+    let service_name = config.service.name.clone();
 
-    tracing_subscriber::fmt()
-        .json()
-        .with_env_filter(
-            EnvFilter::try_new(&log_level).unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
+    // Use shared Once to ensure single initialization across all code paths
+    TRACING_INIT.call_once(|| {
+        tracing_subscriber::fmt()
+            .json()
+            .with_env_filter(
+                EnvFilter::try_new(&log_level).unwrap_or_else(|_| EnvFilter::new("info")),
+            )
+            .init();
 
-    tracing::info!(
-        service = %config.service.name,
-        "Tracing initialized (observability feature disabled)"
-    );
+        tracing::info!(
+            service = %service_name,
+            "Tracing initialized (observability feature disabled)"
+        );
+    });
 
     Ok(())
+}
+
+/// Initialize basic tracing with sensible defaults using the shared `Once` guard.
+///
+/// This is intended for use by `AppState::Builder` when the user hasn't explicitly
+/// configured tracing through `ServiceBuilder`. It sets up a minimal fmt subscriber
+/// that doesn't conflict with the full observability setup.
+///
+/// If tracing has already been initialized (either by this function or `init_tracing`),
+/// this is a no-op.
+pub fn init_basic_tracing() {
+    TRACING_INIT.call_once(|| {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_target(false)
+            .init();
+        tracing::debug!("Tracing initialized with default configuration");
+    });
 }
 
 /// Shutdown tracing and flush all pending spans to OTLP collector

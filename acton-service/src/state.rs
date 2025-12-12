@@ -373,23 +373,6 @@ where
         self
     }
 
-    /// Initialize tracing with sensible defaults
-    ///
-    /// This is called automatically during `build()` unless disabled with `without_tracing()`.
-    /// It's safe to call multiple times - subsequent calls are no-ops.
-    fn init_tracing() {
-        use std::sync::Once;
-        static INIT: Once = Once::new();
-
-        INIT.call_once(|| {
-            tracing_subscriber::fmt()
-                .with_max_level(tracing::Level::INFO)
-                .with_target(false)
-                .init();
-            tracing::debug!("Tracing initialized with default configuration");
-        });
-    }
-
     /// Build the AppState, initializing connection pools as needed
     ///
     /// This will:
@@ -399,8 +382,9 @@ where
     /// - Skip pool initialization if corresponding agents are provided
     pub async fn build(self) -> Result<AppState<T>> {
         // Initialize tracing if enabled and not already set up
+        // Uses shared Once guard in observability module to prevent conflicts
         if self.enable_tracing {
-            Self::init_tracing();
+            crate::observability::init_basic_tracing();
         }
 
         // Use provided config or default
