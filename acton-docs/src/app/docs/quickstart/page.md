@@ -3,10 +3,10 @@ title: 5-Minute Quickstart
 nextjs:
   metadata:
     title: 5-Minute Quickstart
-    description: Get a microservice running in 5 minutes with automatic health checks and observability
+    description: Get a backend service running in 5 minutes with automatic health checks and observability
 ---
 
-Get a microservice running in 5 minutes with automatic health checks and observability.
+Get a backend service running in 5 minutes with automatic health checks and observability.
 
 ## Prerequisites
 
@@ -96,7 +96,7 @@ curl http://localhost:8080/ready
 
 ## What Just Happened?
 
-You created a microservice with these features enabled by default:
+You created a backend service with these features enabled by default:
 
 ✅ **Type-enforced API versioning** - Compiler prevents unversioned routes
 

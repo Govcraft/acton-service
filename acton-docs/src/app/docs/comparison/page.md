@@ -71,7 +71,7 @@ async fn main() {
 - **Team enforcement**: You need the type system to prevent mistakes
 - **Production defaults**: You want batteries-included best practices
 - **Rapid development**: You need to ship features, not infrastructure
-- **Consistency**: You're building multiple microservices
+- **Consistency**: You're building multiple services or a team working on the same codebase
 
 ```rust
 // acton-service: Type-enforced patterns
@@ -286,7 +286,7 @@ Benchmark your specific use case if performance is critical to your requirements
 ## When to Choose Each
 
 ### Consider acton-service if:
-- ✅ Building microservices with type-enforced patterns
+- ✅ Building production backends with type-enforced patterns
 - ✅ Working in a team that wants consistent patterns
 - ✅ Need built-in observability and resilience features
 - ✅ Want opinionated defaults for common concerns
@@ -396,7 +396,7 @@ Answer these questions:
    - Yes → acton-service
    - No → Axum or Actix-Web
 
-2. **Are you building microservices for production?**
+2. **Are you building production backends?**
    - Yes → acton-service or Actix-Web
    - Prototyping → Axum or Rocket
 
