@@ -89,6 +89,9 @@ pub mod grpc;
 #[cfg(feature = "websocket")]
 pub mod websocket;
 
+#[cfg(feature = "auth")]
+pub mod auth;
+
 /// Internal agent-based components
 ///
 /// Connection pool management is handled internally by agents. Users don't
@@ -189,6 +192,20 @@ pub mod prelude {
 
     #[cfg(all(feature = "grpc", feature = "governor"))]
     pub use crate::grpc::GrpcRateLimitLayer;
+
+    // Auth module exports
+    #[cfg(feature = "auth")]
+    pub use crate::auth::{
+        AuthConfig, PasswordConfig, TokenGenerationConfig, PasetoGenerationConfig,
+        RefreshTokenConfig, PasswordHasher, TokenGenerator, TokenPair, PasetoGenerator,
+        ApiKey, ApiKeyGenerator,
+    };
+
+    #[cfg(all(feature = "auth", feature = "jwt"))]
+    pub use crate::auth::JwtGenerator;
+
+    #[cfg(feature = "oauth")]
+    pub use crate::auth::{OAuthProvider, OAuthTokens, OAuthUserInfo, ApiKeyConfig, OAuthConfig, OAuthProviderConfig};
 
     #[cfg(feature = "websocket")]
     pub use crate::websocket::{

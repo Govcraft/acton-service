@@ -83,8 +83,6 @@ impl TokenRevocation for RedisTokenRevocation {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_revocation_key_format() {
         // Create a mock pool - we can't actually use it but we can test the key format
