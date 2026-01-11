@@ -24,10 +24,10 @@ const lexend = localFont({
 export const metadata: Metadata = {
   title: {
     template: '%s - acton-service',
-    default: 'acton-service - Production-grade Rust microservice framework',
+    default: 'acton-service - Production-ready Rust backend framework',
   },
   description:
-    'Build microservices with enforced best practices, dual HTTP+gRPC support, and comprehensive observability out of the box.',
+    'Build production backends with enforced best practices, dual HTTP+gRPC support, and comprehensive observability. Scales from monolith to microservices.',
 }
 
 export default function RootLayout({
