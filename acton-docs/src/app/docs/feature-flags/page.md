@@ -74,6 +74,14 @@ acton-service uses feature flags to keep compile times fast and binary sizes sma
         │
         ▼
 ┌─────────────────────────────────────────┐
+│ Do you need HTTP sessions (HTMX/SSR)?   │
+└─────────────────────────────────────────┘
+        │
+        ├─── Dev ──▶ Add "session-memory"
+        └─── Prod ─▶ Add "session-redis"
+        │
+        ▼
+┌─────────────────────────────────────────┐
 │ Do you need advanced features?          │
 └─────────────────────────────────────────┘
         │
@@ -224,6 +232,58 @@ NATS JetStream client for event-driven architecture and pub/sub messaging.
 ```toml
 {% dep("eventsOnly") %}
 ```
+
+---
+
+## Session Features
+
+### `session`
+
+Base session support. This feature is automatically included when using `session-memory` or `session-redis`.
+
+**When to use**: Building HTMX or server-rendered applications with session state
+
+**Dependencies**: tower-sessions, time
+
+### `session-memory`
+
+In-memory session storage for development and single-instance deployments.
+
+**When to use**: Local development, testing, or single-server applications
+
+**Dependencies**: tower-sessions-memory-store
+
+**Provides**:
+- In-memory session store
+- Cookie-based session IDs
+- Flash messages
+- CSRF protection
+- TypedSession for type-safe session data
+
+```toml
+acton-service = { version = "{% version() %}", features = ["session-memory"] }
+```
+
+### `session-redis`
+
+Redis-backed session storage for production multi-instance deployments.
+
+**When to use**: Production deployments with multiple application instances
+
+**Dependencies**: tower-sessions-redis-store (fred)
+
+**Provides**:
+- Distributed session storage
+- Session persistence across restarts
+- All features from `session-memory`
+
+```toml
+acton-service = { version = "{% version() %}", features = ["session-redis"] }
+```
+
+**Note**: Uses `fred` Redis client internally (separate from `cache` feature's `deadpool-redis`).
+
+See the [Session Management Guide](/docs/session) for detailed usage.
 
 ---
 
@@ -448,6 +508,25 @@ tokio = { version = "1", features = ["full"] }
 **Binary size**: ~14MB (stripped)
 **Compile time**: ~55s (clean build)
 
+### HTMX / Server-Rendered App
+**Use case**: Traditional web app with server-rendered HTML and HTMX
+
+```toml
+[dependencies]
+acton-service = { version = "{% version() %}", features = [
+    "http",
+    "observability",
+    "database",
+    "session-memory"   # Use "session-redis" in production
+] }
+tokio = { version = "1", features = ["full"] }
+```
+
+**Binary size**: ~13MB (stripped)
+**Compile time**: ~50s (clean build)
+
+**Provides**: Cookie-based sessions, flash messages, CSRF protection, TypedSession.
+
 ### Everything (Development/Prototyping)
 **Use case**: Exploring all features, quick prototyping
 
@@ -475,6 +554,8 @@ Some features work better together:
 | `otel-metrics` | `observability` | Metrics require tracing foundation |
 | `resilience` | `http` or `grpc` | Resilience patterns apply to HTTP/gRPC calls |
 | `openapi` | `http` | OpenAPI docs are for HTTP endpoints |
+| `session-redis` | Production deployments | Sessions persist across restarts and work across multiple instances |
+| `session-memory` | `session-redis` | Use memory for dev, Redis for production |
 
 ---
 

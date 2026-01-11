@@ -9,8 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- Reposition as backend framework that scales to microservices
+- Update docs site metadata
+- **tier-4**: Update example documentation
+- **tier-3**: Update feature documentation
+- **tier-2**: Update entry point documentation
+- **tier-1**: Update Hero component messaging
+- **tier-1**: Update docs homepage positioning
+- **tier-1**: Update lib.rs crate documentation
+- **tier-1**: Update acton-service Cargo.toml description
+- **tier-1**: Reposition README as backend framework
 - Sync all version files to 0.9.0
 - Update version to 0.9.0
+
+### Features
+
+- **session**: Add HTTP session management for HTMX/SSR applications
 ## [acton-service-v0.9.0] - 2026-01-11
 
 ### Documentation

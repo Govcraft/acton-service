@@ -579,6 +579,62 @@ where
         // Layers are applied in reverse order (bottom layer is innermost/first)
         let mut app = Self::apply_middleware(app, &config);
 
+        // Apply session middleware if configured
+        // Session runs after general middleware, before JWT/Cedar
+        // This allows session-based auth and JWT auth to coexist
+        #[cfg(feature = "session")]
+        if let Some(ref session_config) = config.session {
+            use crate::session::SessionStorage;
+
+            match session_config.storage {
+                #[cfg(feature = "session-memory")]
+                SessionStorage::Memory => {
+                    use crate::session::create_memory_session_layer;
+                    tracing::info!("Initializing in-memory session store");
+                    let session_layer = create_memory_session_layer(session_config);
+                    app = app.layer(session_layer);
+                }
+                #[cfg(feature = "session-redis")]
+                SessionStorage::Redis => {
+                    use crate::session::create_redis_session_layer;
+                    if let Some(ref redis_url) = session_config.redis_url {
+                        tracing::info!("Initializing Redis session store");
+                        match tokio::runtime::Handle::try_current() {
+                            Ok(_handle) => {
+                                let session_config_clone = session_config.clone();
+                                let redis_url_clone = redis_url.clone();
+                                match tokio::task::block_in_place(|| {
+                                    tokio::runtime::Handle::current().block_on(async {
+                                        create_redis_session_layer(&session_config_clone, &redis_url_clone).await
+                                    })
+                                }) {
+                                    Ok(session_layer) => {
+                                        app = app.layer(session_layer);
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to create Redis session store: {}", e);
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                tracing::error!("No tokio runtime available for Redis session initialization");
+                            }
+                        }
+                    } else {
+                        tracing::error!("Redis session storage configured but redis_url is missing");
+                    }
+                }
+                #[cfg(not(feature = "session-memory"))]
+                SessionStorage::Memory => {
+                    tracing::error!("Memory session storage requested but 'session-memory' feature is not enabled");
+                }
+                #[cfg(not(feature = "session-redis"))]
+                SessionStorage::Redis => {
+                    tracing::error!("Redis session storage requested but 'session-redis' feature is not enabled");
+                }
+            }
+        }
+
         // Auto-apply Cedar middleware if configured and enabled
         // NOTE: Cedar must be applied BEFORE JWT because Axum layers run in reverse order
         // This ensures the execution order is: Request → General Middleware → JWT → Cedar → Handler
