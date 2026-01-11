@@ -92,6 +92,11 @@ where
     #[serde(default)]
     pub cedar: Option<CedarConfig>,
 
+    /// Session configuration (optional)
+    #[cfg(feature = "session")]
+    #[serde(default)]
+    pub session: Option<crate::session::SessionConfig>,
+
     /// Custom configuration extensions
     ///
     /// Any fields in config.toml that don't match the above framework fields
@@ -1092,6 +1097,8 @@ where
             websocket: None,
             #[cfg(feature = "cedar-authz")]
             cedar: None,
+            #[cfg(feature = "session")]
+            session: None,
             custom: T::default(),
         }
     }
@@ -1169,6 +1176,8 @@ mod tests {
             websocket: None,
             #[cfg(feature = "cedar-authz")]
             cedar: None,
+            #[cfg(feature = "session")]
+            session: None,
             custom,
         };
 
@@ -1217,6 +1226,8 @@ mod tests {
             websocket: None,
             #[cfg(feature = "cedar-authz")]
             cedar: None,
+            #[cfg(feature = "session")]
+            session: None,
             custom: custom.clone(),
         };
 

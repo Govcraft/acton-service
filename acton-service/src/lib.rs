@@ -89,6 +89,9 @@ pub mod grpc;
 #[cfg(feature = "websocket")]
 pub mod websocket;
 
+#[cfg(feature = "session")]
+pub mod session;
+
 /// Internal agent-based components
 ///
 /// Connection pool management is handled internally by agents. Users don't
@@ -198,6 +201,22 @@ pub mod prelude {
         // Re-exported axum types
         WebSocket, WebSocketUpgrade, Message as WsMessage,
     };
+
+    #[cfg(feature = "session")]
+    pub use crate::session::{
+        // Configuration
+        SessionConfig, SessionStorage, CsrfConfig,
+        // Typed session and extractors
+        TypedSession, AuthSession, SessionAuth, SessionData,
+        // Flash messages
+        FlashMessage, FlashMessages, FlashKind,
+        // CSRF protection
+        CsrfToken, CsrfLayer, CsrfMiddleware, csrf_middleware,
+    };
+
+    // Re-export tower-sessions Session type for direct use
+    #[cfg(feature = "session")]
+    pub use tower_sessions::Session;
 
     // Background task management (user-facing)
     pub use crate::agents::{BackgroundWorker, TaskStatus};

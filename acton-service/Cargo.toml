@@ -99,6 +99,11 @@ acton-reactive = { version = "7.0.0"}
 tokio-util = "0.7.17"
 dashmap = "6.1.0"
 anyhow.workspace = true
+tower-sessions = { version = "0.14.0", default-features = false, optional = true }
+time = { version = "0.3.44", optional = true }
+rand = { version = "0.9.2", optional = true }
+tower-sessions-memory-store = { version = "0.14.0", optional = true }
+tower-sessions-redis-store = { version = "0.16.0", optional = true }
 
 [features]
 default = ["http", "observability"]
@@ -115,12 +120,16 @@ governor = []
 websocket = []
 openapi = ["dep:utoipa", "dep:utoipa-swagger-ui"]
 cedar-authz = ["dep:cedar-policy", "cache"]
-full = ["http", "grpc", "websocket", "database", "cache", "events", "observability", "resilience", "otel-metrics", "governor", "openapi", "cedar-authz"]
+full = ["http", "grpc", "websocket", "database", "cache", "events", "observability", "resilience", "otel-metrics", "governor", "openapi", "cedar-authz", "session-memory", "session-redis"]
 tonic-health = ["dep:tonic-health"]
 tonic-reflection = ["dep:tonic-reflection"]
 tower-resilience-circuitbreaker = ["dep:tower-resilience-circuitbreaker"]
 tower-resilience-bulkhead = ["dep:tower-resilience-bulkhead"]
 cedar-policy = ["dep:cedar-policy"]
+# Session management (optional)
+session = ["dep:tower-sessions", "dep:time", "dep:rand"]
+session-memory = ["session", "dep:tower-sessions-memory-store"]
+session-redis = ["session", "dep:tower-sessions-redis-store"]
 
 # Basic examples
 [[example]]

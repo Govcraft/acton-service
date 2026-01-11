@@ -88,6 +88,11 @@ pub enum Error {
     /// Generic error
     #[error("{0}")]
     Other(String),
+
+    /// Session error
+    #[cfg(feature = "session")]
+    #[error("Session error: {0}")]
+    Session(String),
 }
 
 /// Error response body
@@ -234,6 +239,15 @@ impl IntoResponse for Error {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     ErrorResponse::new(StatusCode::INTERNAL_SERVER_ERROR, "An unexpected error occurred"),
+                )
+            }
+
+            #[cfg(feature = "session")]
+            Error::Session(msg) => {
+                tracing::error!("Session error: {}", msg);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    ErrorResponse::with_code(StatusCode::INTERNAL_SERVER_ERROR, "SESSION_ERROR", "Session operation failed"),
                 )
             }
         };

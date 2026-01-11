@@ -29,6 +29,7 @@ export const navigation = [
     links: [
       { title: 'Middleware Overview', href: '/docs/middleware' },
       { title: 'JWT Authentication', href: '/docs/jwt-auth' },
+      { title: 'Session Management', href: '/docs/session' },
       { title: 'Cedar Authorization', href: '/docs/cedar-auth' },
       { title: 'Rate Limiting', href: '/docs/rate-limiting' },
       { title: 'Resilience Patterns', href: '/docs/resilience' },
