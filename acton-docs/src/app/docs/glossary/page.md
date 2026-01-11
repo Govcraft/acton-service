@@ -17,7 +17,7 @@ If you're just getting started, begin with the [homepage](/) to understand what 
 ## Framework & Architecture
 
 ### acton-service
-A production-grade Rust microservice framework built on Axum that provides batteries-included features with enforced best practices. See [What is acton-service?](/) for full introduction.
+A production-ready Rust backend framework built on Axum that provides batteries-included features with enforced best practices. Works equally well for monoliths and microservices. See [What is acton-service?](/) for full introduction.
 
 ### Axum
 The underlying web framework that acton-service is built on. Axum provides the HTTP routing, extractors, and middleware system. When you see `Router`, `get()`, `post()`, or handler functions, these come from Axum.

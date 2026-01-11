@@ -3,7 +3,7 @@ title: Resilience Patterns
 nextjs:
   metadata:
     title: Resilience Patterns
-    description: Build fault-tolerant microservices with circuit breakers, retry logic, and bulkhead patterns to prevent cascading failures and overload.
+    description: Build fault-tolerant services with circuit breakers, retry logic, and bulkhead patterns to prevent cascading failures and overload.
 ---
 
 {% callout type="note" title="New to acton-service?" %}

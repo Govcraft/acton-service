@@ -16,7 +16,7 @@ Build a production-ready User Management API from scratch in 30-45 minutes. This
 
 ## What You'll Build
 
-A complete microservice with:
+A complete backend service with:
 
 - RESTful API with versioned endpoints
 - PostgreSQL database integration
@@ -130,7 +130,7 @@ curl http://localhost:8080/health
 ```
 
 {% callout type="note" title="Success!" %}
-You now have a running microservice with automatic health checks enabled by default.
+You now have a running backend service with automatic health checks enabled by default.
 {% /callout %}
 
 ---
@@ -1080,7 +1080,7 @@ curl http://localhost:8080/ready
 
 ## What You've Built
 
-Congratulations! You now have a production-ready microservice with:
+Congratulations! You now have a production-ready backend service with:
 
 ✅ **Versioned REST API** (V1 and V2)
 

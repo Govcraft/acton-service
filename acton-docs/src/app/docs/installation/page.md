@@ -3,7 +3,7 @@ title: Installation
 nextjs:
   metadata:
     title: Installation
-    description: Install acton-service and set up your first microservice
+    description: Install acton-service and set up your first backend service
 ---
 
 Get acton-service installed and ready for development in minutes. Choose between adding it to an existing project or scaffolding a complete service with the CLI.
