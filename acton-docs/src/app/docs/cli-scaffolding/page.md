@@ -3,7 +3,7 @@ title: Scaffolding Services
 nextjs:
   metadata:
     title: Scaffolding Services
-    description: Create production-ready microservices with the Acton CLI scaffolding tool
+    description: Create production-ready backend services with the Acton CLI scaffolding tool
 ---
 
 {% callout type="note" title="New to acton-service?" %}
@@ -13,7 +13,7 @@ Start with the [homepage](/) to understand what acton-service is, then explore [
 ---
 
 
-Use the Acton CLI to scaffold complete, production-ready microservices with all the features you need.
+Use the Acton CLI to scaffold complete, production-ready backend services with all the features you need.
 
 ## Creating a New Service
 
@@ -89,7 +89,7 @@ Default features:
 
 ### Full-Stack Service
 
-Create a comprehensive microservice with all features:
+Create a comprehensive service with all features:
 
 ```bash
 acton service new user-service \

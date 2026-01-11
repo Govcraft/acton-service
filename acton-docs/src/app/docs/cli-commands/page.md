@@ -21,7 +21,7 @@ All service management commands are under the `acton service` namespace.
 
 ### acton service new
 
-Create a new microservice with configurable features.
+Create a new backend service with configurable features.
 
 **Syntax:**
 ```bash

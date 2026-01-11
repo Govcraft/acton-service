@@ -1,6 +1,7 @@
 //! # acton-service
 //!
-//! Production-ready Rust microservice framework with multi-protocol support (HTTP + gRPC + WebSocket).
+//! Production-ready Rust backend framework with multi-protocol support (HTTP + gRPC + WebSocket).
+//! Works equally well for monolithic applications and microservices architectures.
 //!
 //! ## Features
 //!

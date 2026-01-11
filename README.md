@@ -1,8 +1,8 @@
 # acton-service
 
-**Production-grade Rust microservice framework for teams shipping to production**
+**Production-ready Rust backend framework that scales from monolith to microservices**
 
-Build microservices with enforced best practices, dual HTTP+gRPC support, and comprehensive observability out of the box.
+Build production backends with enforced best practices, dual HTTP+gRPC support, and comprehensive observability out of the box.
 
 **📚 [Full Documentation](https://govcraft.github.io/acton-service/)** | [Quick Start](#quick-start) | [Examples](https://govcraft.github.io/acton-service/docs/examples)
 
@@ -10,7 +10,7 @@ Build microservices with enforced best practices, dual HTTP+gRPC support, and co
 
 ## What is this?
 
-Building production microservices requires solving the same problems repeatedly: API versioning, health checks, observability, resilience patterns, connection pooling, and configuration management. Most frameworks leave these as optional concerns or implementation details.
+Building production backends requires solving the same problems repeatedly: API versioning, health checks, observability, resilience patterns, connection pooling, and configuration management. Most frameworks leave these as optional concerns or implementation details.
 
 acton-service provides a **batteries-included, type-enforced framework** where production best practices are the default path:
 
@@ -111,7 +111,7 @@ cd my-api && cargo run
 
 ### The Problem
 
-Building production microservices requires solving the same problems over and over:
+Building production backends requires solving the same problems over and over:
 
 - **Dual Protocols**: Modern deployments need both HTTP REST APIs and gRPC, but most frameworks make you choose one or run two separate servers
 - **Observability**: Distributed tracing, metrics collection, and structured logging should be standard, not afterthoughts assembled from scattered libraries
@@ -784,7 +784,7 @@ Built with excellent open source libraries:
 - [tower](https://github.com/tower-rs/tower) - Middleware foundation
 - [SQLx](https://github.com/launchbadge/sqlx) - Database client
 
-Inspired by production challenges at scale. Built by developers who've maintained microservice architectures in production.
+Inspired by production challenges at scale. Built by developers who've maintained backend services in production.
 
 ## Sponsor
 

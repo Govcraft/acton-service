@@ -2,19 +2,19 @@
 title: Getting started
 nextjs:
   metadata:
-    title: acton-service - Production-grade Rust microservice framework
-    description: Build microservices with enforced best practices, dual HTTP+gRPC support, and comprehensive observability out of the box.
+    title: acton-service - Production-ready Rust backend framework
+    description: Build production backends with enforced best practices, dual HTTP+gRPC support, and comprehensive observability out of the box. Scales from monolith to microservices.
 ---
 
-**Rust microservice framework with type-enforced patterns**
+**Rust backend framework with type-enforced patterns**
 
-Build microservices with dual HTTP+gRPC support, automatic health checks, and built-in observability.
+Build production backends with dual HTTP+gRPC support, automatic health checks, and built-in observability. Works equally well for monoliths and microservices.
 
 ---
 
 ## What is this?
 
-Building microservices often involves implementing the same patterns: API versioning, health checks, observability, resilience patterns, connection pooling, and configuration management. Many frameworks leave these as optional concerns or implementation details.
+Building production backends often involves implementing the same patterns: API versioning, health checks, observability, resilience patterns, connection pooling, and configuration management. Many frameworks leave these as optional concerns or implementation details.
 
 acton-service provides a **type-enforced framework** with built-in implementations of these patterns:
 
@@ -97,7 +97,7 @@ ServiceBuilder::new().with_routes(app).build();
 
 ### Common Challenges
 
-Building microservices often involves solving recurring problems:
+Building production backends often involves solving recurring problems:
 
 - **Dual Protocols**: Supporting both HTTP REST APIs and gRPC typically requires choosing one or running two separate servers
 - **Observability**: Distributed tracing, metrics collection, and structured logging need integration across multiple libraries

@@ -1,7 +1,7 @@
 {
   "name": "acton-docs",
   "version": "0.1.0",
-  "description": "Documentation website for acton-service - Production-grade Rust microservice framework",
+  "description": "Documentation website for acton-service - Production-ready Rust backend framework",
   "repository": {
     "type": "git",
     "url": "https://github.com/govcraft/acton-service.git",

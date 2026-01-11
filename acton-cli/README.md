@@ -1,6 +1,6 @@
 # Acton CLI
 
-Production-ready CLI for scaffolding and managing microservices built with the acton-service framework.
+Production-ready CLI for scaffolding and managing backend services built with the acton-service framework.
 
 ## Features
 

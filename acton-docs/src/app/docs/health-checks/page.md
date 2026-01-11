@@ -13,7 +13,7 @@ Start with the [homepage](/) to understand what acton-service is, then explore [
 ---
 
 
-Health checks are essential for production microservices, enabling orchestrators like Kubernetes to monitor service health and make informed decisions about traffic routing and container lifecycle management. acton-service includes automatic health and readiness endpoints that follow Kubernetes best practices out of the box.
+Health checks are essential for production services, enabling orchestrators like Kubernetes to monitor service health and make informed decisions about traffic routing and container lifecycle management. acton-service includes automatic health and readiness endpoints that follow Kubernetes best practices out of the box.
 
 ---
 
@@ -393,4 +393,4 @@ For application-specific health checks (e.g., "can we reach a critical external 
 
 ---
 
-Health checks are a critical foundation for production microservices. With acton-service, they're included automatically and follow industry best practices, allowing you to focus on building features rather than infrastructure.
+Health checks are a critical foundation for production services. With acton-service, they're included automatically and follow industry best practices, allowing you to focus on building features rather than infrastructure.

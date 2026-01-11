@@ -51,7 +51,7 @@ Event bus patterns and asynchronous communication:
 
 - **[event-driven.rs](./events/event-driven.rs)** - HTTP API + gRPC service communicating via event bus
 
-**Best for**: Building decoupled microservices with async event handling
+**Best for**: Building decoupled services with async event handling
 
 ### 📊 [Observability](./observability/)
 

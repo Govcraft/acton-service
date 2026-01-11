@@ -3,7 +3,7 @@ title: CLI Overview
 nextjs:
   metadata:
     title: CLI Overview
-    description: Production-ready CLI tool for scaffolding and managing acton-service microservices
+    description: Production-ready CLI tool for scaffolding and managing acton-service backend services
 ---
 
 {% callout type="note" title="New to acton-service?" %}
@@ -17,11 +17,11 @@ The Acton CLI is currently experimental and under active development. Breaking c
 ---
 
 
-The Acton CLI is a powerful command-line tool that scaffolds production-ready microservices built with the acton-service framework.
+The Acton CLI is a powerful command-line tool that scaffolds production-ready backend services built with the acton-service framework.
 
 ## What is the Acton CLI?
 
-The `acton` CLI is designed to help you quickly create, manage, and extend microservices with best practices built in. Whether you're building a simple HTTP API or a full-featured microservice with databases, caching, and event streaming, the CLI generates production-ready code that follows established patterns.
+The `acton` CLI is designed to help you quickly create, manage, and extend backend services with best practices built in. Whether you're building a simple HTTP API or a full-featured service with databases, caching, and event streaming, the CLI generates production-ready code that follows established patterns.
 
 ### Key Capabilities
 
