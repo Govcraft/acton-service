@@ -20,7 +20,7 @@
 use serde::{de::DeserializeOwned, Serialize};
 use std::sync::Arc;
 
-#[cfg(any(feature = "database", feature = "cache", feature = "events"))]
+#[cfg(any(feature = "database", feature = "cache", feature = "events", feature = "turso"))]
 use tokio::sync::RwLock;
 
 #[cfg(feature = "database")]
@@ -67,6 +67,9 @@ where
     #[cfg(feature = "database")]
     db_pool: Arc<RwLock<Option<PgPool>>>,
 
+    #[cfg(feature = "turso")]
+    turso_db: Arc<RwLock<Option<Arc<libsql::Database>>>>,
+
     #[cfg(feature = "cache")]
     redis_pool: Arc<RwLock<Option<RedisPool>>>,
 
@@ -86,6 +89,8 @@ where
             config: Arc::new(Config::<T>::default()),
             #[cfg(feature = "database")]
             db_pool: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "turso")]
+            turso_db: Arc::new(RwLock::new(None)),
             #[cfg(feature = "cache")]
             redis_pool: Arc::new(RwLock::new(None)),
             #[cfg(feature = "events")]
@@ -108,6 +113,8 @@ where
             config: Arc::new(config),
             #[cfg(feature = "database")]
             db_pool: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "turso")]
+            turso_db: Arc::new(RwLock::new(None)),
             #[cfg(feature = "cache")]
             redis_pool: Arc::new(RwLock::new(None)),
             #[cfg(feature = "events")]
@@ -154,6 +161,36 @@ where
     #[cfg(feature = "database")]
     pub(crate) fn set_db_pool_storage(&mut self, storage: Arc<RwLock<Option<PgPool>>>) {
         self.db_pool = storage;
+    }
+
+    /// Get the Turso database
+    ///
+    /// Returns a cloned libsql::Database if available. Database uses Arc internally,
+    /// so cloning is cheap.
+    ///
+    /// When using agent-based pool management, the database is automatically
+    /// populated by the `TursoDbAgent` when the connection is established.
+    /// The agent handles reconnection, health monitoring, and graceful shutdown.
+    #[cfg(feature = "turso")]
+    pub async fn turso(&self) -> Option<Arc<libsql::Database>> {
+        self.turso_db.read().await.clone()
+    }
+
+    /// Get direct access to the Turso database RwLock
+    ///
+    /// Use this if you need to check availability without acquiring the database
+    #[cfg(feature = "turso")]
+    pub fn turso_lock(&self) -> &Arc<RwLock<Option<Arc<libsql::Database>>>> {
+        &self.turso_db
+    }
+
+    /// Set the Turso database storage (internal use by ServiceBuilder)
+    ///
+    /// This replaces the internal database storage with the provided shared storage.
+    /// Pool agents will update this storage when connections are established.
+    #[cfg(feature = "turso")]
+    pub(crate) fn set_turso_db_storage(&mut self, storage: Arc<RwLock<Option<Arc<libsql::Database>>>>) {
+        self.turso_db = storage;
     }
 
     /// Get the Redis pool
@@ -279,6 +316,16 @@ where
                 summary.nats = Some(crate::pool_health::NatsClientHealth::from_client(
                     &client,
                     nats_config,
+                ));
+            }
+        }
+
+        #[cfg(feature = "turso")]
+        if self.turso().await.is_some() {
+            if let Some(turso_config) = &self.config.turso {
+                summary.turso = Some(crate::pool_health::TursoDbHealth::from_config(
+                    turso_config,
+                    true, // connected
                 ));
             }
         }
@@ -542,6 +589,8 @@ where
             config: Arc::new(config),
             #[cfg(feature = "database")]
             db_pool,
+            #[cfg(feature = "turso")]
+            turso_db: Arc::new(RwLock::new(None)), // Turso uses agents, not builder
             #[cfg(feature = "cache")]
             redis_pool,
             #[cfg(feature = "events")]

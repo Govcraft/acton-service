@@ -86,6 +86,38 @@ impl RedisPoolHealth {
     }
 }
 
+/// Turso/libsql database health status
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg(feature = "turso")]
+pub struct TursoDbHealth {
+    /// Connection mode (local, remote, embedded_replica)
+    pub mode: String,
+
+    /// Whether the database is connected
+    pub connected: bool,
+
+    /// Local database path (for local/embedded_replica modes)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_path: Option<String>,
+
+    /// Remote URL (for remote/embedded_replica modes)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_url: Option<String>,
+}
+
+#[cfg(feature = "turso")]
+impl TursoDbHealth {
+    /// Create health status from Turso config (when connected)
+    pub fn from_config(config: &crate::config::TursoConfig, connected: bool) -> Self {
+        Self {
+            mode: format!("{:?}", config.mode).to_lowercase(),
+            connected,
+            local_path: config.path.as_ref().map(|p| p.display().to_string()),
+            remote_url: config.url.clone(),
+        }
+    }
+}
+
 /// NATS client health status
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg(feature = "events")]
@@ -130,6 +162,11 @@ pub struct PoolHealthSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nats: Option<NatsClientHealth>,
 
+    /// Turso/libsql database health
+    #[cfg(feature = "turso")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turso: Option<TursoDbHealth>,
+
     /// Overall healthy status
     pub healthy: bool,
 }
@@ -144,6 +181,8 @@ impl PoolHealthSummary {
             redis: None,
             #[cfg(feature = "events")]
             nats: None,
+            #[cfg(feature = "turso")]
+            turso: None,
             healthy: true,
         }
     }
@@ -171,7 +210,14 @@ impl PoolHealthSummary {
             { true }
         };
 
-        database_healthy && cache_healthy && events_healthy
+        let turso_healthy = {
+            #[cfg(feature = "turso")]
+            { self.turso.as_ref().is_none_or(|turso| turso.connected) }
+            #[cfg(not(feature = "turso"))]
+            { true }
+        };
+
+        database_healthy && cache_healthy && events_healthy && turso_healthy
     }
 }
 

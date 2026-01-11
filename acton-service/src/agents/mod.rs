@@ -45,3 +45,6 @@ pub(crate) use pool::{RedisPoolAgent, SharedRedisPool};
 
 #[cfg(feature = "events")]
 pub(crate) use pool::{NatsPoolAgent, SharedNatsClient};
+
+#[cfg(feature = "turso")]
+pub(crate) use pool::{TursoDbAgent, SharedTursoDb};

@@ -36,6 +36,11 @@ pub enum Error {
     #[error("NATS error: {0}")]
     Nats(String),
 
+    /// Turso/libsql error
+    #[cfg(feature = "turso")]
+    #[error("Turso error: {0}")]
+    Turso(String),
+
     /// JWT error
     #[error("JWT error: {0}")]
     Jwt(Box<jsonwebtoken::errors::Error>),
@@ -154,6 +159,15 @@ impl IntoResponse for Error {
                 )
             }
 
+            #[cfg(feature = "turso")]
+            Error::Turso(e) => {
+                tracing::error!("Turso error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    ErrorResponse::with_code(StatusCode::INTERNAL_SERVER_ERROR, "TURSO_ERROR", "Database operation failed"),
+                )
+            }
+
             Error::Jwt(e) => (
                 StatusCode::UNAUTHORIZED,
                 ErrorResponse::with_code(StatusCode::UNAUTHORIZED, "INVALID_TOKEN", e.to_string()),
@@ -252,6 +266,13 @@ impl From<sqlx::Error> for Error {
 impl From<redis::RedisError> for Error {
     fn from(err: redis::RedisError) -> Self {
         Error::Redis(Box::new(err))
+    }
+}
+
+#[cfg(feature = "turso")]
+impl From<libsql::Error> for Error {
+    fn from(err: libsql::Error) -> Self {
+        Error::Turso(err.to_string())
     }
 }
 

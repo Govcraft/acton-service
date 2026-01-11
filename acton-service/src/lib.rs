@@ -46,6 +46,13 @@
 //! }
 //! ```
 
+// Ensure database and turso features are mutually exclusive
+#[cfg(all(feature = "database", feature = "turso"))]
+compile_error!(
+    "Features `database` (PostgreSQL) and `turso` (libsql) are mutually exclusive. \
+     Enable only one database backend."
+);
+
 pub mod config;
 pub mod error;
 pub mod ids;
@@ -60,6 +67,9 @@ pub mod versioning;
 
 #[cfg(feature = "database")]
 pub mod database;
+
+#[cfg(feature = "turso")]
+pub mod turso;
 
 #[cfg(feature = "cache")]
 pub mod cache;
@@ -106,6 +116,9 @@ pub mod prelude {
 
     #[cfg(feature = "database")]
     pub use crate::pool_health::DatabasePoolHealth;
+
+    #[cfg(feature = "turso")]
+    pub use crate::pool_health::TursoDbHealth;
 
     #[cfg(feature = "cache")]
     pub use crate::pool_health::RedisPoolHealth;

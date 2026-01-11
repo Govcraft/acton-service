@@ -479,3 +479,185 @@ impl NatsPoolAgent {
         Ok(handle)
     }
 }
+
+// ============================================================================
+// Turso Database Agent
+// ============================================================================
+
+#[cfg(all(feature = "turso", not(feature = "database"), not(feature = "cache"), not(feature = "events")))]
+use std::sync::Arc;
+#[cfg(all(feature = "turso", not(feature = "database"), not(feature = "cache"), not(feature = "events")))]
+use tokio::sync::RwLock;
+#[cfg(all(feature = "turso", not(feature = "database"), not(feature = "cache"), not(feature = "events")))]
+use tokio_util::sync::CancellationToken;
+#[cfg(all(feature = "turso", not(feature = "database"), not(feature = "events"), not(feature = "cache")))]
+use acton_reactive::prelude::*;
+#[cfg(feature = "turso")]
+use super::messages::{TursoDbConnected, TursoDbConnectionFailed};
+
+/// Shared database storage type for Turso/libsql connections
+#[cfg(feature = "turso")]
+pub type SharedTursoDb = Arc<RwLock<Option<Arc<libsql::Database>>>>;
+
+/// State for the Turso database agent
+#[cfg(feature = "turso")]
+#[derive(Debug, Default)]
+pub struct TursoDbState {
+    /// The underlying libsql database (wrapped in Arc since Database doesn't implement Clone)
+    pub db: Option<Arc<libsql::Database>>,
+    /// Configuration for the Turso connection
+    pub config: Option<crate::config::TursoConfig>,
+    /// Whether the agent is currently attempting to connect
+    pub connecting: bool,
+    /// Shared storage that AppState reads from directly
+    pub shared_db: Option<SharedTursoDb>,
+    /// Cancellation token for graceful shutdown during connection retries
+    pub cancel_token: Option<CancellationToken>,
+}
+
+/// Agent-based Turso/libsql database manager
+///
+/// This agent manages a Turso database connection using message passing
+/// instead of shared mutable state. Benefits include:
+///
+/// - **No lock contention**: Database access via shared state with minimal locking
+/// - **Automatic connection**: Connection established on agent start
+/// - **Graceful shutdown**: Database closed on agent stop
+#[cfg(feature = "turso")]
+pub struct TursoDbAgent;
+
+#[cfg(feature = "turso")]
+impl TursoDbAgent {
+    /// Spawn a new Turso database agent with the given configuration
+    ///
+    /// The agent will immediately begin connecting to the database.
+    ///
+    /// # Arguments
+    ///
+    /// * `runtime` - The agent runtime to spawn into
+    /// * `config` - Turso connection configuration
+    /// * `shared_db` - Shared storage that will be updated when the database connects.
+    ///   `AppState::turso()` reads the database directly from this storage.
+    pub async fn spawn(
+        runtime: &mut ActorRuntime,
+        config: crate::config::TursoConfig,
+        shared_db: Option<SharedTursoDb>,
+    ) -> anyhow::Result<ActorHandle> {
+        let mut agent = runtime.new_actor::<TursoDbState>();
+
+        // Create cancellation token for graceful shutdown during connection retries
+        let cancel_token = CancellationToken::new();
+
+        // Initialize state before starting
+        agent.model.config = Some(config);
+        agent.model.connecting = true;
+        agent.model.shared_db = shared_db;
+        agent.model.cancel_token = Some(cancel_token);
+
+        // Handle database connected message (sent from spawned task)
+        agent.mutate_on::<TursoDbConnected>(|agent, envelope| {
+            let db = envelope.message().db.clone();
+            agent.model.db = Some(db.clone());
+            agent.model.connecting = false;
+
+            // Update shared storage if configured
+            let shared_db = agent.model.shared_db.clone();
+
+            Reply::pending(async move {
+                // Update shared storage for direct AppState access
+                if let Some(shared) = shared_db {
+                    *shared.write().await = Some(db.clone());
+                    tracing::info!("Turso database connected and stored in shared state");
+                } else {
+                    tracing::info!("Turso database connected (no shared state)");
+                }
+            })
+        });
+
+        // Handle database connection failed message
+        agent.mutate_on::<TursoDbConnectionFailed>(|agent, envelope| {
+            let error_msg = envelope.message().error.clone();
+            agent.model.connecting = false;
+            tracing::error!("Turso database connection failed: {}", error_msg);
+
+            Reply::ready()
+        });
+
+        // Initialize connection on startup using spawn pattern
+        // NOTE: We spawn the task but DON'T await it here. The task sends messages
+        // back to the agent when it completes. This allows before_stop to run
+        // immediately when shutdown is requested, which cancels the token and
+        // causes the spawned task to exit via tokio::select!.
+        agent.after_start(|agent| {
+            let config = agent.model.config.clone();
+            let cancel_token = agent.model.cancel_token.clone();
+            let self_handle = agent.handle().clone();
+
+            if let Some(cfg) = config {
+                tracing::info!("Turso database agent starting, connecting to database (mode={:?})...", cfg.mode);
+
+                // Spawn the connection work - it will send a message back when done
+                tokio::spawn(async move {
+                    // Race connection against cancellation
+                    tokio::select! {
+                        biased;
+
+                        // Cancellation branch - triggered by before_stop
+                        () = async {
+                            if let Some(ref token) = cancel_token {
+                                token.cancelled().await;
+                            } else {
+                                // No token, never cancel via this branch
+                                std::future::pending::<()>().await;
+                            }
+                        } => {
+                            tracing::info!("Turso connection cancelled during shutdown");
+                            self_handle
+                                .send(TursoDbConnectionFailed {
+                                    error: "Connection cancelled during shutdown".to_string(),
+                                })
+                                .await;
+                        }
+
+                        // Connection branch
+                        result = crate::turso::create_database(&cfg) => {
+                            match result {
+                                Ok(db) => {
+                                    self_handle.send(TursoDbConnected { db: Arc::new(db) }).await;
+                                }
+                                Err(e) => {
+                                    self_handle
+                                        .send(TursoDbConnectionFailed {
+                                            error: e.to_string(),
+                                        })
+                                        .await;
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            Reply::ready()
+        });
+
+        // Graceful cleanup on shutdown
+        agent.before_stop(|agent| {
+            let cancel_token = agent.model.cancel_token.clone();
+            Reply::pending(async move {
+                // Cancel any ongoing connection retries first
+                if let Some(token) = cancel_token {
+                    token.cancel();
+                    tracing::debug!("Turso connection retry cancelled");
+                }
+
+                // Note: libsql::Database doesn't have an explicit close method,
+                // dropping it will close the connection
+                tracing::info!("Turso database agent stopping");
+            })
+        });
+
+        let handle = agent.start().await;
+        Ok(handle)
+    }
+}

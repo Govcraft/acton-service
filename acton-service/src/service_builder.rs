@@ -286,7 +286,7 @@ where
     ///
     /// Returns a mutable reference to the `ActorRuntime` for spawning agents.
     /// Called automatically by `build()` when connection pools are configured.
-    #[cfg(any(feature = "database", feature = "cache", feature = "events"))]
+    #[cfg(any(feature = "database", feature = "cache", feature = "events", feature = "turso"))]
     fn init_agent_runtime(&mut self) -> &mut acton_reactive::prelude::ActorRuntime {
         // Note: agent_runtime should already be initialized in the async block
         // before this is called
@@ -294,7 +294,7 @@ where
     }
 
     /// Get the agent broker handle (internal use only)
-    #[cfg(any(feature = "database", feature = "cache", feature = "events"))]
+    #[cfg(any(feature = "database", feature = "cache", feature = "events", feature = "turso"))]
     fn broker(&self) -> Option<acton_reactive::prelude::ActorHandle> {
         self.agent_runtime.as_ref().map(|r| r.broker())
     }
@@ -357,7 +357,10 @@ where
         #[cfg(feature = "events")]
         let needs_nats_agent = config.nats.is_some();
 
-        #[cfg(any(feature = "database", feature = "cache", feature = "events"))]
+        #[cfg(feature = "turso")]
+        let needs_turso_agent = config.turso.is_some();
+
+        #[cfg(any(feature = "database", feature = "cache", feature = "events", feature = "turso"))]
         let needs_agents = {
             #[cfg(feature = "database")]
             let db = needs_db_agent;
@@ -374,7 +377,12 @@ where
             #[cfg(not(feature = "events"))]
             let nats = false;
 
-            db || redis || nats
+            #[cfg(feature = "turso")]
+            let turso = needs_turso_agent;
+            #[cfg(not(feature = "turso"))]
+            let turso = false;
+
+            db || redis || nats || turso
         };
 
         // Initialize agent runtime and spawn pool agents if needed
@@ -399,6 +407,13 @@ where
             None
         };
 
+        #[cfg(feature = "turso")]
+        let shared_turso_db: Option<crate::agents::SharedTursoDb> = if needs_turso_agent {
+            Some(std::sync::Arc::new(tokio::sync::RwLock::new(None)))
+        } else {
+            None
+        };
+
         // Agent handles for AppState
         #[cfg(feature = "database")]
         let mut db_agent_handle: Option<acton_reactive::prelude::ActorHandle> = None;
@@ -406,8 +421,10 @@ where
         let mut redis_agent_handle: Option<acton_reactive::prelude::ActorHandle> = None;
         #[cfg(feature = "events")]
         let mut nats_agent_handle: Option<acton_reactive::prelude::ActorHandle> = None;
+        #[cfg(feature = "turso")]
+        let mut turso_agent_handle: Option<acton_reactive::prelude::ActorHandle> = None;
 
-        #[cfg(any(feature = "database", feature = "cache", feature = "events"))]
+        #[cfg(any(feature = "database", feature = "cache", feature = "events", feature = "turso"))]
         let broker_handle = if needs_agents {
             // Use block_in_place to run async code in sync context
             // Initialize agent runtime inside the async block using launch_async()
@@ -472,6 +489,24 @@ where
                                 }
                             }
                         }
+
+                        // Spawn Turso database agent
+                        #[cfg(feature = "turso")]
+                        if let Some(ref turso_config) = config.turso {
+                            match crate::agents::TursoDbAgent::spawn(
+                                runtime,
+                                turso_config.clone(),
+                                shared_turso_db.clone(),
+                            ).await {
+                                Ok(handle) => {
+                                    tracing::info!("Turso database agent spawned");
+                                    turso_agent_handle = Some(handle);
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Failed to spawn Turso database agent: {}", e);
+                                }
+                            }
+                        }
                     });
                 });
             }
@@ -481,7 +516,7 @@ where
             None
         };
 
-        #[cfg(not(any(feature = "database", feature = "cache", feature = "events")))]
+        #[cfg(not(any(feature = "database", feature = "cache", feature = "events", feature = "turso")))]
         let broker_handle: Option<acton_reactive::prelude::ActorHandle> = None;
 
         let routes = self.routes.unwrap_or_default();
@@ -511,6 +546,11 @@ where
             #[cfg(feature = "events")]
             if let Some(client) = shared_nats_client {
                 state.set_nats_client_storage(client);
+            }
+
+            #[cfg(feature = "turso")]
+            if let Some(db) = shared_turso_db {
+                state.set_turso_db_storage(db);
             }
 
             state

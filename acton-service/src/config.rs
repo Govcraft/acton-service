@@ -61,6 +61,11 @@ where
     #[serde(default)]
     pub database: Option<DatabaseConfig>,
 
+    /// Turso/libsql configuration (optional)
+    #[cfg(feature = "turso")]
+    #[serde(default)]
+    pub turso: Option<TursoConfig>,
+
     /// Redis configuration (optional)
     #[serde(default)]
     pub redis: Option<RedisConfig>,
@@ -167,6 +172,72 @@ pub struct DatabaseConfig {
     pub connection_timeout_secs: u64,
 
     /// Maximum retry attempts for establishing database connection
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
+
+    /// Delay between retry attempts in seconds
+    #[serde(default = "default_retry_delay")]
+    pub retry_delay_secs: u64,
+
+    /// Whether database is optional (service can start without it)
+    #[serde(default = "default_false")]
+    pub optional: bool,
+
+    /// Whether to initialize connection lazily (in background)
+    #[serde(default = "default_lazy_init")]
+    pub lazy_init: bool,
+}
+
+/// Turso/libsql connection mode
+#[cfg(feature = "turso")]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TursoMode {
+    /// Local SQLite file (no network, like regular SQLite)
+    #[default]
+    Local,
+    /// Remote-only (connect to Turso cloud or libsql-server)
+    Remote,
+    /// Embedded replica (local SQLite that syncs with remote Turso)
+    EmbeddedReplica,
+}
+
+/// Turso/libsql database configuration
+#[cfg(feature = "turso")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TursoConfig {
+    /// Connection mode
+    #[serde(default)]
+    pub mode: TursoMode,
+
+    /// Local database file path (required for Local and EmbeddedReplica modes)
+    #[serde(default)]
+    pub path: Option<PathBuf>,
+
+    /// Remote database URL (required for Remote and EmbeddedReplica modes)
+    /// Format: libsql://your-db.turso.io or http://localhost:8080
+    #[serde(default)]
+    pub url: Option<String>,
+
+    /// Authentication token (required for Remote and EmbeddedReplica modes)
+    #[serde(default)]
+    pub auth_token: Option<String>,
+
+    /// Sync interval in seconds (EmbeddedReplica mode only)
+    /// If set, enables automatic background sync
+    #[serde(default)]
+    pub sync_interval_secs: Option<u64>,
+
+    /// Encryption key for local database (optional, all modes)
+    #[serde(default)]
+    pub encryption_key: Option<String>,
+
+    /// Read-your-writes consistency (EmbeddedReplica mode only)
+    /// When true, writes are visible locally before sync completes
+    #[serde(default = "default_true")]
+    pub read_your_writes: bool,
+
+    /// Maximum retry attempts for connection
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
 
@@ -936,6 +1007,12 @@ where
         self.nats.as_ref().map(|n| n.url.as_str())
     }
 
+    /// Get Turso remote URL
+    #[cfg(feature = "turso")]
+    pub fn turso_url(&self) -> Option<&str> {
+        self.turso.as_ref().and_then(|t| t.url.as_deref())
+    }
+
     /// Enable permissive CORS for local development
     ///
     /// ⚠️  **WARNING: DO NOT USE IN PRODUCTION** ⚠️
@@ -1000,6 +1077,8 @@ where
             },
             middleware: MiddlewareConfig::default(),
             database: None,
+            #[cfg(feature = "turso")]
+            turso: None,
             redis: None,
             nats: None,
             otlp: None,
@@ -1073,6 +1152,8 @@ mod tests {
             },
             middleware: MiddlewareConfig::default(),
             database: None,
+            #[cfg(feature = "turso")]
+            turso: None,
             redis: None,
             nats: None,
             otlp: None,
@@ -1117,6 +1198,8 @@ mod tests {
             },
             middleware: MiddlewareConfig::default(),
             database: None,
+            #[cfg(feature = "turso")]
+            turso: None,
             redis: None,
             nats: None,
             otlp: None,

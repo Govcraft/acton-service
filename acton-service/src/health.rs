@@ -70,9 +70,9 @@ pub async fn readiness<T>(State(state): State<AppState<T>>) -> Result<impl IntoR
 where
     T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
 {
-    #[cfg_attr(not(any(feature = "database", feature = "cache", feature = "events")), allow(unused_mut))]
+    #[cfg_attr(not(any(feature = "database", feature = "cache", feature = "events", feature = "turso")), allow(unused_mut))]
     let mut dependencies = HashMap::new();
-    #[cfg_attr(not(any(feature = "database", feature = "cache", feature = "events")), allow(unused_mut))]
+    #[cfg_attr(not(any(feature = "database", feature = "cache", feature = "events", feature = "turso")), allow(unused_mut))]
     let mut all_ready = true;
 
     // Check database connection
@@ -320,6 +320,108 @@ where
 
                 dependencies.insert(
                     "nats".to_string(),
+                    DependencyStatus {
+                        healthy: false,
+                        message: Some(message),
+                    },
+                );
+            }
+        }
+    }
+
+    // Check Turso/libsql connection
+    #[cfg(feature = "turso")]
+    if state.config().turso.is_some() {
+        match state.turso().await {
+            Some(db) => {
+                // Try to get a connection to verify the database is working
+                match db.connect() {
+                    Ok(conn) => {
+                        // Try a simple query to verify connectivity
+                        match conn.query("SELECT 1", ()).await {
+                            Ok(_) => {
+                                dependencies.insert(
+                                    "turso".to_string(),
+                                    DependencyStatus {
+                                        healthy: true,
+                                        message: Some("Connected".to_string()),
+                                    },
+                                );
+                            }
+                            Err(e) => {
+                                tracing::error!("Turso query failed: {}", e);
+                                let is_optional = state
+                                    .config()
+                                    .turso
+                                    .as_ref()
+                                    .map(|t| t.optional)
+                                    .unwrap_or(false);
+
+                                if !is_optional {
+                                    all_ready = false;
+                                }
+
+                                dependencies.insert(
+                                    "turso".to_string(),
+                                    DependencyStatus {
+                                        healthy: false,
+                                        message: Some(format!("Query failed: {}", e)),
+                                    },
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to get Turso connection: {}", e);
+                        let is_optional = state
+                            .config()
+                            .turso
+                            .as_ref()
+                            .map(|t| t.optional)
+                            .unwrap_or(false);
+
+                        if !is_optional {
+                            all_ready = false;
+                        }
+
+                        dependencies.insert(
+                            "turso".to_string(),
+                            DependencyStatus {
+                                healthy: false,
+                                message: Some(format!("Connection error: {}", e)),
+                            },
+                        );
+                    }
+                }
+            }
+            None => {
+                // Turso configured but not connected yet (lazy init in progress)
+                let is_optional = state
+                    .config()
+                    .turso
+                    .as_ref()
+                    .map(|t| t.optional)
+                    .unwrap_or(false);
+
+                let is_lazy = state
+                    .config()
+                    .turso
+                    .as_ref()
+                    .map(|t| t.lazy_init)
+                    .unwrap_or(false);
+
+                if !is_optional {
+                    all_ready = false;
+                }
+
+                let message = if is_lazy {
+                    "Connection initializing (lazy mode)".to_string()
+                } else {
+                    "Not connected".to_string()
+                };
+
+                dependencies.insert(
+                    "turso".to_string(),
                     DependencyStatus {
                         healthy: false,
                         message: Some(message),

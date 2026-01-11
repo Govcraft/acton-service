@@ -36,6 +36,9 @@ tonic-prost-build = { workspace = true, optional = true }
 # Database (optional)
 sqlx = { workspace = true, optional = true }
 
+# Turso/libsql (optional)
+libsql = { workspace = true, optional = true }
+
 # Redis (optional)
 redis = { workspace = true, optional = true }
 deadpool-redis = { workspace = true, optional = true }
@@ -102,6 +105,7 @@ default = ["http", "observability"]
 http = []
 grpc = ["dep:tonic", "dep:prost", "dep:tonic-prost", "dep:tonic-prost-build", "dep:tokio-stream", "dep:tonic-health", "dep:tonic-reflection"]
 database = ["dep:sqlx"]
+turso = ["dep:libsql"]
 cache = ["dep:redis", "dep:deadpool-redis"]
 events = ["dep:async-nats"]
 observability = ["dep:opentelemetry", "dep:opentelemetry-otlp", "dep:opentelemetry_sdk", "dep:tracing-opentelemetry"]

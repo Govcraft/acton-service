@@ -88,6 +88,20 @@ pub(crate) struct NatsClientConnectionFailed {
     pub error: String,
 }
 
+/// Internal message sent when a Turso database connects successfully
+#[cfg(feature = "turso")]
+#[derive(Clone, Debug)]
+pub(crate) struct TursoDbConnected {
+    pub db: std::sync::Arc<libsql::Database>,
+}
+
+/// Internal message sent when a Turso database connection fails
+#[cfg(feature = "turso")]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct TursoDbConnectionFailed {
+    pub error: String,
+}
+
 // =============================================================================
 // Background Worker Agent messages
 // =============================================================================
