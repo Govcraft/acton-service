@@ -39,8 +39,38 @@ tasks:
     cmds:
       - rm -f {{.INSTALL_DIR}}/{{.CLI_NAME}}
 
+  changelog:
+    desc: Generate CHANGELOG.md from git history
+    summary: |
+      Generate or update the CHANGELOG.md file using git-cliff.
+
+      Usage:
+        task changelog              # Generate full changelog
+        task changelog -- --unreleased  # Show only unreleased changes
+
+      Requires:
+      - git-cliff installed (cargo install git-cliff)
+    cmds:
+      - git-cliff -o CHANGELOG.md {{.CLI_ARGS}}
+
+  changelog-preview:
+    desc: Preview changelog without writing to file
+    summary: |
+      Preview what the changelog would look like without modifying CHANGELOG.md.
+
+      Usage:
+        task changelog-preview              # Preview full changelog
+        task changelog-preview -- --unreleased  # Preview unreleased changes only
+    cmds:
+      - git-cliff {{.CLI_ARGS}}
+
+  changelog-unreleased:
+    desc: Show unreleased changes since last tag
+    cmds:
+      - git-cliff --unreleased
+
   release-cli:
-    desc: Bump CLI version, sign, and push to remote (no publish)
+    desc: Bump CLI version, update changelog, sign, and push to remote (no publish)
     summary: |
       Release a new version of the CLI using cargo-release.
 
@@ -51,6 +81,7 @@ tasks:
 
       This will:
       - Bump the version in Cargo.toml
+      - Update CHANGELOG.md with git-cliff
       - Create a signed git commit
       - Create a signed git tag
       - Push changes and tags to remote
@@ -58,6 +89,7 @@ tasks:
 
       Requires:
       - cargo-release installed (cargo install cargo-release)
+      - git-cliff installed (cargo install git-cliff)
       - GPG signing configured
     cmds:
       - |
@@ -66,10 +98,12 @@ tasks:
           echo "Usage: task release-cli -- patch"
           exit 1
         fi
+      - git-cliff -o CHANGELOG.md
+      - git add CHANGELOG.md
       - cargo release --manifest-path {{.CLI_PATH}}/Cargo.toml --sign --no-publish -x {{.CLI_ARGS}}
 
   release-service:
-    desc: Bump acton-service version, sign, publish, and push
+    desc: Bump acton-service version, update changelog, sign, publish, and push
     summary: |
       Release a new version of the acton-service crate using cargo-release.
 
@@ -80,6 +114,7 @@ tasks:
 
       This will:
       - Bump the version in Cargo.toml
+      - Update CHANGELOG.md with git-cliff
       - Create a signed git commit
       - Create a signed git tag
       - Publish to crates.io
@@ -87,6 +122,7 @@ tasks:
 
       Requires:
       - cargo-release installed (cargo install cargo-release)
+      - git-cliff installed (cargo install git-cliff)
       - GPG signing configured
       - crates.io authentication (cargo login)
     cmds:
@@ -96,6 +132,8 @@ tasks:
           echo "Usage: task release-service -- patch"
           exit 1
         fi
+      - git-cliff -o CHANGELOG.md
+      - git add CHANGELOG.md
       - cargo release --manifest-path {{.SERVICE_PATH}}/Cargo.toml --sign -x {{.CLI_ARGS}}
 
   default:

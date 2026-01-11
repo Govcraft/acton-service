@@ -20,6 +20,7 @@ release/
 # Exception: Allow specific markdown files
 !README.md
 !TUTORIAL.md
+!CHANGELOG.md
 !acton-docs/
 !acton-docs/**/*.md
 # Add more exceptions here as needed, for example:
