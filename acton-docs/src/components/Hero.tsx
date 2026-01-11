@@ -62,11 +62,11 @@ export function Hero() {
             />
             <div className="relative">
               <p className="inline bg-linear-to-r from-indigo-200 via-sky-400 to-indigo-200 bg-clip-text font-display text-5xl tracking-tight text-transparent">
-                Production-grade Rust microservices.
+                Production-ready Rust backends.
               </p>
               <p className="mt-3 text-2xl tracking-tight text-slate-400">
-                Build microservices with enforced best practices, dual HTTP+gRPC support,
-                and comprehensive observability out of the box.
+                Build production backends with enforced best practices, dual HTTP+gRPC support,
+                and comprehensive observability. Scales from monolith to microservices.
               </p>
               <div className="mt-8 flex gap-4 md:justify-center lg:justify-start">
                 <Button href="/docs/quickstart">Get started</Button>
