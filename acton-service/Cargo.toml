@@ -9,7 +9,7 @@ repository = "https://github.com/Govcraft/acton-service"
 homepage = "https://github.com/Govcraft/acton-service"
 documentation = "https://docs.rs/acton-service"
 readme = "../README.md"
-keywords = ["microservice", "framework", "grpc", "rest", "versioning"]
+keywords = ["microservice", "framework", "grpc", "rest", "websocket"]
 categories = ["web-programming::http-server", "asynchronous", "network-programming"]
 
 # These are used by generated protobuf code from tonic::include_proto!
@@ -112,9 +112,10 @@ observability = ["dep:opentelemetry", "dep:opentelemetry-otlp", "dep:opentelemet
 resilience = [ "dep:tower-resilience-circuitbreaker", "dep:tower-resilience-bulkhead"]
 otel-metrics = ["dep:tower-otel-http-metrics", "observability"]
 governor = []
+websocket = []
 openapi = ["dep:utoipa", "dep:utoipa-swagger-ui"]
 cedar-authz = ["dep:cedar-policy", "cache"]
-full = ["http", "grpc", "database", "cache", "events", "observability", "resilience", "otel-metrics", "governor", "openapi", "cedar-authz"]
+full = ["http", "grpc", "websocket", "database", "cache", "events", "observability", "resilience", "otel-metrics", "governor", "openapi", "cedar-authz"]
 tonic-health = ["dep:tonic-health"]
 tonic-reflection = ["dep:tonic-reflection"]
 tower-resilience-circuitbreaker = ["dep:tower-resilience-circuitbreaker"]
@@ -171,6 +172,12 @@ required-features = ["observability"]
 name = "database-api"
 path = "examples/database/database-api.rs"
 required-features = ["database"]
+
+# WebSocket examples
+[[example]]
+name = "chat-server"
+path = "examples/websocket/chat-server.rs"
+required-features = ["websocket"]
 
 [build-dependencies]
 prost-build = "0.14.1"
