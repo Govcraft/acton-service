@@ -62,6 +62,9 @@ const config = {
       otelMetrics: `acton-service = { version = "${ACTON_VERSION}", features = ["otel-metrics"] }`,
       openapiOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["openapi"] }`,
       databaseCache: `acton-service = { version = "${ACTON_VERSION}", features = ["database", "cache"] }`,
+      jwtOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["jwt"] }`,
+      websocketOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["websocket"] }`,
+      tursoOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["turso"] }`,
     },
   },
 }

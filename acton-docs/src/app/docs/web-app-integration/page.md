@@ -308,7 +308,7 @@ Use this guide to choose the right authentication pattern:
 
 ## Next Steps
 
-- [JWT Authentication](/docs/jwt-auth) - Configure token-based authentication
+- [Token Authentication](/docs/token-auth) - Configure PASETO/JWT authentication
 - [Middleware Overview](/docs/middleware) - Understand the middleware stack
 - [Rate Limiting](/docs/rate-limiting) - Protect session endpoints from abuse
 - [Production Checklist](/docs/production) - Security considerations for deployment

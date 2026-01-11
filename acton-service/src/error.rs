@@ -41,7 +41,12 @@ pub enum Error {
     #[error("Turso error: {0}")]
     Turso(String),
 
-    /// JWT error
+    /// PASETO error (default token format)
+    #[error("PASETO error: {0}")]
+    Paseto(String),
+
+    /// JWT error (requires `jwt` feature)
+    #[cfg(feature = "jwt")]
     #[error("JWT error: {0}")]
     Jwt(Box<jsonwebtoken::errors::Error>),
 
@@ -168,6 +173,12 @@ impl IntoResponse for Error {
                 )
             }
 
+            Error::Paseto(msg) => (
+                StatusCode::UNAUTHORIZED,
+                ErrorResponse::with_code(StatusCode::UNAUTHORIZED, "INVALID_TOKEN", msg),
+            ),
+
+            #[cfg(feature = "jwt")]
             Error::Jwt(e) => (
                 StatusCode::UNAUTHORIZED,
                 ErrorResponse::with_code(StatusCode::UNAUTHORIZED, "INVALID_TOKEN", e.to_string()),
@@ -276,6 +287,7 @@ impl From<libsql::Error> for Error {
     }
 }
 
+#[cfg(feature = "jwt")]
 impl From<jsonwebtoken::errors::Error> for Error {
     fn from(err: jsonwebtoken::errors::Error) -> Self {
         Error::Jwt(Box::new(err))

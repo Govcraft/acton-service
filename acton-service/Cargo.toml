@@ -46,8 +46,8 @@ deadpool-redis = { workspace = true, optional = true }
 # NATS (optional)
 async-nats = { workspace = true, optional = true }
 
-# JWT
-jsonwebtoken = { workspace = true }
+# JWT (optional - feature-gated)
+jsonwebtoken = { workspace = true, optional = true }
 
 # Serialization
 serde = { workspace = true }
@@ -99,6 +99,7 @@ acton-reactive = { version = "7.0.0"}
 tokio-util = "0.7.17"
 dashmap = "6.1.0"
 anyhow.workspace = true
+rusty_paseto = "0.9.0"
 
 [features]
 default = ["http", "observability"]
@@ -115,7 +116,8 @@ governor = []
 websocket = []
 openapi = ["dep:utoipa", "dep:utoipa-swagger-ui"]
 cedar-authz = ["dep:cedar-policy", "cache"]
-full = ["http", "grpc", "websocket", "database", "cache", "events", "observability", "resilience", "otel-metrics", "governor", "openapi", "cedar-authz"]
+jwt = ["dep:jsonwebtoken"]
+full = ["http", "grpc", "websocket", "database", "cache", "events", "observability", "resilience", "otel-metrics", "governor", "openapi", "cedar-authz", "jwt"]
 tonic-health = ["dep:tonic-health"]
 tonic-reflection = ["dep:tonic-reflection"]
 tower-resilience-circuitbreaker = ["dep:tower-resilience-circuitbreaker"]

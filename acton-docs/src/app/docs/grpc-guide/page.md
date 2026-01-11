@@ -573,19 +573,32 @@ async fn get_user(&self, request: Request<GetUserRequest>)
 }
 ```
 
-### JWT Authentication
+### Token Authentication (PASETO/JWT)
 
-Validate JWT tokens in gRPC requests:
+Validate tokens in gRPC requests using PASETO (default) or JWT:
 
+```rust
+use acton_service::grpc::interceptors::paseto_auth_interceptor;
+use acton_service::middleware::PasetoAuth;
+use std::sync::Arc;
+
+// Create PASETO validator (default)
+let paseto_config = &config.token.as_paseto().unwrap();
+let paseto_auth = Arc::new(PasetoAuth::new(paseto_config)?);
+
+// Apply to service
+let service = MyServiceServer::with_interceptor(
+    service_impl,
+    move |req| paseto_auth_interceptor(paseto_auth.clone())(req)
+);
+```
+
+For JWT (requires `jwt` feature):
 ```rust
 use acton_service::grpc::interceptors::jwt_auth_interceptor;
 use acton_service::middleware::JwtAuth;
-use std::sync::Arc;
 
-// Create JWT validator
-let jwt_auth = Arc::new(JwtAuth::new(&config.jwt)?);
-
-// Apply to service
+let jwt_auth = Arc::new(JwtAuth::new(&jwt_config)?);
 let service = MyServiceServer::with_interceptor(
     service_impl,
     move |req| jwt_auth_interceptor(jwt_auth.clone())(req)
@@ -594,7 +607,7 @@ let service = MyServiceServer::with_interceptor(
 
 Tokens must be in metadata:
 ```bash
-# grpcurl with JWT
+# grpcurl with Bearer token
 grpcurl -H "authorization: Bearer <token>" \
   -plaintext localhost:8080 myservice.v1.MyService/GetUser
 ```
@@ -673,8 +686,8 @@ let service = MyServiceServer::with_interceptor(
         // Request ID
         req = request_id_interceptor(req)?;
 
-        // JWT auth
-        req = jwt_auth_interceptor(jwt_auth.clone())(req)?;
+        // Token auth (PASETO)
+        req = paseto_auth_interceptor(paseto_auth.clone())(req)?;
 
         // Custom logging
         tracing::info!("gRPC request received");
@@ -875,6 +888,7 @@ Full working example combining all features:
 ```rust
 use acton_service::prelude::*;
 use acton_service::grpc::{interceptors::*, middleware::*, HealthService};
+use acton_service::config::TokenConfig;
 use std::sync::Arc;
 use tonic::{Request, Response, Status, transport::Server};
 use tonic_reflection::server::Builder as ReflectionBuilder;
@@ -907,7 +921,7 @@ impl MyService for MyServiceImpl {
             tracing::info!(request_id = %req_id.0, "Processing GetUser");
         }
 
-        // Extract JWT claims
+        // Extract token claims
         let claims = request.extensions().get::<Claims>()
             .ok_or_else(|| Status::unauthenticated("Missing auth"))?;
 
@@ -939,8 +953,11 @@ async fn main() -> Result<()> {
     // Setup database
     let db = Arc::new(get_db_pool(&config).await?);
 
-    // Setup JWT auth
-    let jwt_auth = Arc::new(JwtAuth::new(&config.jwt)?);
+    // Setup PASETO auth (default)
+    let paseto_auth = match &config.token {
+        Some(TokenConfig::Paseto(cfg)) => Arc::new(PasetoAuth::new(cfg)?),
+        _ => panic!("Expected PASETO config"),
+    };
 
     // Create service with interceptors
     let service_impl = MyServiceImpl { db };
@@ -948,7 +965,7 @@ async fn main() -> Result<()> {
         service_impl,
         move |req| {
             let req = request_id_interceptor(req)?;
-            jwt_auth_interceptor(jwt_auth.clone())(req)
+            paseto_auth_interceptor(paseto_auth.clone())(req)
         }
     );
 

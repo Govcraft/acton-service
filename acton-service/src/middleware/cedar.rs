@@ -22,7 +22,7 @@ use tokio::sync::RwLock;
 use crate::{
     config::{CedarConfig, Config},
     error::Error,
-    middleware::jwt::Claims,
+    middleware::token::Claims,
 };
 
 /// Builder for Cedar authorization middleware
