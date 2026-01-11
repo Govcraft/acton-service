@@ -130,12 +130,16 @@ pub mod prelude {
     #[cfg(feature = "events")]
     pub use crate::pool_health::NatsClientHealth;
     pub use crate::middleware::{
-        Claims, JwtAuth, RateLimit, RequestTrackingConfig, PROPAGATE_HEADERS, SENSITIVE_HEADERS,
+        Claims, TokenValidator, PasetoAuth, RateLimit, RequestTrackingConfig,
+        PROPAGATE_HEADERS, SENSITIVE_HEADERS,
         request_id_layer, request_id_propagation_layer, sensitive_headers_layer,
     };
 
     #[cfg(feature = "cache")]
-    pub use crate::middleware::{JwtRevocation, RedisJwtRevocation};
+    pub use crate::middleware::{TokenRevocation, RedisTokenRevocation};
+
+    #[cfg(feature = "jwt")]
+    pub use crate::middleware::JwtAuth;
     pub use crate::server::Server;
     pub use crate::service_builder::{ActonService, ServiceBuilder, VersionedRoutes};
     pub use crate::state::{AppState, AppStateBuilder};
@@ -176,9 +180,12 @@ pub mod prelude {
         GrpcServer, HealthService, Request,
         Response as GrpcResponse,
         Status, Code,
-        request_id_interceptor, jwt_auth_interceptor, RequestIdExtension,
-        add_request_id_to_response, GrpcTracingLayer, LoggingLayer,
+        request_id_interceptor, token_auth_interceptor, paseto_auth_interceptor,
+        RequestIdExtension, add_request_id_to_response, GrpcTracingLayer, LoggingLayer,
     };
+
+    #[cfg(all(feature = "grpc", feature = "jwt"))]
+    pub use crate::grpc::jwt_auth_interceptor;
 
     #[cfg(all(feature = "grpc", feature = "governor"))]
     pub use crate::grpc::GrpcRateLimitLayer;

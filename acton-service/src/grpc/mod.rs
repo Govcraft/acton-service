@@ -8,28 +8,28 @@
 //! The gRPC implementation provides middleware parity with HTTP:
 //! - **Request ID**: Automatic generation and propagation
 //! - **Tracing**: OpenTelemetry integration with proper span context
-//! - **Authentication**: JWT token validation via interceptors
+//! - **Authentication**: PASETO (default) or JWT token validation via interceptors
 //! - **Rate Limiting**: Governor-based rate limiting (when `governor` feature is enabled)
 //!
 //! ## Example
 //!
 //! ```ignore
-//! use acton_service::grpc::interceptors::{request_id_interceptor, jwt_auth_interceptor};
+//! use acton_service::grpc::interceptors::{request_id_interceptor, paseto_auth_interceptor};
 //! use acton_service::grpc::middleware::GrpcTracingLayer;
-//! use acton_service::middleware::JwtAuth;
+//! use acton_service::middleware::PasetoAuth;
 //! use std::sync::Arc;
 //! use tonic::transport::Server;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! // Create JWT auth
-//! let jwt_auth = Arc::new(JwtAuth::new(&config.jwt)?);
+//! // Create PASETO auth
+//! let paseto_auth = Arc::new(PasetoAuth::new(&config.token.unwrap())?);
 //!
 //! // Build gRPC service with interceptors
 //! let service = MyServiceServer::with_interceptor(
 //!     service_impl,
 //!     move |req| {
 //!         let req = request_id_interceptor(req)?;
-//!         jwt_auth_interceptor(jwt_auth.clone())(req)
+//!         paseto_auth_interceptor(paseto_auth.clone())(req)
 //!     }
 //! );
 //!
@@ -64,9 +64,12 @@ pub use health::HealthService;
 
 #[cfg(feature = "grpc")]
 pub use interceptors::{
-    request_id_interceptor, jwt_auth_interceptor, RequestIdExtension,
-    add_request_id_to_response,
+    request_id_interceptor, token_auth_interceptor, paseto_auth_interceptor,
+    RequestIdExtension, add_request_id_to_response,
 };
+
+#[cfg(all(feature = "grpc", feature = "jwt"))]
+pub use interceptors::jwt_auth_interceptor;
 
 #[cfg(feature = "grpc")]
 pub use middleware::{

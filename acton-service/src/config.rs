@@ -47,8 +47,9 @@ where
     /// Service configuration
     pub service: ServiceConfig,
 
-    /// JWT configuration
-    pub jwt: JwtConfig,
+    /// Token authentication configuration (PASETO by default, JWT with feature)
+    #[serde(default)]
+    pub token: Option<TokenConfig>,
 
     /// Rate limiting configuration
     pub rate_limit: RateLimitConfig,
@@ -123,7 +124,75 @@ pub struct ServiceConfig {
     pub environment: String,
 }
 
-/// JWT configuration
+/// Token authentication configuration
+///
+/// Supports PASETO (default) and JWT (requires `jwt` feature).
+/// Uses tagged enum for config file format discrimination.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "format", rename_all = "lowercase")]
+pub enum TokenConfig {
+    /// PASETO token configuration (default)
+    Paseto(PasetoConfig),
+    /// JWT token configuration (requires `jwt` feature)
+    #[cfg(feature = "jwt")]
+    Jwt(JwtConfig),
+}
+
+impl Default for TokenConfig {
+    fn default() -> Self {
+        TokenConfig::Paseto(PasetoConfig::default())
+    }
+}
+
+/// PASETO token configuration
+///
+/// Supports V4 Local (symmetric encryption) and V4 Public (asymmetric signatures).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PasetoConfig {
+    /// PASETO version (currently only "v4" supported)
+    #[serde(default = "default_paseto_version")]
+    pub version: String,
+
+    /// Token purpose: "local" (symmetric) or "public" (asymmetric)
+    #[serde(default = "default_paseto_purpose")]
+    pub purpose: String,
+
+    /// Path to key file
+    /// - For "local": 32-byte symmetric key
+    /// - For "public": Ed25519 public key (32 bytes)
+    pub key_path: PathBuf,
+
+    /// Issuer to validate (optional)
+    #[serde(default)]
+    pub issuer: Option<String>,
+
+    /// Audience to validate (optional)
+    #[serde(default)]
+    pub audience: Option<String>,
+}
+
+impl Default for PasetoConfig {
+    fn default() -> Self {
+        Self {
+            version: default_paseto_version(),
+            purpose: default_paseto_purpose(),
+            key_path: PathBuf::from("./keys/paseto.key"),
+            issuer: None,
+            audience: None,
+        }
+    }
+}
+
+fn default_paseto_version() -> String {
+    "v4".to_string()
+}
+
+fn default_paseto_purpose() -> String {
+    "local".to_string()
+}
+
+/// JWT configuration (requires `jwt` feature)
+#[cfg(feature = "jwt")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JwtConfig {
     /// Path to public key for JWT verification
@@ -718,6 +787,7 @@ fn default_environment() -> String {
     "dev".to_string()
 }
 
+#[cfg(feature = "jwt")]
 fn default_jwt_algorithm() -> String {
     "RS256".to_string()
 }
@@ -1069,12 +1139,7 @@ where
                 timeout_secs: default_timeout(),
                 environment: default_environment(),
             },
-            jwt: JwtConfig {
-                public_key_path: PathBuf::from("./keys/jwt-public.pem"),
-                algorithm: default_jwt_algorithm(),
-                issuer: None,
-                audience: None,
-            },
+            token: None,
             rate_limit: RateLimitConfig {
                 per_user_rpm: default_per_user_rpm(),
                 per_client_rpm: default_per_client_rpm(),
@@ -1146,12 +1211,13 @@ mod tests {
                 timeout_secs: 30,
                 environment: "test".to_string(),
             },
-            jwt: JwtConfig {
-                public_key_path: PathBuf::from("./test-key.pem"),
-                algorithm: "RS256".to_string(),
+            token: Some(TokenConfig::Paseto(PasetoConfig {
+                version: "v4".to_string(),
+                purpose: "local".to_string(),
+                key_path: PathBuf::from("./test-key.key"),
                 issuer: Some("test-issuer".to_string()),
                 audience: None,
-            },
+            })),
             rate_limit: RateLimitConfig {
                 per_user_rpm: 100,
                 per_client_rpm: 500,
@@ -1194,12 +1260,7 @@ mod tests {
                 timeout_secs: 30,
                 environment: "dev".to_string(),
             },
-            jwt: JwtConfig {
-                public_key_path: PathBuf::from("./key.pem"),
-                algorithm: "RS256".to_string(),
-                issuer: None,
-                audience: None,
-            },
+            token: None,
             rate_limit: RateLimitConfig {
                 per_user_rpm: 200,
                 per_client_rpm: 1000,
@@ -1242,9 +1303,11 @@ mod tests {
                 "timeout_secs": 60,
                 "environment": "production"
             },
-            "jwt": {
-                "public_key_path": "./keys/public.pem",
-                "algorithm": "RS256"
+            "token": {
+                "format": "paseto",
+                "version": "v4",
+                "purpose": "local",
+                "key_path": "./keys/paseto.key"
             },
             "rate_limit": {
                 "per_user_rpm": 150,

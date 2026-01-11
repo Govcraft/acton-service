@@ -639,17 +639,41 @@ where
             }
         }
 
-        // Auto-apply JWT middleware if configured
-        // NOTE: JWT must be applied AFTER Cedar because Axum layers run in reverse order
-        // This ensures the execution order is: Request → General Middleware → JWT → Cedar → Handler
-        if let Ok(jwt_auth) = crate::middleware::jwt::JwtAuth::new(&config.jwt) {
-            tracing::debug!("Auto-applying JWT authentication middleware");
-            app = app.layer(axum::middleware::from_fn_with_state(
-                jwt_auth,
-                crate::middleware::jwt::JwtAuth::middleware,
-            ));
-        } else {
-            tracing::warn!("JWT configuration invalid, skipping JWT middleware");
+        // Auto-apply token authentication middleware if configured
+        // NOTE: Token auth must be applied AFTER Cedar because Axum layers run in reverse order
+        // This ensures the execution order is: Request → General Middleware → Token Auth → Cedar → Handler
+        if let Some(token_config) = &config.token {
+            match token_config {
+                crate::config::TokenConfig::Paseto(paseto_config) => {
+                    match crate::middleware::paseto::PasetoAuth::new(paseto_config) {
+                        Ok(paseto_auth) => {
+                            tracing::debug!("Auto-applying PASETO authentication middleware");
+                            app = app.layer(axum::middleware::from_fn_with_state(
+                                paseto_auth,
+                                crate::middleware::paseto::PasetoAuth::middleware,
+                            ));
+                        }
+                        Err(e) => {
+                            tracing::warn!("PASETO configuration invalid, skipping authentication middleware: {}", e);
+                        }
+                    }
+                }
+                #[cfg(feature = "jwt")]
+                crate::config::TokenConfig::Jwt(jwt_config) => {
+                    match crate::middleware::jwt::JwtAuth::new(jwt_config) {
+                        Ok(jwt_auth) => {
+                            tracing::debug!("Auto-applying JWT authentication middleware");
+                            app = app.layer(axum::middleware::from_fn_with_state(
+                                jwt_auth,
+                                crate::middleware::jwt::JwtAuth::middleware,
+                            ));
+                        }
+                        Err(e) => {
+                            tracing::warn!("JWT configuration invalid, skipping authentication middleware: {}", e);
+                        }
+                    }
+                }
+            }
         }
 
         let listener_addr = std::net::SocketAddr::from(([0, 0, 0, 0], config.service.port));
