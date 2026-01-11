@@ -1,6 +1,6 @@
 # Event-Driven Architecture Examples
 
-Examples demonstrating event-driven patterns and asynchronous communication in microservices.
+Examples demonstrating event-driven patterns and asynchronous communication in backend services.
 
 ## Examples
 
@@ -16,7 +16,7 @@ Demonstrates the recommended architecture pattern for acton-service:
 Key concepts:
 - Event publishing from HTTP endpoints
 - Event consumption in gRPC handlers
-- Decoupled microservice communication
+- Decoupled service communication
 - Async event processing
 
 Run with:

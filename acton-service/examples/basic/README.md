@@ -82,4 +82,4 @@ curl http://localhost:8080/ping
 After mastering these basics, explore:
 - [Authorization examples](../authorization/) - Add Cedar policy-based access control
 - [gRPC examples](../grpc/) - Combine HTTP and gRPC on a single port
-- [Event-driven examples](../events/) - Build decoupled microservices
+- [Event-driven examples](../events/) - Build decoupled services
