@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Documentation
+
+- Sync all version files to 0.9.0
+- Update version to 0.9.0
+## [acton-service-v0.9.0] - 2026-01-11
+
+### Documentation
+
+- **turso**: Add Turso/libsql database documentation
+- **websocket**: Add WebSocket feature documentation
+
+### Features
+
+- **websocket**: Add feature-gated WebSocket support with room management
+- Add git-cliff for automated changelog generation
 ## [acton-service-v0.8.0] - 2026-01-11
 
 ### Bug Fixes

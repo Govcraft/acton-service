@@ -214,17 +214,67 @@ pub struct JwtConfig {
 /// Rate limiting configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RateLimitConfig {
-    /// Requests per minute per user
+    /// Requests per minute per user (global default)
     #[serde(default = "default_per_user_rpm")]
     pub per_user_rpm: u32,
 
-    /// Requests per minute per client
+    /// Requests per minute per client (global default)
     #[serde(default = "default_per_client_rpm")]
     pub per_client_rpm: u32,
 
     /// Rate limit window in seconds
     #[serde(default = "default_window_secs")]
     pub window_secs: u64,
+
+    /// Per-route rate limit overrides
+    ///
+    /// Routes can be specified as:
+    /// - Exact paths: `/api/v1/users`
+    /// - Method-prefixed: `POST /api/v1/uploads`
+    /// - With wildcards: `/api/v1/users/*`, `/api/*/admin`
+    /// - With ID placeholders: `/api/v1/users/{id}`
+    ///
+    /// Paths with UUIDs or numeric IDs are automatically normalized to `{id}`.
+    ///
+    /// # Example
+    /// ```toml
+    /// [rate_limit.routes."/api/v1/heavy-endpoint"]
+    /// requests_per_minute = 10
+    /// burst_size = 2
+    ///
+    /// [rate_limit.routes."POST /api/v1/uploads"]
+    /// requests_per_minute = 5
+    /// per_user = true
+    /// ```
+    #[serde(default)]
+    pub routes: std::collections::HashMap<String, RouteRateLimitConfig>,
+}
+
+/// Per-route rate limit configuration
+///
+/// Configures rate limiting for a specific route or route pattern.
+/// When a request matches a route pattern, these settings override the global defaults.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RouteRateLimitConfig {
+    /// Maximum requests per minute for this route
+    pub requests_per_minute: u32,
+
+    /// Burst size for local (governor) rate limiting
+    ///
+    /// Allows temporary spikes above the base rate.
+    /// Only used with governor-based rate limiting.
+    #[serde(default = "default_route_burst_size")]
+    pub burst_size: u32,
+
+    /// Whether the limit is per-user (true) or global for the route (false)
+    ///
+    /// - `true`: Each user gets their own rate limit bucket for this route
+    /// - `false`: All users share a single rate limit bucket for this route
+    ///
+    /// Per-user tracking requires JWT authentication. Unauthenticated requests
+    /// fall back to IP-based tracking when `per_user` is true.
+    #[serde(default = "default_true")]
+    pub per_user: bool,
 }
 
 /// Database configuration
@@ -804,6 +854,10 @@ fn default_window_secs() -> u64 {
     60
 }
 
+fn default_route_burst_size() -> u32 {
+    10 // 10% burst allowance by default
+}
+
 fn default_max_connections() -> u32 {
     50
 }
@@ -1144,6 +1198,7 @@ where
                 per_user_rpm: default_per_user_rpm(),
                 per_client_rpm: default_per_client_rpm(),
                 window_secs: default_window_secs(),
+                routes: std::collections::HashMap::new(),
             },
             middleware: MiddlewareConfig::default(),
             database: None,
@@ -1222,6 +1277,7 @@ mod tests {
                 per_user_rpm: 100,
                 per_client_rpm: 500,
                 window_secs: 60,
+                routes: std::collections::HashMap::new(),
             },
             middleware: MiddlewareConfig::default(),
             database: None,
@@ -1265,6 +1321,7 @@ mod tests {
                 per_user_rpm: 200,
                 per_client_rpm: 1000,
                 window_secs: 60,
+                routes: std::collections::HashMap::new(),
             },
             middleware: MiddlewareConfig::default(),
             database: None,
