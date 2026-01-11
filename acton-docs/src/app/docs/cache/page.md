@@ -280,45 +280,37 @@ async fn get_data(State(state): State<AppState>) -> Result<Json<Data>> {
 }
 ```
 
-## JWT Token Revocation
+## Token Revocation
 
-Redis-backed token revocation for authentication middleware:
+Redis-backed token revocation for authentication middleware. Works with both PASETO (default) and JWT tokens.
 
 ```rust
-use acton_service::middleware::JwtAuth;
+use acton_service::prelude::*;
+use acton_service::middleware::{RedisTokenRevocation, TokenRevocation};
 
 async fn revoke_token(
     State(state): State<AppState>,
-    claims: JwtClaims,
+    Extension(claims): Extension<Claims>,
 ) -> Result<StatusCode> {
-    let cache = state.cache()?;
-    let mut conn = cache.get().await?;
+    if let (Some(redis), Some(jti)) = (state.redis().await, &claims.jti) {
+        let revocation = RedisTokenRevocation::new(redis);
 
-    // Store revoked token JTI (JWT ID) with TTL matching token expiration
-    let revocation_key = format!("revoked:{}", claims.jti);
-    let ttl = (claims.exp - chrono::Utc::now().timestamp()) as usize;
+        // Calculate TTL from token expiration
+        let ttl = (claims.exp - chrono::Utc::now().timestamp()) as u64;
 
-    conn.set_ex(&revocation_key, "revoked", ttl).await?;
+        // Revoke the token - key pattern: token:revoked:{jti}
+        revocation.revoke(jti, ttl).await?;
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }
 ```
 
-Configure JWT middleware to check revocation:
+Token revocation is **automatically checked** when Redis is configured. The middleware checks each token's `jti` claim against the revocation list.
 
-```rust
-ServiceBuilder::new()
-    .with_routes(routes)
-    .with_middleware(|router| {
-        router.layer(
-            JwtAuth::new("your-secret")
-                .with_redis_revocation()  // Enable Redis-backed revocation checks
-        )
-    })
-    .build()
-    .serve()
-    .await
-```
+**Key format**: `token:revoked:{jti}`
+
+See [Token Authentication](/docs/token-auth#token-revocation) for detailed revocation configuration.
 
 ## Cedar Policy Caching
 
@@ -472,6 +464,6 @@ url = "rediss://cache.prod.example.com:6380"  # Note: rediss:// for TLS
 ## Related Features
 
 - **[Rate Limiting](/docs/rate-limiting)** - Redis-backed distributed rate limiting
-- **[Authentication](/docs/authentication)** - JWT token revocation with Redis
-- **[Authorization](/docs/authorization)** - Cedar policy caching with Redis
+- **[Token Authentication](/docs/token-auth)** - PASETO/JWT token revocation with Redis
+- **[Cedar Authorization](/docs/cedar-auth)** - Cedar policy caching with Redis
 - **[Health Checks](/docs/health-checks)** - Automatic Redis health monitoring

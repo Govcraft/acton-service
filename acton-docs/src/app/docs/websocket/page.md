@@ -808,6 +808,6 @@ axum = { version = "0.8", features = ["macros", "ws"] }
 
 - **[gRPC Guide](/docs/grpc-guide)** - Bidirectional streaming alternative
 - **[Events (NATS)](/docs/events)** - Pub/sub messaging between services
-- **[JWT Authentication](/docs/jwt-auth)** - Authenticate WebSocket connections
+- **[Token Authentication](/docs/token-auth)** - Authenticate WebSocket connections
 - **[Reactive Architecture](/docs/reactive-architecture)** - Actor-based room management details
 - **[Observability](/docs/observability)** - Trace WebSocket connections

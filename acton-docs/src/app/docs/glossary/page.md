@@ -134,11 +134,14 @@ An endpoint (`/ready`) that reports if your service is ready to handle traffic. 
 
 ## Authentication & Authorization
 
+### PASETO (Platform-Agnostic Security Tokens)
+The default token format in acton-service. A secure alternative to JWT that eliminates algorithm confusion attacks by having fixed, secure algorithms per version. V4 supports both local (symmetric) and public (asymmetric) tokens. Uses modern cryptography: Ed25519 for signatures, XChaCha20-Poly1305 for encryption.
+
 ### JWT (JSON Web Token)
-A compact, URL-safe token format for transmitting claims between parties. Commonly used for authentication. Contains header, payload (claims), and signature. Can be verified without calling auth service.
+A compact, URL-safe token format for transmitting claims between parties. Available in acton-service via the `jwt` feature flag for legacy compatibility. Contains header, payload (claims), and signature. PASETO is recommended over JWT for new projects.
 
 ### Claims
-Data embedded in a JWT token like user ID (`sub`), client ID, roles, permissions. Extracted automatically by acton-service and made available in request context.
+Data embedded in a PASETO or JWT token like user ID (`sub`), client ID, roles, permissions. Extracted automatically by acton-service and made available in request context.
 
 ### Bearer Token
 An authentication scheme where the token itself grants access. Sent in `Authorization: Bearer <token>` header. Holder of the token is authorized.

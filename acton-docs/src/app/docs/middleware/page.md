@@ -23,11 +23,12 @@ acton-service provides a middleware library for backend services. All middleware
 
 ### Authentication & Authorization
 
-**JWT Authentication**
-- Full token validation with RS256, ES256, HS256/384/512 algorithms
+**Token Authentication (PASETO/JWT)**
+- PASETO V4 tokens (default) - secure by design with no algorithm confusion
+- JWT support via feature flag for legacy systems (RS256, ES256, HS256/384/512)
 - Claims structure with roles, permissions, user/client identification
 - Redis-backed token revocation for immediate invalidation
-- Learn more: [JWT Authentication](/docs/jwt-auth)
+- Learn more: [Token Authentication](/docs/token-auth)
 
 **Cedar Policy-Based Authorization**
 - AWS Cedar integration for fine-grained access control
@@ -70,7 +71,7 @@ Learn more: [Resilience Patterns](/docs/resilience)
 - No external dependencies required
 
 **Advanced Features**
-- Per-user and per-client limits via JWT claims
+- Per-user and per-client limits via token claims
 - Customizable limit buckets and windows
 - Graceful handling of rate limit exceeded scenarios
 
@@ -154,7 +155,7 @@ All middleware works identically for HTTP and gRPC services. The same configurat
 
 ## Next Steps
 
-- [Configure JWT Authentication](/docs/jwt-auth) - Secure your endpoints with token-based auth
+- [Configure Token Authentication](/docs/token-auth) - Secure your endpoints with PASETO (default) or JWT tokens
 - [Implement Cedar Authorization](/docs/cedar-auth) - Add fine-grained access control
 - [Add Rate Limiting](/docs/rate-limiting) - Protect against abuse and overload
 - [Enable Resilience Patterns](/docs/resilience) - Build fault-tolerant services

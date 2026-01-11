@@ -20,7 +20,7 @@ acton-service integrates AWS Cedar for declarative, policy-based authorization. 
 - Policy-based access control with admin vs user roles
 - Resource ownership patterns (users can only access their own documents)
 - Custom path normalization for alphanumeric IDs
-- Layered security with JWT authentication + Cedar authorization
+- Layered security with token authentication (PASETO/JWT) + Cedar authorization
 - Optional Redis caching for sub-5ms policy decisions
 
 ## Quick Start
@@ -259,7 +259,7 @@ Explicitly deny admin endpoints to non-admin users. More restrictive than permit
 ```text
 Client Request
     ↓
-JWT Authentication (validates token, extracts claims)
+Token Authentication (validates PASETO/JWT token, extracts claims)
     ↓
 Cedar Authorization (evaluates policies)
     ↓
@@ -271,7 +271,7 @@ Your Handler
 Cedar evaluates each request using four components:
 
 **Principal (who)**
-- Extracted from JWT claims: `sub`, `roles`, `perms`, `username`, `email`
+- Extracted from token claims: `sub`, `roles`, `perms`, `username`, `email`
 - Represents the authenticated user or service making the request
 
 **Action (what)**
@@ -373,13 +373,13 @@ let authz = CedarAuthzLayer::builder()
 **Possible Causes:**
 1. Cedar is enabled but policies are too restrictive
 2. Policy file not found or invalid syntax
-3. JWT claims don't match policy conditions
+3. Token claims don't match policy conditions
 4. Default deny with no matching permit policies
 
 **Solutions:**
 - Check logs for Cedar evaluation details
 - Verify policy file exists and is valid Cedar syntax
-- Ensure JWT contains required claims (`roles`, `sub`, etc.)
+- Ensure token contains required claims (`roles`, `sub`, etc.)
 - Set `fail_open = true` temporarily to debug (development only)
 - Add logging to see which policies are evaluated
 
@@ -423,7 +423,7 @@ let authz = CedarAuthzLayer::builder()
 ## Security Best Practices
 
 1. **Always use fail-closed in production**: `fail_open = false`
-2. **Validate JWT properly**: Use strong algorithms (RS256, ES256)
+2. **Use PASETO by default**: Secure by design, no algorithm confusion attacks
 3. **Principle of least privilege**: Only grant necessary permissions
 4. **Audit policies regularly**: Review and update policies quarterly
 5. **Use forbid for sensitive operations**: Explicit denials are safer than implicit
@@ -435,20 +435,24 @@ let authz = CedarAuthzLayer::builder()
 
 ## Integration Patterns
 
-### JWT + Cedar Layered Security
+### Token Auth + Cedar Layered Security
 
-```rust
-ServiceBuilder::new()
-    .with_routes(routes)
-    .with_middleware(|router| {
-        router
-            .layer(JwtAuth::new("secret"))      // First: Authenticate
-            .layer(CedarAuthzLayer::new(config)) // Second: Authorize
-    })
-    .build()
+Token authentication and Cedar authorization are automatically applied by ServiceBuilder when both are configured:
+
+```toml
+# config.toml
+[token]
+format = "paseto"
+version = "v4"
+purpose = "local"
+key_path = "./keys/paseto.key"
+
+[cedar]
+enabled = true
+policy_path = "policies.cedar"
 ```
 
-JWT provides authentication (who you are), Cedar provides authorization (what you can do).
+Token authentication provides authentication (who you are), Cedar provides authorization (what you can do).
 
 ### gRPC Support
 
@@ -478,5 +482,5 @@ Path normalization handles gRPC method names automatically.
 
 - [Cedar Policy Language Documentation](https://docs.cedarpolicy.com/)
 - [Cedar Rust Crate Documentation](https://docs.rs/cedar-policy/)
-- [JWT Authentication](/docs/jwt-auth) - Configure authentication
+- [Token Authentication](/docs/token-auth) - Configure PASETO/JWT authentication
 - [Redis Caching](/docs/cache) - Enable policy decision caching

@@ -66,6 +66,14 @@ acton-service uses feature flags to keep compile times fast and binary sizes sma
         │
         ▼
 ┌─────────────────────────────────────────┐
+│ Do you need token authentication?       │
+└─────────────────────────────────────────┘
+        │
+        ├─── PASETO (default) ──▶ No flag needed
+        └─── JWT (legacy) ──────▶ Add "jwt"
+        │
+        ▼
+┌─────────────────────────────────────────┐
 │ Do you need advanced features?          │
 └─────────────────────────────────────────┘
         │
@@ -185,7 +193,7 @@ See the [Turso Guide](/docs/turso) for detailed usage.
 
 ### `cache`
 
-Redis connection pooling with support for JWT token revocation and distributed rate limiting.
+Redis connection pooling with support for token revocation and distributed rate limiting.
 
 **When to use**: Need caching, session storage, or rate limiting
 
@@ -193,7 +201,7 @@ Redis connection pooling with support for JWT token revocation and distributed r
 
 **Provides**:
 - Redis connection pool
-- JWT token revocation support
+- Token revocation support (PASETO and JWT)
 - Distributed rate limiting
 
 ```toml
@@ -262,7 +270,7 @@ Circuit breaker, retry, and bulkhead patterns for production services.
 
 ### `governor`
 
-Advanced rate limiting with per-user limits via JWT claims.
+Advanced rate limiting with per-user limits via token claims.
 
 **When to use**: Need sophisticated rate limiting beyond basic throttling
 
@@ -270,7 +278,7 @@ Advanced rate limiting with per-user limits via JWT claims.
 
 **Provides**:
 - Per-second/minute/hour rate limits
-- Per-user rate limiting via JWT claims
+- Per-user rate limiting via token claims (PASETO or JWT)
 - In-memory rate limiting
 
 ```toml
@@ -293,6 +301,27 @@ HTTP metrics collection via OpenTelemetry for detailed monitoring.
 ```toml
 {% dep("otelMetrics") %}
 ```
+
+### `jwt`
+
+JWT token authentication support. PASETO is the default token format and requires no feature flag.
+
+**When to use**: Need JWT tokens for compatibility with existing systems, third-party services, or legacy requirements
+
+**Dependencies**: jsonwebtoken
+
+**Provides**:
+- JWT token validation (RS256, RS384, RS512, ES256, ES384, HS256, HS384, HS512)
+- Integration with existing JWT infrastructure
+- Same Claims API as PASETO
+
+```toml
+{% dep("jwtOnly") %}
+```
+
+{% callout type="note" title="PASETO is Default" %}
+Token authentication via PASETO requires no feature flag and is the recommended default. Only enable `jwt` if you specifically need JWT compatibility. See [Token Authentication](/docs/token-auth) for details.
+{% /callout %}
 
 ---
 

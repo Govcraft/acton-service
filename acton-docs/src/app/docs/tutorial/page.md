@@ -1132,7 +1132,7 @@ See the complete working example at {% link href=githubUrl("/tree/main/acton-ser
 ## Related Features
 
 - **[Database Guide](/docs/database)** - Detailed PostgreSQL integration
-- **[JWT Authentication](/docs/jwt-auth)** - Advanced authentication patterns
+- **[Token Authentication](/docs/token-auth)** - Advanced authentication patterns
 - **[API Versioning](/docs/api-versioning)** - Version management strategies
 - **[Middleware](/docs/middleware)** - Custom middleware development
 - **[Observability](/docs/observability)** - Metrics and tracing

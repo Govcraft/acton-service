@@ -13,7 +13,7 @@ Start with the [homepage](/) to understand what acton-service is, then explore [
 ---
 
 
-acton-service provides two rate limiting implementations: Redis-backed for distributed systems and Governor for single-instance deployments. Both support per-user and per-client limits via JWT claims.
+acton-service provides two rate limiting implementations: Redis-backed for distributed systems and Governor for single-instance deployments. Both support per-user and per-client limits via token claims.
 
 ## Quick Start
 
@@ -28,9 +28,9 @@ per_user_rpm = 100          # Per-user rate limit: 100 requests per minute
 per_client_rpm = 1000       # Per-client rate limit: 1000 requests per minute
 ```
 
-Rate limits are automatically applied based on JWT claims:
-- **Per-user limits** use the JWT `sub` claim as identifier
-- **Per-client limits** use the JWT `client_id` claim as identifier
+Rate limits are automatically applied based on token claims:
+- **Per-user limits** use the `sub` claim as identifier
+- **Per-client limits** use the `client_id` claim as identifier
 - **Anonymous requests** fall back to IP address-based limiting
 
 No additional code needed. The rate limiter is automatically integrated into the middleware stack during service initialization.
@@ -357,11 +357,11 @@ GovernorRateLimitLayer::new(500, Duration::from_secs(300));
 
 ## Per-User Rate Limiting
 
-Per-user limits are automatically applied when rate limiting is enabled. They use the JWT `sub` claim to identify each user.
+Per-user limits are automatically applied when rate limiting is enabled. They use the `sub` claim from PASETO or JWT tokens to identify each user.
 
 ### How It Works
 
-1. JWT middleware validates token and extracts claims
+1. Token middleware validates PASETO/JWT and extracts claims
 2. Rate limiter uses `sub` claim as identifier
 3. Each user gets independent rate limit bucket
 4. Anonymous requests use IP address as fallback
@@ -398,9 +398,9 @@ async fn custom_rate_limiter(
 
 ## Per-Client Rate Limiting
 
-Service-to-service authentication often uses client IDs instead of user IDs. Per-client limits are automatically applied when the JWT includes a `client_id` claim.
+Service-to-service authentication often uses client IDs instead of user IDs. Per-client limits are automatically applied when the token includes a `client_id` claim.
 
-### JWT Token for Service Clients
+### Token for Service Clients
 
 ```json
 {
@@ -589,6 +589,6 @@ ServiceBuilder::new()
 ## Next Steps
 
 - [Configure Redis](/docs/cache) - Set up Redis for distributed rate limiting
-- [JWT Authentication](/docs/jwt-auth) - Enable per-user limits
+- [Token Authentication](/docs/token-auth) - Enable per-user limits with PASETO/JWT
 - [Resilience Patterns](/docs/resilience) - Combine with circuit breakers
 - [Observability](/docs/observability) - Monitor rate limit metrics
