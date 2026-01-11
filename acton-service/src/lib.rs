@@ -108,7 +108,7 @@ pub mod build_utils;
 
 /// Prelude module for convenient imports
 pub mod prelude {
-    pub use crate::config::Config;
+    pub use crate::config::{Config, RateLimitConfig, RouteRateLimitConfig};
 
     #[cfg(feature = "cedar-authz")]
     pub use crate::config::CedarConfig;
@@ -130,8 +130,9 @@ pub mod prelude {
     #[cfg(feature = "events")]
     pub use crate::pool_health::NatsClientHealth;
     pub use crate::middleware::{
-        Claims, JwtAuth, RateLimit, RequestTrackingConfig, PROPAGATE_HEADERS, SENSITIVE_HEADERS,
-        request_id_layer, request_id_propagation_layer, sensitive_headers_layer,
+        Claims, CompiledRoutePatterns, JwtAuth, RateLimit, RequestTrackingConfig,
+        PROPAGATE_HEADERS, SENSITIVE_HEADERS, normalize_path, request_id_layer,
+        request_id_propagation_layer, sensitive_headers_layer,
     };
 
     #[cfg(feature = "cache")]
@@ -154,7 +155,7 @@ pub mod prelude {
     pub use crate::middleware::{MetricsConfig, metric_labels, metric_names};
 
     #[cfg(feature = "governor")]
-    pub use crate::middleware::{GovernorConfig, RateLimitExceeded};
+    pub use crate::middleware::{GovernorConfig, GovernorRateLimit, RateLimitExceeded};
 
     #[cfg(feature = "cedar-authz")]
     pub use crate::middleware::CedarAuthz;

@@ -99,6 +99,7 @@ acton-reactive = { version = "7.0.0"}
 tokio-util = "0.7.17"
 dashmap = "6.1.0"
 anyhow.workspace = true
+governor = { version = "0.10.4", optional = true }
 
 [features]
 default = ["http", "observability"]
@@ -111,7 +112,7 @@ events = ["dep:async-nats"]
 observability = ["dep:opentelemetry", "dep:opentelemetry-otlp", "dep:opentelemetry_sdk", "dep:tracing-opentelemetry"]
 resilience = [ "dep:tower-resilience-circuitbreaker", "dep:tower-resilience-bulkhead"]
 otel-metrics = ["dep:tower-otel-http-metrics", "observability"]
-governor = []
+governor = ["dep:governor"]
 websocket = []
 openapi = ["dep:utoipa", "dep:utoipa-swagger-ui"]
 cedar-authz = ["dep:cedar-policy", "cache"]

@@ -3,6 +3,7 @@
 pub mod jwt;
 pub mod rate_limit;
 pub mod request_tracking;
+pub mod route_matcher;
 
 #[cfg(feature = "resilience")]
 pub mod resilience;
@@ -21,6 +22,7 @@ pub use jwt::{Claims, JwtAuth};
 #[cfg(feature = "cache")]
 pub use jwt::{JwtRevocation, RedisJwtRevocation};
 pub use rate_limit::RateLimit;
+pub use route_matcher::{normalize_path, CompiledRoutePatterns};
 pub use request_tracking::{
     request_id_layer, request_id_propagation_layer, sensitive_headers_layer,
     RequestTrackingConfig, PROPAGATE_HEADERS, SENSITIVE_HEADERS,
@@ -33,7 +35,7 @@ pub use resilience::ResilienceConfig;
 pub use metrics::{MetricsConfig, metric_labels, metric_names};
 
 #[cfg(feature = "governor")]
-pub use governor::{GovernorConfig, RateLimitExceeded};
+pub use governor::{GovernorConfig, GovernorRateLimit, RateLimitExceeded};
 
 #[cfg(feature = "cedar-authz")]
 pub use cedar::CedarAuthz;

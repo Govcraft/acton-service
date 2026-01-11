@@ -35,6 +35,140 @@ Rate limits are automatically applied based on JWT claims:
 
 No additional code needed. The rate limiter is automatically integrated into the middleware stack during service initialization.
 
+## Per-Route Configuration
+
+Different endpoints often need different rate limits. A report generation endpoint might allow 10 requests/minute while read-only endpoints allow 1000. Configure per-route limits declaratively in `config.toml`:
+
+### Basic Per-Route Limits
+
+```toml
+[rate_limit]
+per_user_rpm = 200          # Default for all routes
+per_client_rpm = 1000       # Default for service clients
+window_secs = 60
+
+# Expensive report endpoint - 10 req/min
+[rate_limit.routes."/api/v1/reports/generate"]
+requests_per_minute = 10
+burst_size = 2
+per_user = true             # Each user gets 10/min (default)
+
+# High-traffic read endpoint - 500 req/min
+[rate_limit.routes."/api/v1/users"]
+requests_per_minute = 500
+burst_size = 50
+per_user = true
+```
+
+### Method-Specific Limits
+
+Prefix the route with an HTTP method to apply limits only to that method:
+
+```toml
+# POST uploads are expensive - limit strictly
+[rate_limit.routes."POST /api/v1/uploads"]
+requests_per_minute = 5
+burst_size = 1
+per_user = true
+
+# GET uploads (list/download) can be more generous
+[rate_limit.routes."GET /api/v1/uploads"]
+requests_per_minute = 100
+burst_size = 10
+per_user = true
+```
+
+### Wildcard Patterns
+
+Use wildcards to match multiple routes:
+
+```toml
+# Single segment wildcard: * matches one path segment
+# Matches: /api/v1/admin/users, /api/v1/admin/settings
+# Does NOT match: /api/v1/admin/users/123
+[rate_limit.routes."/api/v1/admin/*"]
+requests_per_minute = 50
+burst_size = 5
+per_user = true
+
+# Multi-segment wildcard: ** matches any number of segments
+# Matches: /api/v1/admin/users, /api/v1/admin/users/123, /api/v1/admin/a/b/c
+[rate_limit.routes."/api/**/heavy"]
+requests_per_minute = 10
+burst_size = 2
+per_user = true
+```
+
+### Path Normalization
+
+Routes with dynamic IDs are automatically normalized:
+
+```toml
+# This config matches ALL of these request paths:
+#   /api/v1/users/123
+#   /api/v1/users/456
+#   /api/v1/users/550e8400-e29b-41d4-a716-446655440000 (UUID)
+[rate_limit.routes."/api/v1/users/{id}"]
+requests_per_minute = 100
+burst_size = 10
+per_user = true
+
+# Nested dynamic segments work too:
+# Matches: /api/v1/users/123/posts/456
+[rate_limit.routes."/api/v1/users/{id}/posts/{id}"]
+requests_per_minute = 50
+burst_size = 5
+per_user = true
+```
+
+**Normalization Rules:**
+- Numeric IDs (`123`, `456789`) → `{id}`
+- UUIDs (`550e8400-e29b-41d4-a716-446655440000`) → `{id}`
+- Version strings (`v1`, `v2`) are preserved (not normalized)
+
+### Global vs Per-User Route Limits
+
+By default, route limits are per-user. Set `per_user = false` for a global limit shared across all users:
+
+```toml
+# Per-user (default): Each user gets 10 req/min
+[rate_limit.routes."/api/v1/expensive"]
+requests_per_minute = 10
+per_user = true
+
+# Global: 100 req/min total, shared by ALL users
+[rate_limit.routes."/api/v1/shared-resource"]
+requests_per_minute = 100
+per_user = false            # All users share this limit!
+```
+
+### Pattern Priority
+
+Routes are matched in priority order:
+
+1. **Method-prefixed exact match** (highest priority)
+   - `POST /api/v1/uploads` matches before `/api/v1/uploads`
+2. **Exact path match**
+   - `/api/v1/users` matches before `/api/v1/*`
+3. **Wildcard patterns** (sorted by specificity)
+   - More specific patterns match first
+   - `/api/v1/users/*` matches before `/api/v1/*`
+   - `/api/v1/*` matches before `/api/**`
+4. **Global defaults** (lowest priority)
+   - Falls back to `per_user_rpm` / `per_client_rpm`
+
+### Redis Key Structure for Per-Route Limits
+
+Per-route limits use a distinct Redis key structure:
+
+```text
+# Per-user route limit
+route:/api/v1/users/{id}:user:user123 → counter (expires in window_secs)
+
+# Global route limit (per_user = false)
+route:/api/v1/shared:global → counter (expires in window_secs)
+```
+
 ## Redis vs Governor: Which Should You Use?
 
 {% callout type="note" title="Decision Guide" %}
