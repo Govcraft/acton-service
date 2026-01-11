@@ -661,3 +661,293 @@ impl TursoDbAgent {
         Ok(handle)
     }
 }
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    #[allow(unused_imports)]
+    use super::*;
+
+    #[cfg(feature = "turso")]
+    mod turso_agent_tests {
+        use super::*;
+        use std::path::PathBuf;
+        use crate::config::{TursoConfig, TursoMode};
+
+        /// Helper to create a temporary database path
+        fn temp_db_path(name: &str) -> PathBuf {
+            let mut path = std::env::temp_dir();
+            path.push(format!("turso_agent_test_{}_{}.db", name, std::process::id()));
+            path
+        }
+
+        /// Helper to clean up test database files
+        fn cleanup_db(path: &PathBuf) {
+            let _ = std::fs::remove_file(path);
+            let _ = std::fs::remove_file(path.with_extension("db-wal"));
+            let _ = std::fs::remove_file(path.with_extension("db-shm"));
+        }
+
+        #[tokio::test]
+        async fn test_turso_agent_spawn_and_connect() {
+            let db_path = temp_db_path("agent_spawn");
+
+            let config = TursoConfig {
+                mode: TursoMode::Local,
+                path: Some(db_path.clone()),
+                url: None,
+                auth_token: None,
+                sync_interval_secs: None,
+                encryption_key: None,
+                read_your_writes: true,
+                max_retries: 0,
+                retry_delay_secs: 1,
+                optional: false,
+                lazy_init: false,
+            };
+
+            // Create shared storage
+            let shared_db: SharedTursoDb = Arc::new(RwLock::new(None));
+
+            // Initialize agent runtime
+            let mut runtime = acton_reactive::prelude::ActonApp::launch_async().await;
+
+            // Spawn the agent
+            let handle = TursoDbAgent::spawn(&mut runtime, config, Some(shared_db.clone()))
+                .await
+                .expect("Failed to spawn TursoDbAgent");
+
+            // Wait a bit for the connection to be established
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+            // Verify the database is available in shared storage
+            let db_guard = shared_db.read().await;
+            assert!(db_guard.is_some(), "Database should be available in shared storage");
+
+            // Test that we can use the database
+            if let Some(ref db) = *db_guard {
+                let conn = db.connect().expect("Failed to connect");
+                conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY)", ())
+                    .await
+                    .expect("Failed to create table");
+            }
+
+            drop(db_guard);
+
+            // Stop the agent
+            let _ = handle.stop().await;
+
+            // Shutdown runtime
+            runtime.shutdown_all().await.expect("Failed to shutdown runtime");
+
+            cleanup_db(&db_path);
+        }
+
+        #[tokio::test]
+        async fn test_turso_agent_graceful_shutdown() {
+            let db_path = temp_db_path("agent_shutdown");
+
+            let config = TursoConfig {
+                mode: TursoMode::Local,
+                path: Some(db_path.clone()),
+                url: None,
+                auth_token: None,
+                sync_interval_secs: None,
+                encryption_key: None,
+                read_your_writes: true,
+                max_retries: 0,
+                retry_delay_secs: 1,
+                optional: false,
+                lazy_init: false,
+            };
+
+            let shared_db: SharedTursoDb = Arc::new(RwLock::new(None));
+            let mut runtime = acton_reactive::prelude::ActonApp::launch_async().await;
+
+            let handle = TursoDbAgent::spawn(&mut runtime, config, Some(shared_db.clone()))
+                .await
+                .expect("Failed to spawn TursoDbAgent");
+
+            // Wait for connection
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+            // Verify connected
+            assert!(shared_db.read().await.is_some());
+
+            // Perform a write operation to ensure file is created (libsql defers file creation)
+            {
+                let db_guard = shared_db.read().await;
+                if let Some(ref db) = *db_guard {
+                    let conn = db.connect().expect("Failed to connect");
+                    conn.execute("CREATE TABLE IF NOT EXISTS _check (id INTEGER)", ())
+                        .await
+                        .expect("Failed to create table");
+                }
+            }
+
+            // Stop the agent gracefully
+            let _ = handle.stop().await;
+
+            // Shutdown runtime
+            runtime.shutdown_all().await.expect("Failed to shutdown runtime");
+
+            // The file should still exist (database closed gracefully)
+            assert!(db_path.exists(), "Database file should still exist after graceful shutdown");
+
+            cleanup_db(&db_path);
+        }
+
+        #[tokio::test]
+        async fn test_turso_agent_without_shared_storage() {
+            let db_path = temp_db_path("agent_no_shared");
+
+            let config = TursoConfig {
+                mode: TursoMode::Local,
+                path: Some(db_path.clone()),
+                url: None,
+                auth_token: None,
+                sync_interval_secs: None,
+                encryption_key: None,
+                read_your_writes: true,
+                max_retries: 0,
+                retry_delay_secs: 1,
+                optional: false,
+                lazy_init: false,
+            };
+
+            let mut runtime = acton_reactive::prelude::ActonApp::launch_async().await;
+
+            // Spawn without shared storage (None)
+            let handle = TursoDbAgent::spawn(&mut runtime, config, None)
+                .await
+                .expect("Failed to spawn TursoDbAgent");
+
+            // Wait for connection
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+            // Agent should still work, just won't update shared storage
+            let _ = handle.stop().await;
+            runtime.shutdown_all().await.expect("Failed to shutdown runtime");
+
+            cleanup_db(&db_path);
+        }
+
+        #[tokio::test]
+        async fn test_turso_agent_missing_config_handling() {
+            // Remote mode with missing URL should fail during database creation
+            let config = TursoConfig {
+                mode: TursoMode::Remote,
+                path: None,
+                url: None, // Missing required URL for Remote mode
+                auth_token: Some("some-token".to_string()),
+                sync_interval_secs: None,
+                encryption_key: None,
+                read_your_writes: true,
+                max_retries: 0, // No retries
+                retry_delay_secs: 1,
+                optional: true, // Mark as optional so it doesn't fail hard
+                lazy_init: false,
+            };
+
+            let shared_db: SharedTursoDb = Arc::new(RwLock::new(None));
+            let mut runtime = acton_reactive::prelude::ActonApp::launch_async().await;
+
+            let handle = TursoDbAgent::spawn(&mut runtime, config, Some(shared_db.clone()))
+                .await
+                .expect("Failed to spawn TursoDbAgent");
+
+            // Wait for connection attempt to complete
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+            // Shared storage should remain None due to missing URL
+            assert!(
+                shared_db.read().await.is_none(),
+                "Database should not be available when URL is missing"
+            );
+
+            let _ = handle.stop().await;
+            runtime.shutdown_all().await.expect("Failed to shutdown runtime");
+        }
+
+        #[tokio::test]
+        async fn test_turso_agent_multiple_agents() {
+            let db_path1 = temp_db_path("multi_agent_1");
+            let db_path2 = temp_db_path("multi_agent_2");
+
+            let config1 = TursoConfig {
+                mode: TursoMode::Local,
+                path: Some(db_path1.clone()),
+                url: None,
+                auth_token: None,
+                sync_interval_secs: None,
+                encryption_key: None,
+                read_your_writes: true,
+                max_retries: 0,
+                retry_delay_secs: 1,
+                optional: false,
+                lazy_init: false,
+            };
+
+            let config2 = TursoConfig {
+                mode: TursoMode::Local,
+                path: Some(db_path2.clone()),
+                url: None,
+                auth_token: None,
+                sync_interval_secs: None,
+                encryption_key: None,
+                read_your_writes: true,
+                max_retries: 0,
+                retry_delay_secs: 1,
+                optional: false,
+                lazy_init: false,
+            };
+
+            let shared_db1: SharedTursoDb = Arc::new(RwLock::new(None));
+            let shared_db2: SharedTursoDb = Arc::new(RwLock::new(None));
+            let mut runtime = acton_reactive::prelude::ActonApp::launch_async().await;
+
+            // Spawn two agents
+            let handle1 = TursoDbAgent::spawn(&mut runtime, config1, Some(shared_db1.clone()))
+                .await
+                .expect("Failed to spawn first agent");
+
+            let handle2 = TursoDbAgent::spawn(&mut runtime, config2, Some(shared_db2.clone()))
+                .await
+                .expect("Failed to spawn second agent");
+
+            // Wait for connections
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+            // Both should be connected
+            assert!(shared_db1.read().await.is_some(), "First database should be available");
+            assert!(shared_db2.read().await.is_some(), "Second database should be available");
+
+            // Verify they are different databases by creating different tables
+            {
+                let db1 = shared_db1.read().await;
+                let conn1 = db1.as_ref().unwrap().connect().unwrap();
+                conn1.execute("CREATE TABLE db1_table (id INTEGER)", ())
+                    .await
+                    .unwrap();
+            }
+
+            {
+                let db2 = shared_db2.read().await;
+                let conn2 = db2.as_ref().unwrap().connect().unwrap();
+                conn2.execute("CREATE TABLE db2_table (id INTEGER)", ())
+                    .await
+                    .unwrap();
+            }
+
+            let _ = handle1.stop().await;
+            let _ = handle2.stop().await;
+            runtime.shutdown_all().await.expect("Failed to shutdown runtime");
+
+            cleanup_db(&db_path1);
+            cleanup_db(&db_path2);
+        }
+    }
+}
