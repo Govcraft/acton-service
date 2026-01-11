@@ -66,6 +66,15 @@ acton-service uses feature flags to keep compile times fast and binary sizes sma
         │
         ▼
 ┌─────────────────────────────────────────┐
+│ Do you need authentication?             │
+└─────────────────────────────────────────┘
+        │
+        ├─── Password + tokens ──▶ Add "auth"
+        ├─── Social login ───────▶ Add "auth", "oauth", "cache"
+        └─── API keys only ──────▶ Add "auth", "cache"
+        │
+        ▼
+┌─────────────────────────────────────────┐
 │ Do you need token authentication?       │
 └─────────────────────────────────────────┘
         │
@@ -284,6 +293,68 @@ acton-service = { version = "{% version() %}", features = ["session-redis"] }
 **Note**: Uses `fred` Redis client internally (separate from `cache` feature's `deadpool-redis`).
 
 See the [Session Management Guide](/docs/session) for detailed usage.
+
+---
+
+## Authentication Features
+
+### `auth`
+
+Core authentication module with password hashing (Argon2id) and token generation (PASETO).
+
+**When to use**: Building user authentication with password login and/or stateless tokens
+
+**Dependencies**: argon2, rusty_paseto
+
+**Provides**:
+- Password hashing with OWASP-recommended Argon2id
+- PASETO V4 token generation (local and public modes)
+- Refresh token storage (Redis, PostgreSQL, Turso)
+- API key generation and validation
+- ClaimsBuilder for ergonomic token creation
+
+```toml
+acton-service = { version = "{% version() %}", features = ["auth"] }
+```
+
+See the [Auth Overview](/docs/auth) for choosing the right auth features.
+
+### `oauth`
+
+OAuth/OIDC provider integration for social login and enterprise SSO. Requires `auth` feature.
+
+**When to use**: Adding "Sign in with Google/GitHub" or enterprise OIDC SSO
+
+**Dependencies**: oauth2, openidconnect, base64
+
+**Provides**:
+- GoogleProvider for Google OAuth
+- GitHubProvider for GitHub OAuth
+- CustomOidcProvider for any OIDC-compliant provider
+- State management with CSRF protection
+- Normalized user info across providers
+
+```toml
+acton-service = { version = "{% version() %}", features = ["auth", "oauth", "cache"] }
+```
+
+**Note**: Requires `cache` for state management in production.
+
+See the [OAuth/OIDC Guide](/docs/oauth) for detailed usage.
+
+### `auth-full`
+
+Meta-feature that enables all authentication features.
+
+**When to use**: Need complete auth support including password hashing, tokens, OAuth, JWT, and storage
+
+**Enables**: `auth`, `oauth`, `jwt`, `cache`, `database`
+
+```toml
+acton-service = { version = "{% version() %}", features = ["auth-full"] }
+```
+
+**⚠️ Warning**: `auth-full` includes many dependencies. For production, only enable what you need.
 
 ---
 
@@ -549,6 +620,8 @@ Some features work better together:
 
 | Feature | Recommended Companions | Why |
 |---------|----------------------|-----|
+| `auth` | `cache` or `database` | Refresh token and API key storage backends |
+| `oauth` | `auth`, `cache` | OAuth state management needs Redis for CSRF protection |
 | `cedar-authz` | `cache` | Policy decision caching dramatically improves performance (10-50ms → 1-5ms) |
 | `cache` | `governor` | Distributed rate limiting needs Redis |
 | `otel-metrics` | `observability` | Metrics require tracing foundation |

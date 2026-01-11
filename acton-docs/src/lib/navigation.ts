@@ -28,8 +28,13 @@ export const navigation = [
     title: 'Middleware & Auth',
     links: [
       { title: 'Middleware Overview', href: '/docs/middleware' },
+      { title: 'Auth Overview', href: '/docs/auth' },
+      { title: 'Password Hashing', href: '/docs/password-hashing' },
+      { title: 'Token Generation', href: '/docs/token-generation' },
       { title: 'Token Authentication', href: '/docs/token-auth' },
       { title: 'Session Management', href: '/docs/session' },
+      { title: 'API Keys', href: '/docs/api-keys' },
+      { title: 'OAuth/OIDC', href: '/docs/oauth' },
       { title: 'Cedar Authorization', href: '/docs/cedar-auth' },
       { title: 'Rate Limiting', href: '/docs/rate-limiting' },
       { title: 'Resilience Patterns', href: '/docs/resilience' },
