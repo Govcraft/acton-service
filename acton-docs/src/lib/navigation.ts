@@ -41,6 +41,7 @@ export const navigation = [
       { title: 'Database (PostgreSQL)', href: '/docs/database' },
       { title: 'Cache (Redis)', href: '/docs/cache' },
       { title: 'Events (NATS)', href: '/docs/events' },
+      { title: 'WebSocket', href: '/docs/websocket' },
       { title: 'OpenAPI/Swagger', href: '/docs/openapi' },
     ],
   },

@@ -1,5 +1,5 @@
 // Markdoc functions for version management
-const ACTON_VERSION = '0.6.0'
+const ACTON_VERSION = '0.8.0'
 
 export const version = {
   transform() {
@@ -18,6 +18,7 @@ export const dep = {
       cache: `acton-service = { version = "${ACTON_VERSION}", features = ["cache", "http", "observability"] }`,
       events: `acton-service = { version = "${ACTON_VERSION}", features = ["events", "http", "observability"] }`,
       grpc: `acton-service = { version = "${ACTON_VERSION}", features = ["grpc"] }`,
+      websocket: `acton-service = { version = "${ACTON_VERSION}", features = ["websocket", "http", "observability"] }`,
       openapi: `acton-service = { version = "${ACTON_VERSION}", features = ["openapi", "http", "observability"] }`,
       metrics: `acton-service = { version = "${ACTON_VERSION}", features = ["otel-metrics"] }`,
       full: `acton-service = { version = "${ACTON_VERSION}", features = ["full"] }`,
@@ -26,6 +27,7 @@ export const dep = {
       httpOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["http"] }`,
       observability: `acton-service = { version = "${ACTON_VERSION}", features = ["observability"] }`,
       grpcOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["grpc"] }`,
+      websocketOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["websocket"] }`,
       databaseOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["database"] }`,
       cacheOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["cache"] }`,
       eventsOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["events"] }`,

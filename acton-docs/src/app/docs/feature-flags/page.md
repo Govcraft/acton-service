@@ -34,6 +34,14 @@ acton-service uses feature flags to keep compile times fast and binary sizes sma
         │
         ▼
 ┌─────────────────────────────────────────┐
+│ Do you need real-time communication?    │
+└─────────────────────────────────────────┘
+        │
+        ├─── Yes ──▶ Add "websocket"
+        └─── No  ──▶ Skip
+        │
+        ▼
+┌─────────────────────────────────────────┐
 │ Do you need a database?                 │
 └─────────────────────────────────────────┘
         │
@@ -113,6 +121,26 @@ Enables gRPC support via Tonic. Can run on the same port as HTTP with automatic 
 ```toml
 {% dep("grpcOnly") %}
 ```
+
+### `websocket`
+
+Enables WebSocket support for real-time bidirectional communication. Uses Axum's built-in WebSocket support.
+
+**When to use**: Building real-time applications (chat, live updates, gaming)
+
+**Dependencies**: None (uses axum's ws feature)
+
+**Provides**:
+- WebSocket upgrade handlers
+- Connection management with unique IDs
+- Broadcaster for message distribution
+- Actor-based room management
+
+```toml
+{% dep("websocketOnly") %}
+```
+
+See the [WebSocket Guide](/docs/websocket) for detailed usage.
 
 ---
 
