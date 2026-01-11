@@ -29,6 +29,7 @@ export const dep = {
       grpcOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["grpc"] }`,
       websocketOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["websocket"] }`,
       databaseOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["database"] }`,
+      tursoOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["turso"] }`,
       cacheOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["cache"] }`,
       eventsOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["events"] }`,
       cedarAuthz: `acton-service = { version = "${ACTON_VERSION}", features = ["cedar-authz", "cache"] }`,

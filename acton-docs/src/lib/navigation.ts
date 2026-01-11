@@ -39,6 +39,7 @@ export const navigation = [
     title: 'Integrations',
     links: [
       { title: 'Database (PostgreSQL)', href: '/docs/database' },
+      { title: 'Turso (libsql)', href: '/docs/turso' },
       { title: 'Cache (Redis)', href: '/docs/cache' },
       { title: 'Events (NATS)', href: '/docs/events' },
       { title: 'WebSocket', href: '/docs/websocket' },

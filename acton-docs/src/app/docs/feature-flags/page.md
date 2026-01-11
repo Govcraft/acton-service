@@ -163,6 +163,26 @@ PostgreSQL connection pooling via SQLx with automatic health checks and retry lo
 {% dep("databaseOnly") %}
 ```
 
+### `turso`
+
+Turso/libsql database support for edge-friendly SQLite with cloud sync capabilities.
+
+**When to use**: Building edge applications, mobile backends, or need SQLite with cloud durability
+
+**Dependencies**: libsql
+
+**Provides**:
+- Local, Remote, and EmbeddedReplica connection modes
+- Automatic retry with exponential backoff
+- Optional encryption (AES-256-CBC)
+- Background sync for embedded replicas
+
+```toml
+{% dep("tursoOnly") %}
+```
+
+See the [Turso Guide](/docs/turso) for detailed usage.
+
 ### `cache`
 
 Redis connection pooling with support for JWT token revocation and distributed rate limiting.
