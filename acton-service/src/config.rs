@@ -82,6 +82,11 @@ where
     #[serde(default)]
     pub grpc: Option<GrpcConfig>,
 
+    /// WebSocket configuration (optional)
+    #[cfg(feature = "websocket")]
+    #[serde(default)]
+    pub websocket: Option<crate::websocket::WebSocketConfig>,
+
     /// Cedar authorization configuration (optional)
     #[cfg(feature = "cedar-authz")]
     #[serde(default)]
@@ -1083,6 +1088,8 @@ where
             nats: None,
             otlp: None,
             grpc: None,
+            #[cfg(feature = "websocket")]
+            websocket: None,
             #[cfg(feature = "cedar-authz")]
             cedar: None,
             custom: T::default(),
@@ -1158,6 +1165,8 @@ mod tests {
             nats: None,
             otlp: None,
             grpc: None,
+            #[cfg(feature = "websocket")]
+            websocket: None,
             #[cfg(feature = "cedar-authz")]
             cedar: None,
             custom,
@@ -1204,6 +1213,8 @@ mod tests {
             nats: None,
             otlp: None,
             grpc: None,
+            #[cfg(feature = "websocket")]
+            websocket: None,
             #[cfg(feature = "cedar-authz")]
             cedar: None,
             custom: custom.clone(),

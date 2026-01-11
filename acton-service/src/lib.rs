@@ -1,10 +1,10 @@
 //! # acton-service
 //!
-//! Production-ready Rust microservice framework with dual-protocol support (HTTP + gRPC).
+//! Production-ready Rust microservice framework with multi-protocol support (HTTP + gRPC + WebSocket).
 //!
 //! ## Features
 //!
-//! - **Dual-protocol**: HTTP (axum) + gRPC (tonic) on single port
+//! - **Multi-protocol**: HTTP (axum) + gRPC (tonic) + WebSocket on single port
 //! - **Middleware stack**: JWT auth, rate limiting, request tracking, panic recovery, body size limits
 //! - **Resilience**: Circuit breaker, retry with backoff, bulkhead (concurrency limiting)
 //! - **Observability**: OpenTelemetry tracing, HTTP metrics, request ID propagation
@@ -84,6 +84,9 @@ pub mod openapi;
 
 #[cfg(feature = "grpc")]
 pub mod grpc;
+
+#[cfg(feature = "websocket")]
+pub mod websocket;
 
 /// Internal agent-based components
 ///
@@ -178,6 +181,22 @@ pub mod prelude {
 
     #[cfg(all(feature = "grpc", feature = "governor"))]
     pub use crate::grpc::GrpcRateLimitLayer;
+
+    #[cfg(feature = "websocket")]
+    pub use crate::websocket::{
+        // Configuration
+        WebSocketConfig, RoomConfig,
+        // Connection handling
+        ConnectionId, WebSocketConnection,
+        // Room management
+        RoomManager, Room, RoomId, RoomMember,
+        // Messages
+        JoinRoomRequest, LeaveRoomRequest, BroadcastToRoom, ConnectionDisconnected,
+        // Broadcasting
+        Broadcaster, BroadcastTarget,
+        // Re-exported axum types
+        WebSocket, WebSocketUpgrade, Message as WsMessage,
+    };
 
     // Background task management (user-facing)
     pub use crate::agents::{BackgroundWorker, TaskStatus};
