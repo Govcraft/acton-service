@@ -488,7 +488,7 @@ impl NatsPoolAgent {
 use std::sync::Arc;
 #[cfg(all(feature = "turso", not(feature = "database"), not(feature = "cache"), not(feature = "events")))]
 use tokio::sync::RwLock;
-#[cfg(all(feature = "turso", not(feature = "database"), not(feature = "cache"), not(feature = "events")))]
+#[cfg(all(feature = "turso", not(feature = "database")))]
 use tokio_util::sync::CancellationToken;
 #[cfg(all(feature = "turso", not(feature = "database"), not(feature = "events"), not(feature = "cache")))]
 use acton_reactive::prelude::*;

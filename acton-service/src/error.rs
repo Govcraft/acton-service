@@ -45,6 +45,11 @@ pub enum Error {
     #[error("PASETO error: {0}")]
     Paseto(String),
 
+    /// Authentication error (password hashing, token generation, etc.)
+    #[cfg(feature = "auth")]
+    #[error("Auth error: {0}")]
+    Auth(String),
+
     /// JWT error (requires `jwt` feature)
     #[cfg(feature = "jwt")]
     #[error("JWT error: {0}")]
@@ -85,6 +90,14 @@ pub enum Error {
     /// Validation error (422)
     #[error("Validation error: {0}")]
     ValidationError(String),
+
+    /// Not supported error (501)
+    #[error("Not supported: {0}")]
+    NotSupported(String),
+
+    /// External service error (502)
+    #[error("External service error: {0}")]
+    External(String),
 
     /// Internal server error
     #[error("Internal server error: {0}")]
@@ -178,6 +191,12 @@ impl IntoResponse for Error {
                 ErrorResponse::with_code(StatusCode::UNAUTHORIZED, "INVALID_TOKEN", msg),
             ),
 
+            #[cfg(feature = "auth")]
+            Error::Auth(msg) => (
+                StatusCode::UNAUTHORIZED,
+                ErrorResponse::with_code(StatusCode::UNAUTHORIZED, "AUTH_ERROR", msg),
+            ),
+
             #[cfg(feature = "jwt")]
             Error::Jwt(e) => (
                 StatusCode::UNAUTHORIZED,
@@ -231,6 +250,19 @@ impl IntoResponse for Error {
                 StatusCode::UNPROCESSABLE_ENTITY,
                 ErrorResponse::with_code(StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION_ERROR", msg),
             ),
+
+            Error::NotSupported(msg) => (
+                StatusCode::NOT_IMPLEMENTED,
+                ErrorResponse::with_code(StatusCode::NOT_IMPLEMENTED, "NOT_SUPPORTED", msg),
+            ),
+
+            Error::External(msg) => {
+                tracing::error!("External service error: {}", msg);
+                (
+                    StatusCode::BAD_GATEWAY,
+                    ErrorResponse::with_code(StatusCode::BAD_GATEWAY, "EXTERNAL_ERROR", "External service unavailable"),
+                )
+            }
 
             Error::Internal(msg) => {
                 tracing::error!("Internal error: {}", msg);
