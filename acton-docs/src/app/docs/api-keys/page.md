@@ -39,11 +39,11 @@ acton-service = { version = "{% version() %}", features = ["auth", "cache"] }
 use acton_service::auth::ApiKeyGenerator;
 
 // Create generator with your prefix
-let generator = ApiKeyGenerator::new("myapp_live");
+let generator = ApiKeyGenerator::new("sk_live");
 
 // Generate a new API key
 let (key, key_hash) = generator.generate();
-// key = "myapp_live_abc123..." - show to user ONCE
+// key = "sk_live_abc123..." - show to user ONCE
 // key_hash = "$argon2id$..." - store in database
 
 // Later, verify an incoming key
@@ -60,7 +60,7 @@ API keys use the format `{prefix}_{random}` where:
 - **Random**: 192 bits of entropy encoded as lowercase base32
 
 ```text
-myapp_live_abcdefghijklmnopqrstuvwxyz234567
+sk_live_abcdefghijklmnopqrstuvwxyz234567
 └──┬──┘ └──────────────┬───────────────┘
  Prefix          Random (base32)
 ```
@@ -155,7 +155,7 @@ For efficient validation, keys support prefix lookup using the first 8 character
 ```rust
 // Extract lookup prefix from incoming key
 let lookup_prefix = ApiKeyGenerator::key_prefix_for_lookup(&incoming_key);
-// Returns: "myapp_live_abcdefgh"
+// Returns: "sk_live_abcdefgh"
 
 // Use for indexed database lookup
 let api_key = storage.get_by_prefix(&lookup_prefix).await?;
@@ -526,10 +526,10 @@ Show the full key exactly once during creation. After that, only display a maske
 
 ```rust
 // During creation
-"Your API key: myapp_live_abcdefghijklmnopqrstuvwxyz234567"
+"Your API key: sk_live_abcdefghijklmnopqrstuvwxyz234567"
 
 // In key listing
-"myapp_live_abcd...7" // First 4 + last 1 characters of random part
+"sk_live_abcd...7" // First 4 + last 1 characters of random part
 ```
 
 ### Key Rotation

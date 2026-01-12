@@ -95,6 +95,15 @@ pub mod auth;
 #[cfg(feature = "session")]
 pub mod session;
 
+#[cfg(feature = "htmx")]
+pub mod htmx;
+
+#[cfg(feature = "askama")]
+pub mod templates;
+
+#[cfg(feature = "sse")]
+pub mod sse;
+
 /// Internal agent-based components
 ///
 /// Connection pool management is handled internally by agents. Users don't
@@ -241,6 +250,60 @@ pub mod prelude {
     // Re-export tower-sessions Session type for direct use
     #[cfg(feature = "session")]
     pub use tower_sessions::Session;
+
+    // HTMX support
+    #[cfg(feature = "htmx")]
+    pub use crate::htmx::{
+        // Extractors
+        HxBoosted, HxCurrentUrl, HxHistoryRestoreRequest, HxPrompt, HxRequest, HxTarget,
+        HxTrigger, HxTriggerName,
+        // Response headers
+        HxLocation, HxPushUrl, HxRedirect, HxRefresh, HxReplaceUrl, HxReselect,
+        HxResponseTrigger, HxReswap, HxRetarget, SwapOption,
+        // Vary responders
+        VaryHxRequest, VaryHxTarget, VaryHxTrigger, VaryHxTriggerName,
+        // Middleware
+        AutoVaryLayer, AutoVaryMiddleware,
+        // Custom types
+        HtmlFragment, HxTriggerEvents, OutOfBandSwap, TriggerTiming,
+        // Helpers
+        fragment_or_full, is_boosted_request, is_htmx_request,
+        // Event types
+        HxEvent,
+    };
+
+    // Template engine support
+    #[cfg(feature = "askama")]
+    pub use crate::templates::{
+        // Core types
+        TemplateContext, HtmlTemplate, RenderMode,
+        // Re-export askama Template derive
+        Template,
+        // Helpers
+        classes, pluralize, truncate,
+    };
+
+    // Re-export axum Html for non-templated HTML responses
+    pub use axum::response::Html;
+
+    // Server-Sent Events support
+    #[cfg(feature = "sse")]
+    pub use crate::sse::{
+        // Configuration
+        SseConfig,
+        // Connection tracking (aliased to avoid conflict with websocket types)
+        ConnectionId as SseConnectionId, SseConnection,
+        // Event building
+        SseEventExt, TypedEvent,
+        // Broadcasting (BroadcastTarget aliased to avoid conflict with websocket)
+        SseBroadcaster, BroadcastMessage, BroadcastTarget as SseBroadcastTarget,
+        // HTMX helpers
+        HtmxSwap, htmx_event, htmx_close_event, htmx_json_event, htmx_oob_event, htmx_trigger,
+    };
+
+    // Re-export axum SSE types for direct use
+    #[cfg(feature = "sse")]
+    pub use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 
     // Background task management (user-facing)
     pub use crate::agents::{BackgroundWorker, TaskStatus};
