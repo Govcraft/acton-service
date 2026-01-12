@@ -1,0 +1,23 @@
+<li class="task-item {% if task.completed %}completed{% endif %}" id="task-{{ task.id }}">
+    <input type="checkbox"
+           {% if task.completed %}checked{% endif %}
+           hx-post="/tasks/{{ task.id }}/toggle"
+           hx-target="#task-{{ task.id }}"
+           hx-swap="outerHTML">
+    <span class="task-title">{{ task.title }}</span>
+    <div class="task-actions">
+        <button class="btn btn-secondary btn-sm"
+                hx-get="/tasks/{{ task.id }}/edit"
+                hx-target="#task-{{ task.id }}"
+                hx-swap="outerHTML">
+            Edit
+        </button>
+        <button class="btn btn-danger btn-sm"
+                hx-delete="/tasks/{{ task.id }}"
+                hx-target="#task-{{ task.id }}"
+                hx-swap="outerHTML"
+                hx-confirm="Delete this task?">
+            Delete
+        </button>
+    </div>
+</li>

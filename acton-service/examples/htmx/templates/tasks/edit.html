@@ -1,0 +1,16 @@
+<li class="task-item" id="task-{{ task.id }}">
+    <form hx-put="/tasks/{{ task.id }}"
+          hx-target="#task-{{ task.id }}"
+          hx-swap="outerHTML"
+          style="display: flex; gap: 0.5rem; flex: 1; align-items: center;">
+        <input type="text" name="title" value="{{ task.title }}"
+               style="flex: 1; padding: 0.25rem 0.5rem;" required autofocus>
+        <button type="submit" class="btn btn-success btn-sm">Save</button>
+        <button type="button" class="btn btn-secondary btn-sm"
+                hx-get="/tasks/{{ task.id }}"
+                hx-target="#task-{{ task.id }}"
+                hx-swap="outerHTML">
+            Cancel
+        </button>
+    </form>
+</li>

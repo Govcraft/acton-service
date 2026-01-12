@@ -218,6 +218,12 @@ name = "chat-server"
 path = "examples/websocket/chat-server.rs"
 required-features = ["websocket"]
 
+# HTMX examples
+[[example]]
+name = "task-manager"
+path = "examples/htmx/task-manager.rs"
+required-features = ["htmx-full"]
+
 [build-dependencies]
 prost-build = "0.14.1"
 tonic-build.workspace = true

@@ -1,0 +1,8 @@
+# Askama template configuration
+#
+# This allows templates to be placed in different directories,
+# including the examples/htmx/templates directory for examples.
+
+[general]
+# Template directories - Askama will look in these locations
+dirs = ["templates", "examples/htmx/templates"]

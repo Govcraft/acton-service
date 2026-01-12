@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}Tasks{% endblock %}
+
+{% block content %}
+<!-- SSE connection for real-time updates (listens but doesn't auto-swap) -->
+<div hx-ext="sse" sse-connect="/events">
+    <!-- Stats Section -->
+    <div class="stats" id="task-stats">
+        <div class="stat">
+            <span class="stat-value" id="total-count">{{ total_tasks }}</span>
+            <div class="stat-label">Total Tasks</div>
+        </div>
+        <div class="stat">
+            <span class="stat-value" id="completed-count">{{ completed_tasks }}</span>
+            <div class="stat-label">Completed</div>
+        </div>
+        <div class="stat">
+            <span class="stat-value" id="pending-count">{{ pending_tasks }}</span>
+            <div class="stat-label">Pending</div>
+        </div>
+    </div>
+
+    <!-- New Task Form -->
+    <div class="card">
+        <h2>Add New Task</h2>
+        <form hx-post="/tasks"
+              hx-target="#task-list"
+              hx-swap="afterbegin"
+              hx-on::after-request="if(event.detail.successful) this.reset()">
+            <div class="form-group">
+                <label for="title">Task Title</label>
+                <input type="text" id="title" name="title" required
+                       placeholder="What needs to be done?">
+            </div>
+            <button type="submit" class="btn btn-primary">
+                Add Task
+                <span class="htmx-indicator">...</span>
+            </button>
+        </form>
+    </div>
+
+    <!-- Task List -->
+    <div class="card">
+        <h2>Your Tasks</h2>
+        <ul class="task-list" id="task-list">
+            {% for task in tasks %}
+            {% include "tasks/item.html" %}
+            {% endfor %}
+            {% if tasks.is_empty() %}
+            <li class="task-item" id="empty-message">
+                <span class="task-title" style="color: #9ca3af; font-style: italic;">
+                    No tasks yet. Add one above!
+                </span>
+            </li>
+            {% endif %}
+        </ul>
+    </div>
+</div>
+{% endblock %}
