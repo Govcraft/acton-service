@@ -198,20 +198,28 @@ Client connection:
 
 ### Hybrid Architecture
 
-You can use both patterns in the same application:
+You can use both patterns in the same application by organizing routes within versions:
 
 ```rust
-let app = Router::new()
-    // HTMX routes with sessions
-    .route("/", get(home))
-    .route("/tasks", get(list_tasks).post(create_task))
-    .layer(session_layer)
+let routes = VersionedApiBuilder::new()
+    .with_base_path("/api")
+    .add_version(ApiVersion::V1, |router| {
+        router
+            // HTMX routes with sessions
+            .route("/", get(home))
+            .route("/tasks", get(list_tasks).post(create_task))
+            .layer(session_layer)
+            // API routes with JWT
+            .route("/api/tasks", get(api_list_tasks).post(api_create_task))
+            .layer(jwt_layer)
+    })
+    .build_routes();
 
-    // API routes with JWT
-    .nest("/api/v1", Router::new()
-        .route("/tasks", get(api_list_tasks).post(api_create_task))
-        .layer(jwt_layer)
-    );
+ServiceBuilder::new()
+    .with_routes(routes)
+    .build()
+    .serve()
+    .await?;
 ```
 
 This pattern works well for applications that need both a web UI (admin dashboard) and an API (mobile app, integrations).

@@ -381,26 +381,17 @@ scopes = ["read:user", "user:email"]
 ## Complete OAuth Flow Example
 
 ```rust
-use axum::{
-    extract::{Query, State},
-    response::{Redirect, IntoResponse},
-    routing::get,
-    Router,
-};
+use acton_service::prelude::*;
 use acton_service::auth::oauth::{
     GoogleProvider, OAuthProvider, RedisOAuthStateManager, OAuthStateManager, StateData,
 };
 use acton_service::auth::{PasetoGenerator, TokenGenerator, ClaimsBuilder};
 
-#[derive(Clone)]
-struct AppState {
-    google: GoogleProvider,
-    state_manager: RedisOAuthStateManager,
-    token_generator: PasetoGenerator,
-}
-
 // Initiate OAuth flow
-async fn login_google(State(state): State<AppState>) -> impl IntoResponse {
+async fn login_google(
+    Extension(google): Extension<GoogleProvider>,
+    Extension(state_manager): Extension<RedisOAuthStateManager>,
+) -> impl IntoResponse {
     let state_data = StateData {
         provider: "google".to_string(),
         redirect_uri: Some("/dashboard".to_string()),
@@ -408,8 +399,8 @@ async fn login_google(State(state): State<AppState>) -> impl IntoResponse {
         extra: None,
     };
 
-    let oauth_state = state.state_manager.create_state(&state_data).await.unwrap();
-    let auth_url = state.google.authorization_url(&oauth_state, &[]);
+    let oauth_state = state_manager.create_state(&state_data).await.unwrap();
+    let auth_url = google.authorization_url(&oauth_state, &[]);
 
     Redirect::to(&auth_url)
 }
@@ -423,20 +414,22 @@ struct CallbackQuery {
 // Handle OAuth callback
 async fn callback_google(
     Query(params): Query<CallbackQuery>,
-    State(state): State<AppState>,
+    Extension(google): Extension<GoogleProvider>,
+    Extension(state_manager): Extension<RedisOAuthStateManager>,
+    Extension(token_generator): Extension<PasetoGenerator>,
 ) -> Result<impl IntoResponse, Error> {
     // 1. Validate state (CSRF protection)
-    let state_data = state.state_manager
+    let state_data = state_manager
         .validate_state(&params.state)
         .await?;
 
     // 2. Exchange code for tokens
-    let oauth_tokens = state.google
+    let oauth_tokens = google
         .exchange_code(&params.code)
         .await?;
 
     // 3. Get user info
-    let user_info = state.google
+    let user_info = google
         .get_user_info(&oauth_tokens.access_token)
         .await?;
 
@@ -449,7 +442,7 @@ async fn callback_google(
         .email(user_info.email.as_deref().unwrap_or(""))
         .build()?;
 
-    let token = state.token_generator.generate_token(&claims)?;
+    let token = token_generator.generate_token(&claims)?;
 
     // 6. Set token in cookie or return in response
     let redirect = state_data.redirect_uri.unwrap_or("/".to_string());
@@ -488,11 +481,31 @@ async fn find_or_create_user(info: &OAuthUserInfo) -> Result<User, Error> {
     }).await
 }
 
-fn router(state: AppState) -> Router {
-    Router::new()
-        .route("/auth/google", get(login_google))
-        .route("/auth/google/callback", get(callback_google))
-        .with_state(state)
+#[tokio::main]
+async fn main() -> Result<()> {
+    let google = GoogleProvider::new(&google_config)?;
+    let state_manager = RedisOAuthStateManager::new(redis_pool, 600);
+    let token_generator = PasetoGenerator::new(&secret_key)?;
+
+    let routes = VersionedApiBuilder::new()
+        .with_base_path("/api")
+        .add_version(ApiVersion::V1, |router| {
+            router
+                .route("/auth/google", get(login_google))
+                .route("/auth/google/callback", get(callback_google))
+                .layer(Extension(google.clone()))
+                .layer(Extension(state_manager.clone()))
+                .layer(Extension(token_generator.clone()))
+        })
+        .build_routes();
+
+    ServiceBuilder::new()
+        .with_routes(routes)
+        .build()
+        .serve()
+        .await?;
+
+    Ok(())
 }
 ```
 

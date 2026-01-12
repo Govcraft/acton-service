@@ -436,14 +436,24 @@ See [Resilience Patterns](/docs/resilience) for detailed circuit breaker configu
 
 ### Service Health Monitoring
 
-Add health and metrics endpoints to your router:
+acton-service's `VersionedApiBuilder` automatically includes `/health` and `/ready` endpoints. Add custom metrics endpoints within your versioned API:
 
 ```rust
-Router::new()
-    .route("/health", get(health))
-    .route("/ready", get(readiness))
-    .route("/metrics/pools", get(pool_metrics))
-    .with_state(state)
+let routes = VersionedApiBuilder::new()
+    .with_base_path("/api")
+    .add_version(ApiVersion::V1, |router| {
+        router
+            .route("/metrics/pools", get(pool_metrics))
+            // ... other routes
+    })
+    .build_routes();
+
+// /health and /ready are automatically available
+ServiceBuilder::new()
+    .with_routes(routes)
+    .build()
+    .serve()
+    .await?;
 ```
 
 ## Pattern Comparison

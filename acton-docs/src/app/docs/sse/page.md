@@ -43,22 +43,33 @@ Or include it with other HTMX features:
 acton-service = { version = "{{version}}", features = ["htmx-full"] }
 ```
 
-### 2. Create a Broadcaster
+### 2. Create a Broadcaster and Routes
 
 ```rust
 use acton_service::prelude::*;
 use std::sync::Arc;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
     let broadcaster = Arc::new(SseBroadcaster::new());
 
-    let app = Router::new()
-        .route("/events", get(events))
-        .route("/notify", post(send_notification))
-        .layer(Extension(broadcaster));
+    let routes = VersionedApiBuilder::new()
+        .with_base_path("/api")
+        .add_version(ApiVersion::V1, |router| {
+            router
+                .route("/events", get(events))
+                .route("/notify", post(send_notification))
+                .layer(Extension(broadcaster.clone()))
+        })
+        .build_routes();
 
-    // ...
+    ServiceBuilder::new()
+        .with_routes(routes)
+        .build()
+        .serve()
+        .await?;
+
+    Ok(())
 }
 ```
 
