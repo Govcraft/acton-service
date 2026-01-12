@@ -158,16 +158,77 @@ See [Server-Sent Events](/docs/sse) for broadcasting patterns and connection man
 
 ---
 
+### Frontend Routes with ServiceBuilder
+
+{% callout type="note" title="New in 0.11.0" %}
+The `htmx` feature now enables `with_frontend_routes()` on `VersionedApiBuilder`, allowing unversioned frontend routes alongside versioned API routes—all while using ServiceBuilder's batteries-included backend.
+{% /callout %}
+
+HTMX applications typically need unversioned routes (`/`, `/login`, `/tasks`) rather than API-style versioned routes (`/api/v1/users`). The `with_frontend_routes()` method lets you define these while still getting ServiceBuilder's automatic features:
+
+```rust
+use acton_service::prelude::*;
+use acton_service::versioning::VersionedApiBuilder;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let routes = VersionedApiBuilder::new()
+        // Optional: Add versioned API routes
+        .with_base_path("/api")
+        .add_version(ApiVersion::V1, |router| {
+            router.route("/data", get(api_handler))
+        })
+        // Frontend routes (htmx feature required)
+        .with_frontend_routes(|router| {
+            router
+                .route("/", get(index))
+                .route("/login", get(login_page).post(login))
+                .route("/tasks", post(create_task))
+                .layer(session_layer)
+        })
+        .build_routes();
+
+    // ServiceBuilder provides automatic:
+    // - /health and /ready endpoints
+    // - Tracing initialization
+    // - Configuration loading
+    // - Graceful shutdown
+    ServiceBuilder::new()
+        .with_routes(routes)
+        .build()
+        .serve()
+        .await?;
+
+    Ok(())
+}
+```
+
+**Resulting routes:**
+```text
+GET  /health          # Auto-provided health check
+GET  /ready           # Auto-provided readiness probe
+GET  /                # Frontend index (unversioned)
+GET  /login           # Frontend login (unversioned)
+POST /login           # Frontend login handler (unversioned)
+POST /tasks           # Frontend task creation (unversioned)
+GET  /api/v1/data     # Versioned API endpoint
+```
+
+This pattern gives you the best of both worlds: clean frontend URLs for your HTMX UI, optional versioned API routes for programmatic access, and all of ServiceBuilder's production-ready features.
+
+---
+
 ## Complete Example: Task Manager
 
-The Task Manager example demonstrates all HTMX features working together—templates, flash messages, out-of-band swaps, and real-time updates.
+The Task Manager example demonstrates all HTMX features working together—templates, flash messages, out-of-band swaps, real-time updates, and proper ServiceBuilder integration.
 
 ```bash
 cargo run --manifest-path=acton-service/Cargo.toml --example task-manager --features htmx-full
 ```
 
-Open http://localhost:8080 to see:
+Open http://localhost:3000 to see:
 
+- **ServiceBuilder integration** with automatic health/ready endpoints and tracing
 - **Session-based authentication** with login/logout
 - **Flash messages** that survive redirects
 - **Out-of-band swaps** updating task list and statistics simultaneously
@@ -194,6 +255,27 @@ fn render_stats_oob(total: usize, completed: usize, pending: usize) -> String {
         total, pending, completed
     )
 }
+```
+
+**ServiceBuilder with frontend routes:**
+```rust
+let routes = VersionedApiBuilder::new()
+    .with_frontend_routes(|router| {
+        router
+            .route("/", get(index))
+            .route("/login", get(login_page).post(login))
+            .route("/tasks", post(create_task))
+            .route("/events", get(events))
+            .layer(Extension(store))
+            .layer(session_layer)
+    })
+    .build_routes();
+
+ServiceBuilder::new()
+    .with_routes(routes)
+    .build()
+    .serve()
+    .await?;
 ```
 
 Explore the {% link href=githubUrl("/tree/main/acton-service/examples/htmx") %}complete source{% /link %} for implementation details.

@@ -7,8 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- Replace incorrect Router::new() examples with VersionedApiBuilder
+- **htmx**: Add comprehensive HTMX, Askama, and SSE documentation
+
+### Features
+
+- **htmx**: Add frontend routes support to VersionedApiBuilder
+
 ### Miscellaneous
 
+- Update CHANGELOG for v0.10.0
 - **docs**: Update version to 0.10.0
 ## [acton-service-v0.10.0] - 2026-01-12
 
