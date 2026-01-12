@@ -385,6 +385,8 @@ where
 {
     versions: Vec<(ApiVersion, Router<crate::state::AppState<T>>, Option<DeprecationInfo>)>,
     base_path: Option<String>,
+    #[cfg(feature = "htmx")]
+    frontend_routes: Option<Router<crate::state::AppState<T>>>,
 }
 
 impl Default for VersionedApiBuilder<()> {
@@ -413,6 +415,8 @@ impl VersionedApiBuilder<()> {
         Self {
             versions: Vec::new(),
             base_path: None,
+            #[cfg(feature = "htmx")]
+            frontend_routes: None,
         }
     }
 }
@@ -450,6 +454,8 @@ where
         Self {
             versions: Vec::new(),
             base_path: None,
+            #[cfg(feature = "htmx")]
+            frontend_routes: None,
         }
     }
 
@@ -551,6 +557,55 @@ where
         self
     }
 
+    /// Add unversioned frontend routes (only available with htmx feature)
+    ///
+    /// Frontend routes are served at the application root and bypass API versioning.
+    /// Use this for:
+    /// - Server-rendered HTML pages (Askama templates)
+    /// - HTMX partial fragments
+    /// - Static content requiring server logic
+    ///
+    /// These routes coexist with versioned API routes. For example, you can have:
+    /// - `/` - Frontend index page (unversioned)
+    /// - `/login` - Frontend login page (unversioned)
+    /// - `/api/v1/users` - Versioned API endpoint
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use acton_service::prelude::*;
+    /// use acton_service::versioning::{ApiVersion, VersionedApiBuilder};
+    ///
+    /// async fn index() -> Html<&'static str> {
+    ///     Html("<h1>Welcome</h1>")
+    /// }
+    ///
+    /// async fn api_handler() -> Json<&'static str> {
+    ///     Json("API V1")
+    /// }
+    ///
+    /// let routes = VersionedApiBuilder::new()
+    ///     .with_base_path("/api")
+    ///     .add_version(ApiVersion::V1, |routes| {
+    ///         routes.route("/data", get(api_handler))
+    ///     })
+    ///     .with_frontend_routes(|router| {
+    ///         router
+    ///             .route("/", get(index))
+    ///             .route("/login", get(login_page))
+    ///     })
+    ///     .build_routes();
+    /// ```
+    #[cfg(feature = "htmx")]
+    pub fn with_frontend_routes<F>(mut self, routes: F) -> Self
+    where
+        F: FnOnce(Router<crate::state::AppState<T>>) -> Router<crate::state::AppState<T>>,
+    {
+        let router = routes(Router::new());
+        self.frontend_routes = Some(router);
+        self
+    }
+
     /// Build versioned routes (opaque VersionedRoutes type)
     ///
     /// This creates a `VersionedRoutes<T>` with all your versioned business routes
@@ -566,6 +621,13 @@ where
         let mut router: Router<crate::state::AppState<T>> = Router::new()
             .route("/health", get(crate::health::health::<T>))
             .route("/ready", get(crate::health::readiness::<T>));
+
+        // Add frontend routes (htmx feature only)
+        // These are merged at root level before versioned API routes
+        #[cfg(feature = "htmx")]
+        if let Some(frontend_router) = self.frontend_routes {
+            router = router.merge(frontend_router);
+        }
 
         // Add all versioned routes
         for (version, version_router, deprecation) in self.versions {
@@ -825,5 +887,40 @@ mod tests {
             ApiVersion::V1,
             DeprecationInfo::new(ApiVersion::V1, ApiVersion::V2),
         );
+    }
+
+    #[test]
+    #[cfg(feature = "htmx")]
+    fn test_versioned_api_builder_with_frontend_routes() {
+        // Test that frontend routes can be added alongside versioned routes
+        let _routes = VersionedApiBuilder::new()
+            .with_base_path("/api")
+            .add_version(ApiVersion::V1, |routes| {
+                routes.route("/data", axum::routing::get(|| async { "API V1" }))
+            })
+            .with_frontend_routes(|router| {
+                router
+                    .route("/", axum::routing::get(|| async { "Home" }))
+                    .route("/login", axum::routing::get(|| async { "Login" }))
+            })
+            .build_routes();
+
+        // If we get here without panicking, the routes were built successfully
+        // The actual routing behavior is tested via integration tests
+    }
+
+    #[test]
+    #[cfg(feature = "htmx")]
+    fn test_versioned_api_builder_frontend_routes_only() {
+        // Test that frontend routes can be used without any versioned API routes
+        let _routes = VersionedApiBuilder::new()
+            .with_frontend_routes(|router| {
+                router
+                    .route("/", axum::routing::get(|| async { "Home" }))
+                    .route("/about", axum::routing::get(|| async { "About" }))
+            })
+            .build_routes();
+
+        // If we get here without panicking, the routes were built successfully
     }
 }

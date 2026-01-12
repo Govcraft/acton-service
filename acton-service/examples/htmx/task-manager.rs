@@ -5,6 +5,7 @@
 //! - **Askama Templates**: Server-side rendering with TemplateContext
 //! - **SSE Real-Time Updates**: Live task updates across clients
 //! - **Session Authentication**: Login/logout with AuthSession
+//! - **ServiceBuilder Integration**: Batteries-included backend with health checks
 //!
 //! ## Running
 //!
@@ -13,14 +14,21 @@
 //!   --example task-manager --features htmx-full
 //! ```
 //!
-//! Then open http://localhost:8080 in your browser.
+//! Then open http://localhost:3000 in your browser (or the port configured via ACTON_SERVER_PORT).
+//!
+//! ## Endpoints
+//!
+//! - `/` - Task manager UI (frontend)
+//! - `/login` - Login page (frontend)
+//! - `/health` - Health check (auto-provided by ServiceBuilder)
+//! - `/ready` - Readiness probe (auto-provided by ServiceBuilder)
 
 use std::convert::Infallible;
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 use acton_service::prelude::*;
 use acton_service::session::{create_memory_session_layer, AuthSession, FlashMessage, SessionConfig, TypedSession};
+use acton_service::versioning::VersionedApiBuilder;
 use axum::extract::Form;
 use tokio::sync::RwLock;
 
@@ -368,12 +376,7 @@ async fn logout(mut auth: TypedSession<AuthSession>) -> impl IntoResponse {
 // ============================================================================
 
 #[tokio::main]
-async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    // Initialize tracing (filter out noisy tower-sessions warnings)
-    tracing_subscriber::fmt()
-        .with_env_filter("info,tower_sessions_core=error")
-        .init();
-
+async fn main() -> Result<()> {
     // Initialize shared state
     let store: SharedStore = Arc::new(RwLock::new(TaskStore::default()));
     let broadcaster = Arc::new(SseBroadcaster::new());
@@ -390,37 +393,50 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let session_config = SessionConfig::default();
     let session_layer = create_memory_session_layer(&session_config);
 
-    // Build routes
-    let app = Router::new()
-        // Pages
-        .route("/", get(index))
-        .route("/login", get(login_page))
-        // Task CRUD
-        .route("/tasks", post(create_task))
-        .route(
-            "/tasks/{id}",
-            get(get_task).put(update_task).delete(delete_task),
-        )
-        .route("/tasks/{id}/edit", get(edit_task_form))
-        .route("/tasks/{id}/toggle", post(toggle_task))
-        // SSE
-        .route("/events", get(events))
-        // Auth
-        .route("/login", post(login))
-        .route("/logout", post(logout))
-        // Extensions
-        .layer(Extension(store))
-        .layer(Extension(broadcaster))
-        // Session layer
-        .layer(session_layer);
+    // Build routes using VersionedApiBuilder with frontend routes
+    // This gives us:
+    // - Automatic /health and /ready endpoints
+    // - Automatic tracing/observability initialization
+    // - Graceful shutdown handling
+    // - Unversioned frontend routes for HTMX UI
+    let routes = VersionedApiBuilder::new()
+        .with_frontend_routes(|router| {
+            router
+                // Pages
+                .route("/", get(index))
+                .route("/login", get(login_page))
+                // Task CRUD
+                .route("/tasks", post(create_task))
+                .route(
+                    "/tasks/{id}",
+                    get(get_task).put(update_task).delete(delete_task),
+                )
+                .route("/tasks/{id}/edit", get(edit_task_form))
+                .route("/tasks/{id}/toggle", post(toggle_task))
+                // SSE
+                .route("/events", get(events))
+                // Auth
+                .route("/login", post(login))
+                .route("/logout", post(logout))
+                // Extensions
+                .layer(Extension(store))
+                .layer(Extension(broadcaster))
+                // Session layer
+                .layer(session_layer)
+        })
+        .build_routes();
 
-    // Run server
-    let addr: SocketAddr = "0.0.0.0:8080".parse()?;
-    tracing::info!("Starting HTMX Task Manager on http://{}", addr);
-    tracing::info!("Open http://localhost:8080 in your browser");
-
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    // Build and run the service
+    // ServiceBuilder handles:
+    // - Configuration loading (from env/files)
+    // - Tracing initialization
+    // - Health/readiness endpoints
+    // - Graceful shutdown on SIGTERM/SIGINT
+    ServiceBuilder::new()
+        .with_routes(routes)
+        .build()
+        .serve()
+        .await?;
 
     Ok(())
 }
