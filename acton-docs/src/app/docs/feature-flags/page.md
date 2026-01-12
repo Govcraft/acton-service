@@ -296,6 +296,92 @@ See the [Session Management Guide](/docs/session) for detailed usage.
 
 ---
 
+## HTMX Features
+
+### `htmx`
+
+HTMX request extractors and response helpers for hypermedia-driven applications.
+
+**When to use**: Building interactive web applications with HTMX
+
+**Dependencies**: axum-htmx
+
+**Provides**:
+- Request extractors: `HxRequest`, `HxTarget`, `HxTrigger`, `HxPrompt`, `HxCurrentUrl`
+- Response headers: `HxRedirect`, `HxRefresh`, `HxReswap`, `HxRetarget`, `HxLocation`
+- Custom responders: `HtmlFragment`, `HxTriggerEvents`, `OutOfBandSwap`
+- Auto-Vary middleware for correct caching
+- Helper functions: `is_htmx_request()`, `fragment_or_full()`
+
+```toml
+acton-service = { version = "{% version() %}", features = ["htmx"] }
+```
+
+See the [HTMX Integration Guide](/docs/htmx) for detailed usage.
+
+### `askama`
+
+Compile-time checked HTML templates using Askama with Jinja2-like syntax.
+
+**When to use**: Server-side rendering with type-safe templates
+
+**Dependencies**: askama, askama_web
+
+**Provides**:
+- `TemplateContext` for common page data (auth, flash, CSRF, path)
+- `HtmlTemplate` responder with HTMX header support
+- Template helper functions: `truncate()`, `pluralize()`, `classes()`
+- Compile-time template validation (errors at build time, not runtime)
+
+```toml
+acton-service = { version = "{% version() %}", features = ["askama"] }
+```
+
+See the [Askama Templates Guide](/docs/askama) for detailed usage.
+
+### `sse`
+
+Server-Sent Events for real-time server-to-client updates.
+
+**When to use**: Real-time notifications, live data updates, progress indicators
+
+**Dependencies**: None (uses axum's built-in SSE)
+
+**Provides**:
+- `SseBroadcaster` for managing multiple client connections
+- `BroadcastMessage` for event construction
+- HTMX helpers: `htmx_event()`, `htmx_trigger()`, `htmx_oob_event()`
+- Connection management with `ConnectionId` and `SseConnection`
+- Channel-based broadcasting for user-specific events
+
+```toml
+acton-service = { version = "{% version() %}", features = ["sse"] }
+```
+
+See the [Server-Sent Events Guide](/docs/sse) for detailed usage.
+
+### `htmx-full`
+
+Meta-feature enabling all HTMX-related features together.
+
+**When to use**: Building complete HTMX applications with templates, SSE, and sessions
+
+**Enables**: `htmx`, `askama`, `sse`, `session-memory`
+
+```toml
+acton-service = { version = "{% version() %}", features = ["htmx-full"] }
+```
+
+**Note**: For production, replace `htmx-full` with explicit features and use `session-redis` instead of `session-memory`:
+
+```toml
+acton-service = { version = "{% version() %}", features = [
+    "htmx", "askama", "sse", "session-redis"
+] }
+```
+
+---
+
 ## Authentication Features
 
 ### `auth`

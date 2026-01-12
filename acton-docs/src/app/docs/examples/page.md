@@ -226,6 +226,50 @@ Demonstrates:
 
 ---
 
+### 🎨 HTMX Applications {#htmx}
+
+**Directory**: {% link href=githubUrl("/tree/main/acton-service/examples/htmx")}examples/htmx/{% /link %}
+
+Server-rendered hypermedia applications with HTMX, Askama templates, and real-time updates.
+
+#### **task-manager.rs** - Complete HTMX Application
+
+Comprehensive example demonstrating all HTMX features in a working task management app.
+
+```bash
+cargo run --manifest-path=acton-service/Cargo.toml --example task-manager --features htmx-full
+```
+
+Open http://localhost:8080 to explore the application.
+
+Demonstrates:
+- Askama templates with `TemplateContext` for flash messages and auth
+- Session-based authentication with `TypedSession<AuthSession>`
+- Out-of-band swaps for updating multiple elements simultaneously
+- Server-Sent Events for real-time task updates
+- Flash messages that survive redirects
+- Inline editing patterns with HTMX forms
+- CSRF protection via session middleware
+
+**Architecture**:
+```text
+Browser (HTMX) → Server renders HTML → Returns fragments or full pages
+                      ↓
+              SSE broadcasts real-time updates to all connected clients
+```
+
+**Key patterns shown**:
+- **Fragment vs. Full Page**: Same handler returns fragment for HTMX, full page for direct navigation
+- **OOB Swaps**: Task creation updates both the task list and statistics counter
+- **Flash Messages**: Success/error feedback via `FlashMessages::push()`
+- **SSE Integration**: Real-time updates without polling
+
+**Best for**: Building interactive web applications without heavy JavaScript frameworks
+
+{% link href=githubUrl("/tree/main/acton-service/examples/htmx/README.md")}📖 View HTMX README{% /link %} for detailed setup, testing instructions, and pattern explanations.
+
+---
+
 ### 📋 Templates {#templates}
 
 **Directory**: {% link href=githubUrl("/tree/main/acton-service/examples/templates")}examples/templates/{% /link %}
