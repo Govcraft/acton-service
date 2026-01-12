@@ -7,8 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Miscellaneous
+
+- **docs**: Update version to 0.10.0
+## [acton-service-v0.10.0] - 2026-01-12
+
 ### Documentation
 
+- **auth**: Add comprehensive authentication module documentation
+- **auth**: Add comprehensive authentication module documentation
+- Update documentation for PASETO-first token authentication
 - Reposition as backend framework that scales to microservices
 - Update docs site metadata
 - **tier-4**: Update example documentation
@@ -24,7 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Features
 
+- **examples**: Add HTMX Task Manager example
+- **htmx**: Add HTMX, Askama templates, and SSE support
 - **session**: Add HTTP session management for HTMX/SSR applications
+- **rate-limit**: Add per-route rate limiting with config-based setup
+- **auth**: Add comprehensive authentication module
+- Add PASETO as default token format with JWT feature-gated
 ## [acton-service-v0.9.0] - 2026-01-11
 
 ### Documentation
