@@ -104,6 +104,9 @@ pub mod templates;
 #[cfg(feature = "sse")]
 pub mod sse;
 
+#[cfg(feature = "pagination")]
+pub mod pagination;
+
 /// Internal agent-based components
 ///
 /// Connection pool management is handled internally by agents. Users don't
@@ -409,4 +412,48 @@ pub mod prelude {
 
     // Re-export acton-reactive prelude for actor system
     pub use acton_reactive::prelude::*;
+
+    // Pagination support (core types from paginator-rs)
+    #[cfg(feature = "pagination")]
+    pub use crate::pagination::{
+        // Main types
+        Paginator,
+        PaginatorBuilder,
+        PaginatorError,
+        PaginatorResponse,
+        PaginatorResponseMeta,
+        PaginatorResult,
+        PaginatorTrait,
+        // Parameters
+        IntoPaginationParams,
+        PaginationParams,
+        // Cursor pagination
+        Cursor,
+        CursorBuilder,
+        CursorDirection,
+        CursorValue,
+        // Filtering
+        Filter,
+        FilterBuilder,
+        FilterOperator,
+        FilterValue,
+        // Search
+        SearchBuilder,
+        SearchParams,
+        // Sorting
+        SortBuilder,
+        SortDirection,
+    };
+
+    // Pagination Axum integration (extractors and responses)
+    #[cfg(feature = "pagination-axum")]
+    pub use crate::pagination::{
+        create_link_header, PaginatedJson, PaginationQuery, PaginationQueryParams,
+    };
+
+    // Pagination SQLx integration (database pagination)
+    #[cfg(feature = "pagination-sqlx")]
+    pub use crate::pagination::{
+        validate_field_name, PaginateQuery, PaginatedQuery, QueryBuilderExt,
+    };
 }

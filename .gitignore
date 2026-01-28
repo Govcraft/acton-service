@@ -10,6 +10,9 @@ release/
 # Ignore all hidden directories (except .git which git handles specially)
 .*/
 
+# Git worktrees directory
+.worktrees/
+
 # But allow specific hidden files if needed (uncomment as needed)
 !.github/
 # !.vscode/

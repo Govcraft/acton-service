@@ -113,6 +113,9 @@ tower-sessions-redis-store = { version = "0.16.0", optional = true }
 axum-htmx = { version = "0.8.1", features = ["auto-vary", "serde"], optional = true }
 askama = { version = "0.15.1", optional = true }
 askama_web = { version = "0.15.0", features = ["axum-0.8"], optional = true }
+paginator-rs = { version = "0.2.2", optional = true }
+paginator-axum = { version = "0.2.2", optional = true }
+paginator-sqlx = { version = "0.2.2", optional = true }
 
 [features]
 default = ["http", "observability"]
@@ -136,7 +139,7 @@ auth = ["dep:argon2"]                                      # Core: password hash
 oauth = ["auth", "dep:oauth2", "dep:openidconnect", "dep:base64"]  # OAuth/OIDC providers (requires auth)
 auth-full = ["auth", "oauth", "jwt", "cache", "database"]  # All auth features (excludes turso - mutually exclusive with database)
 
-full = ["http", "grpc", "websocket", "database", "cache", "events", "observability", "resilience", "otel-metrics", "governor", "openapi", "cedar-authz", "jwt", "auth", "session-memory", "session-redis", "htmx", "askama", "sse"]
+full = ["http", "grpc", "websocket", "database", "cache", "events", "observability", "resilience", "otel-metrics", "governor", "openapi", "cedar-authz", "jwt", "auth", "session-memory", "session-redis", "htmx", "askama", "sse", "pagination-full"]
 tonic-health = ["dep:tonic-health"]
 tonic-reflection = ["dep:tonic-reflection"]
 tower-resilience-circuitbreaker = ["dep:tower-resilience-circuitbreaker"]
@@ -160,6 +163,12 @@ sse = []
 
 # Convenience: All HTMX-related features + session
 htmx-full = ["htmx", "askama", "sse", "session-memory"]
+
+# Pagination support
+pagination = ["dep:paginator-rs"]
+pagination-axum = ["pagination", "dep:paginator-axum"]
+pagination-sqlx = ["pagination", "dep:paginator-sqlx"]
+pagination-full = ["pagination", "pagination-axum", "pagination-sqlx"]
 
 # Basic examples
 [[example]]
