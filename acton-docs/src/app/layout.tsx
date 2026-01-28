@@ -21,6 +21,8 @@ const lexend = localFont({
   variable: '--font-lexend',
 })
 
+const siteUrl = 'https://govcraft.github.io/acton-service'
+
 export const metadata: Metadata = {
   title: {
     template: '%s - acton-service',
@@ -28,6 +30,30 @@ export const metadata: Metadata = {
   },
   description:
     'Build production backends with enforced best practices, dual HTTP+gRPC support, and comprehensive observability. Scales from monolith to microservices.',
+  openGraph: {
+    title: 'acton-service - Production-ready Rust backend framework',
+    description:
+      'Build production backends with enforced best practices, dual HTTP+gRPC support, and comprehensive observability. Scales from monolith to microservices.',
+    url: siteUrl,
+    siteName: 'acton-service',
+    images: [
+      {
+        url: `${siteUrl}/og-image.png`,
+        width: 722,
+        height: 298,
+        alt: 'acton-service - Production-ready Rust backends',
+      },
+    ],
+    locale: 'en_US',
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'acton-service - Production-ready Rust backend framework',
+    description:
+      'Build production backends with enforced best practices, dual HTTP+gRPC support, and comprehensive observability. Scales from monolith to microservices.',
+    images: [`${siteUrl}/og-image.png`],
+  },
 }
 
 export default function RootLayout({
