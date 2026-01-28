@@ -56,9 +56,9 @@ compile_error!(
 
 pub mod config;
 pub mod error;
+pub mod health;
 pub mod ids;
 pub mod middleware;
-pub mod health;
 pub mod pool_health;
 pub mod responses;
 pub mod server;
@@ -129,7 +129,11 @@ pub mod prelude {
     pub use crate::config::CedarConfig;
 
     pub use crate::error::{Error, Result};
-    pub use crate::health::{health, readiness, pool_metrics};
+
+    #[cfg(any(feature = "database", feature = "turso"))]
+    pub use crate::error::{DatabaseError, DatabaseErrorKind, DatabaseOperation};
+
+    pub use crate::health::{health, pool_metrics, readiness};
     pub use crate::ids::{MakeTypedRequestId, RequestId, RequestIdError};
     pub use crate::pool_health::PoolHealthSummary;
 
@@ -142,35 +146,35 @@ pub mod prelude {
     #[cfg(feature = "cache")]
     pub use crate::pool_health::RedisPoolHealth;
 
+    pub use crate::middleware::{
+        normalize_path, request_id_layer, request_id_propagation_layer, sensitive_headers_layer,
+        Claims, CompiledRoutePatterns, PasetoAuth, RateLimit, RequestTrackingConfig,
+        TokenValidator, PROPAGATE_HEADERS, SENSITIVE_HEADERS,
+    };
     #[cfg(feature = "events")]
     pub use crate::pool_health::NatsClientHealth;
-    pub use crate::middleware::{
-        Claims, TokenValidator, PasetoAuth, CompiledRoutePatterns, RateLimit, RequestTrackingConfig,
-        PROPAGATE_HEADERS, SENSITIVE_HEADERS, normalize_path,
-        request_id_layer, request_id_propagation_layer, sensitive_headers_layer,
-    };
 
     #[cfg(feature = "cache")]
-    pub use crate::middleware::{TokenRevocation, RedisTokenRevocation};
+    pub use crate::middleware::{RedisTokenRevocation, TokenRevocation};
 
     #[cfg(feature = "jwt")]
     pub use crate::middleware::JwtAuth;
+    pub use crate::responses::{
+        Accepted, Conflict, Created, FieldError, NoContent, Success, ValidationError,
+    };
     pub use crate::server::Server;
     pub use crate::service_builder::{ActonService, ServiceBuilder, VersionedRoutes};
     pub use crate::state::{AppState, AppStateBuilder};
     pub use crate::versioning::{
-        ApiVersion, DeprecationInfo, VersionedApiBuilder, VersionedResponse,
-        extract_version_from_path, versioned_router,
-    };
-    pub use crate::responses::{
-        Accepted, Conflict, Created, FieldError, NoContent, Success, ValidationError,
+        extract_version_from_path, versioned_router, ApiVersion, DeprecationInfo,
+        VersionedApiBuilder, VersionedResponse,
     };
 
     #[cfg(feature = "resilience")]
     pub use crate::middleware::ResilienceConfig;
 
     #[cfg(feature = "otel-metrics")]
-    pub use crate::middleware::{MetricsConfig, metric_labels, metric_names};
+    pub use crate::middleware::{metric_labels, metric_names, MetricsConfig};
 
     #[cfg(feature = "governor")]
     pub use crate::middleware::{GovernorConfig, GovernorRateLimit, RateLimitExceeded};
@@ -192,11 +196,9 @@ pub mod prelude {
 
     #[cfg(feature = "grpc")]
     pub use crate::grpc::{
-        GrpcServer, HealthService, Request,
-        Response as GrpcResponse,
-        Status, Code,
-        request_id_interceptor, token_auth_interceptor, paseto_auth_interceptor,
-        RequestIdExtension, add_request_id_to_response, GrpcTracingLayer, LoggingLayer,
+        add_request_id_to_response, paseto_auth_interceptor, request_id_interceptor,
+        token_auth_interceptor, Code, GrpcServer, GrpcTracingLayer, HealthService, LoggingLayer,
+        Request, RequestIdExtension, Response as GrpcResponse, Status,
     };
 
     #[cfg(all(feature = "grpc", feature = "jwt"))]
@@ -208,43 +210,66 @@ pub mod prelude {
     // Auth module exports
     #[cfg(feature = "auth")]
     pub use crate::auth::{
-        AuthConfig, PasswordConfig, TokenGenerationConfig, PasetoGenerationConfig,
-        RefreshTokenConfig, PasswordHasher, TokenGenerator, TokenPair, PasetoGenerator,
-        ApiKey, ApiKeyGenerator,
+        ApiKey, ApiKeyGenerator, AuthConfig, PasetoGenerationConfig, PasetoGenerator,
+        PasswordConfig, PasswordHasher, RefreshTokenConfig, TokenGenerationConfig, TokenGenerator,
+        TokenPair,
     };
 
     #[cfg(all(feature = "auth", feature = "jwt"))]
     pub use crate::auth::JwtGenerator;
 
     #[cfg(feature = "oauth")]
-    pub use crate::auth::{OAuthProvider, OAuthTokens, OAuthUserInfo, ApiKeyConfig, OAuthConfig, OAuthProviderConfig};
+    pub use crate::auth::{
+        ApiKeyConfig, OAuthConfig, OAuthProvider, OAuthProviderConfig, OAuthTokens, OAuthUserInfo,
+    };
 
     #[cfg(feature = "websocket")]
     pub use crate::websocket::{
-        // Configuration
-        WebSocketConfig, RoomConfig,
-        // Connection handling
-        ConnectionId, WebSocketConnection,
-        // Room management
-        RoomManager, Room, RoomId, RoomMember,
-        // Messages
-        JoinRoomRequest, LeaveRoomRequest, BroadcastToRoom, ConnectionDisconnected,
+        BroadcastTarget,
+        BroadcastToRoom,
         // Broadcasting
-        Broadcaster, BroadcastTarget,
+        Broadcaster,
+        ConnectionDisconnected,
+        // Connection handling
+        ConnectionId,
+        // Messages
+        JoinRoomRequest,
+        LeaveRoomRequest,
+        Message as WsMessage,
+        Room,
+        RoomConfig,
+        RoomId,
+        // Room management
+        RoomManager,
+        RoomMember,
         // Re-exported axum types
-        WebSocket, WebSocketUpgrade, Message as WsMessage,
+        WebSocket,
+        // Configuration
+        WebSocketConfig,
+        WebSocketConnection,
+        WebSocketUpgrade,
     };
 
     #[cfg(feature = "session")]
     pub use crate::session::{
-        // Configuration
-        SessionConfig, SessionStorage, CsrfConfig,
-        // Typed session and extractors
-        TypedSession, AuthSession, SessionAuth, SessionData,
-        // Flash messages
-        FlashMessage, FlashMessages, FlashKind,
+        csrf_middleware,
+        AuthSession,
+        CsrfConfig,
+        CsrfLayer,
+        CsrfMiddleware,
         // CSRF protection
-        CsrfToken, CsrfLayer, CsrfMiddleware, csrf_middleware,
+        CsrfToken,
+        FlashKind,
+        // Flash messages
+        FlashMessage,
+        FlashMessages,
+        SessionAuth,
+        // Configuration
+        SessionConfig,
+        SessionData,
+        SessionStorage,
+        // Typed session and extractors
+        TypedSession,
     };
 
     // Re-export tower-sessions Session type for direct use
@@ -254,33 +279,60 @@ pub mod prelude {
     // HTMX support
     #[cfg(feature = "htmx")]
     pub use crate::htmx::{
-        // Extractors
-        HxBoosted, HxCurrentUrl, HxHistoryRestoreRequest, HxPrompt, HxRequest, HxTarget,
-        HxTrigger, HxTriggerName,
-        // Response headers
-        HxLocation, HxPushUrl, HxRedirect, HxRefresh, HxReplaceUrl, HxReselect,
-        HxResponseTrigger, HxReswap, HxRetarget, SwapOption,
-        // Vary responders
-        VaryHxRequest, VaryHxTarget, VaryHxTrigger, VaryHxTriggerName,
-        // Middleware
-        AutoVaryLayer, AutoVaryMiddleware,
-        // Custom types
-        HtmlFragment, HxTriggerEvents, OutOfBandSwap, TriggerTiming,
         // Helpers
-        fragment_or_full, is_boosted_request, is_htmx_request,
+        fragment_or_full,
+        is_boosted_request,
+        is_htmx_request,
+        // Middleware
+        AutoVaryLayer,
+        AutoVaryMiddleware,
+        // Custom types
+        HtmlFragment,
+        // Extractors
+        HxBoosted,
+        HxCurrentUrl,
         // Event types
         HxEvent,
+        HxHistoryRestoreRequest,
+        // Response headers
+        HxLocation,
+        HxPrompt,
+        HxPushUrl,
+        HxRedirect,
+        HxRefresh,
+        HxReplaceUrl,
+        HxRequest,
+        HxReselect,
+        HxResponseTrigger,
+        HxReswap,
+        HxRetarget,
+        HxTarget,
+        HxTrigger,
+        HxTriggerEvents,
+        HxTriggerName,
+        OutOfBandSwap,
+        SwapOption,
+        TriggerTiming,
+        // Vary responders
+        VaryHxRequest,
+        VaryHxTarget,
+        VaryHxTrigger,
+        VaryHxTriggerName,
     };
 
     // Template engine support
     #[cfg(feature = "askama")]
     pub use crate::templates::{
-        // Core types
-        TemplateContext, HtmlTemplate, RenderMode,
+        // Helpers
+        classes,
+        pluralize,
+        truncate,
+        HtmlTemplate,
+        RenderMode,
         // Re-export askama Template derive
         Template,
-        // Helpers
-        classes, pluralize, truncate,
+        // Core types
+        TemplateContext,
     };
 
     // Re-export axum Html for non-templated HTML responses
@@ -289,16 +341,25 @@ pub mod prelude {
     // Server-Sent Events support
     #[cfg(feature = "sse")]
     pub use crate::sse::{
+        htmx_close_event,
+        htmx_event,
+        htmx_json_event,
+        htmx_oob_event,
+        htmx_trigger,
+        BroadcastMessage,
+        BroadcastTarget as SseBroadcastTarget,
+        // Connection tracking (aliased to avoid conflict with websocket types)
+        ConnectionId as SseConnectionId,
+        // HTMX helpers
+        HtmxSwap,
+        // Broadcasting (BroadcastTarget aliased to avoid conflict with websocket)
+        SseBroadcaster,
         // Configuration
         SseConfig,
-        // Connection tracking (aliased to avoid conflict with websocket types)
-        ConnectionId as SseConnectionId, SseConnection,
+        SseConnection,
         // Event building
-        SseEventExt, TypedEvent,
-        // Broadcasting (BroadcastTarget aliased to avoid conflict with websocket)
-        SseBroadcaster, BroadcastMessage, BroadcastTarget as SseBroadcastTarget,
-        // HTMX helpers
-        HtmxSwap, htmx_event, htmx_close_event, htmx_json_event, htmx_oob_event, htmx_trigger,
+        SseEventExt,
+        TypedEvent,
     };
 
     // Re-export axum SSE types for direct use
@@ -331,8 +392,8 @@ pub mod prelude {
     pub use async_trait::async_trait;
 
     // Re-export error handling utilities
-    pub use thiserror::Error;
     pub use anyhow::{self, Context as AnyhowContext};
+    pub use thiserror::Error;
 
     // Re-export time utilities
     pub use chrono::{DateTime, Duration as ChronoDuration, NaiveDateTime, Utc};
