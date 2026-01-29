@@ -139,7 +139,7 @@ auth = ["dep:argon2"]                                      # Core: password hash
 oauth = ["auth", "dep:oauth2", "dep:openidconnect", "dep:base64"]  # OAuth/OIDC providers (requires auth)
 auth-full = ["auth", "oauth", "jwt", "cache", "database"]  # All auth features (excludes turso - mutually exclusive with database)
 
-full = ["http", "grpc", "websocket", "database", "cache", "events", "observability", "resilience", "otel-metrics", "governor", "openapi", "cedar-authz", "jwt", "auth", "session-memory", "session-redis", "htmx", "askama", "sse", "pagination-full"]
+full = ["http", "grpc", "websocket", "database", "cache", "events", "observability", "resilience", "otel-metrics", "governor", "openapi", "cedar-authz", "jwt", "auth", "session-memory", "session-redis", "htmx", "askama", "sse", "pagination-full", "handlers"]
 tonic-health = ["dep:tonic-health"]
 tonic-reflection = ["dep:tonic-reflection"]
 tower-resilience-circuitbreaker = ["dep:tower-resilience-circuitbreaker"]
@@ -172,6 +172,9 @@ pagination-full = ["pagination", "pagination-axum", "pagination-sqlx"]
 
 # Repository traits for database CRUD abstractions
 repository = []
+
+# Handler traits for REST CRUD patterns
+handlers = ["repository"]
 
 # Basic examples
 [[example]]

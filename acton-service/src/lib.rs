@@ -110,6 +110,9 @@ pub mod pagination;
 #[cfg(feature = "repository")]
 pub mod repository;
 
+#[cfg(feature = "handlers")]
+pub mod handlers;
+
 /// Internal agent-based components
 ///
 /// Connection pool management is handled internally by agents. Users don't
@@ -473,5 +476,13 @@ pub mod prelude {
     pub use crate::repository::{
         OrderDirection, RelationLoader, Repository, RepositoryError, RepositoryErrorKind,
         RepositoryOperation, RepositoryResult, SoftDeleteRepository,
+    };
+
+    // Handler traits for REST CRUD patterns
+    #[cfg(feature = "handlers")]
+    pub use crate::handlers::{
+        ApiError, ApiErrorKind, ApiOperation, CollectionHandler, ItemResponse, ListQuery,
+        ListResponse, PaginationMeta, ResponseMeta, SoftDeleteHandler, SortOrder,
+        DEFAULT_PER_PAGE, MAX_PER_PAGE,
     };
 }
