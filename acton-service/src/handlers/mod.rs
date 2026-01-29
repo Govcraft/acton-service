@@ -39,8 +39,8 @@
 //!         )))
 //!     }
 //!
-//!     async fn get(&self, id: UserId) -> Result<ItemResponse<User>, ApiError> {
-//!         let user = self.repository.find_by_id(&id).await?
+//!     async fn get(&self, id: &UserId) -> Result<ItemResponse<User>, ApiError> {
+//!         let user = self.repository.find_by_id(id).await?
 //!             .ok_or_else(|| ApiError::not_found("User", id.to_string()))?;
 //!         Ok(ItemResponse::new(user))
 //!     }
@@ -50,13 +50,13 @@
 //!         Ok(ItemResponse::new(user))
 //!     }
 //!
-//!     async fn update(&self, id: UserId, dto: UpdateUser) -> Result<ItemResponse<User>, ApiError> {
-//!         let user = self.repository.update(&id, dto).await?;
+//!     async fn update(&self, id: &UserId, dto: UpdateUser) -> Result<ItemResponse<User>, ApiError> {
+//!         let user = self.repository.update(id, dto).await?;
 //!         Ok(ItemResponse::new(user))
 //!     }
 //!
-//!     async fn delete(&self, id: UserId) -> Result<(), ApiError> {
-//!         self.repository.delete(&id).await?;
+//!     async fn delete(&self, id: &UserId) -> Result<(), ApiError> {
+//!         self.repository.delete(id).await?;
 //!         Ok(())
 //!     }
 //! }
@@ -82,7 +82,7 @@
 //!     State(handler): State<UserHandler>,
 //!     Path(id): Path<UserId>,
 //! ) -> Result<impl IntoResponse, ApiError> {
-//!     handler.get(id).await
+//!     handler.get(&id).await
 //! }
 //! ```
 

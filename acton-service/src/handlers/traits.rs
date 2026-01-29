@@ -30,8 +30,8 @@
 //!         )))
 //!     }
 //!
-//!     async fn get(&self, id: UserId) -> Result<ItemResponse<User>, ApiError> {
-//!         let user = self.repository.find_by_id(&id).await?
+//!     async fn get(&self, id: &UserId) -> Result<ItemResponse<User>, ApiError> {
+//!         let user = self.repository.find_by_id(id).await?
 //!             .ok_or_else(|| ApiError::not_found("User", id.to_string()))?;
 //!         Ok(ItemResponse::new(user))
 //!     }
@@ -72,7 +72,7 @@ use super::response::{ItemResponse, ListResponse};
 ///         todo!()
 ///     }
 ///
-///     async fn get(&self, id: ProductId) -> Result<ItemResponse<Product>, ApiError> {
+///     async fn get(&self, id: &ProductId) -> Result<ItemResponse<Product>, ApiError> {
 ///         // Implementation
 ///         todo!()
 ///     }
@@ -82,12 +82,12 @@ use super::response::{ItemResponse, ListResponse};
 ///         todo!()
 ///     }
 ///
-///     async fn update(&self, id: ProductId, dto: UpdateProduct) -> Result<ItemResponse<Product>, ApiError> {
+///     async fn update(&self, id: &ProductId, dto: UpdateProduct) -> Result<ItemResponse<Product>, ApiError> {
 ///         // Implementation
 ///         todo!()
 ///     }
 ///
-///     async fn delete(&self, id: ProductId) -> Result<(), ApiError> {
+///     async fn delete(&self, id: &ProductId) -> Result<(), ApiError> {
 ///         // Implementation
 ///         todo!()
 ///     }
@@ -134,10 +134,10 @@ pub trait CollectionHandler<Id, Entity, CreateDto, UpdateDto>: Send + Sync {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let user = handler.get(user_id).await?;
+    /// let user = handler.get(&user_id).await?;
     /// println!("Found user: {}", user.data.name);
     /// ```
-    fn get(&self, id: Id) -> impl Future<Output = Result<ItemResponse<Entity>, ApiError>> + Send;
+    fn get(&self, id: &Id) -> impl Future<Output = Result<ItemResponse<Entity>, ApiError>> + Send;
 
     /// Create a new entity
     ///
@@ -186,12 +186,12 @@ pub trait CollectionHandler<Id, Entity, CreateDto, UpdateDto>: Send + Sync {
     ///
     /// ```rust,ignore
     /// let dto = UpdateUser { name: Some("Alice Smith".to_string()), email: None };
-    /// let response = handler.update(user_id, dto).await?;
+    /// let response = handler.update(&user_id, dto).await?;
     /// println!("Updated user: {}", response.data.name);
     /// ```
     fn update(
         &self,
-        id: Id,
+        id: &Id,
         dto: UpdateDto,
     ) -> impl Future<Output = Result<ItemResponse<Entity>, ApiError>> + Send;
 
@@ -212,10 +212,10 @@ pub trait CollectionHandler<Id, Entity, CreateDto, UpdateDto>: Send + Sync {
     /// # Example
     ///
     /// ```rust,ignore
-    /// handler.delete(user_id).await?;
+    /// handler.delete(&user_id).await?;
     /// println!("User deleted");
     /// ```
-    fn delete(&self, id: Id) -> impl Future<Output = Result<(), ApiError>> + Send;
+    fn delete(&self, id: &Id) -> impl Future<Output = Result<(), ApiError>> + Send;
 }
 
 /// Extended handler trait for soft delete support
@@ -233,16 +233,16 @@ pub trait CollectionHandler<Id, Entity, CreateDto, UpdateDto>: Send + Sync {
 /// use acton_service::handlers::{SoftDeleteHandler, CollectionHandler};
 ///
 /// impl SoftDeleteHandler<UserId, User, CreateUser, UpdateUser> for UserHandler {
-///     async fn soft_delete(&self, id: UserId) -> Result<(), ApiError> {
+///     async fn soft_delete(&self, id: &UserId) -> Result<(), ApiError> {
 ///         // Mark user as deleted
-///         self.repository.soft_delete(&id).await?;
+///         self.repository.soft_delete(id).await?;
 ///         Ok(())
 ///     }
 ///
-///     async fn restore(&self, id: UserId) -> Result<ItemResponse<User>, ApiError> {
+///     async fn restore(&self, id: &UserId) -> Result<ItemResponse<User>, ApiError> {
 ///         // Restore soft-deleted user
-///         self.repository.restore(&id).await?;
-///         let user = self.repository.find_by_id(&id).await?
+///         self.repository.restore(id).await?;
+///         let user = self.repository.find_by_id(id).await?
 ///             .ok_or_else(|| ApiError::not_found("User", id.to_string()))?;
 ///         Ok(ItemResponse::new(user))
 ///     }
@@ -269,10 +269,10 @@ pub trait SoftDeleteHandler<Id, Entity, CreateDto, UpdateDto>:
     /// # Example
     ///
     /// ```rust,ignore
-    /// handler.soft_delete(user_id).await?;
+    /// handler.soft_delete(&user_id).await?;
     /// // User is now marked as deleted but still in the database
     /// ```
-    fn soft_delete(&self, id: Id) -> impl Future<Output = Result<(), ApiError>> + Send;
+    fn soft_delete(&self, id: &Id) -> impl Future<Output = Result<(), ApiError>> + Send;
 
     /// Restore a soft-deleted entity
     ///
@@ -287,10 +287,10 @@ pub trait SoftDeleteHandler<Id, Entity, CreateDto, UpdateDto>:
     /// # Example
     ///
     /// ```rust,ignore
-    /// let response = handler.restore(user_id).await?;
+    /// let response = handler.restore(&user_id).await?;
     /// println!("Restored user: {}", response.data.name);
     /// ```
-    fn restore(&self, id: Id) -> impl Future<Output = Result<ItemResponse<Entity>, ApiError>> + Send;
+    fn restore(&self, id: &Id) -> impl Future<Output = Result<ItemResponse<Entity>, ApiError>> + Send;
 
     /// List all entities including soft-deleted ones
     ///
@@ -354,9 +354,9 @@ mod tests {
             Ok(ListResponse::new(data, pagination))
         }
 
-        async fn get(&self, id: MockId) -> Result<ItemResponse<MockEntity>, ApiError> {
+        async fn get(&self, id: &MockId) -> Result<ItemResponse<MockEntity>, ApiError> {
             Ok(ItemResponse::new(MockEntity {
-                id: id.0,
+                id: id.0.clone(),
                 name: "Test".to_string(),
             }))
         }
@@ -370,28 +370,28 @@ mod tests {
 
         async fn update(
             &self,
-            id: MockId,
+            id: &MockId,
             dto: MockUpdate,
         ) -> Result<ItemResponse<MockEntity>, ApiError> {
             Ok(ItemResponse::new(MockEntity {
-                id: id.0,
+                id: id.0.clone(),
                 name: dto.name.unwrap_or_else(|| "unchanged".to_string()),
             }))
         }
 
-        async fn delete(&self, _id: MockId) -> Result<(), ApiError> {
+        async fn delete(&self, _id: &MockId) -> Result<(), ApiError> {
             Ok(())
         }
     }
 
     impl SoftDeleteHandler<MockId, MockEntity, MockCreate, MockUpdate> for MockHandler {
-        async fn soft_delete(&self, _id: MockId) -> Result<(), ApiError> {
+        async fn soft_delete(&self, _id: &MockId) -> Result<(), ApiError> {
             Ok(())
         }
 
-        async fn restore(&self, id: MockId) -> Result<ItemResponse<MockEntity>, ApiError> {
+        async fn restore(&self, id: &MockId) -> Result<ItemResponse<MockEntity>, ApiError> {
             Ok(ItemResponse::new(MockEntity {
-                id: id.0,
+                id: id.0.clone(),
                 name: "Restored".to_string(),
             }))
         }
@@ -418,7 +418,8 @@ mod tests {
     #[tokio::test]
     async fn test_mock_handler_get() {
         let handler = MockHandler;
-        let result = handler.get(MockId("123".to_string())).await;
+        let id = MockId("123".to_string());
+        let result = handler.get(&id).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap().data.id, "123");
     }
@@ -437,10 +438,11 @@ mod tests {
     #[tokio::test]
     async fn test_mock_handler_update() {
         let handler = MockHandler;
+        let id = MockId("123".to_string());
         let dto = MockUpdate {
             name: Some("Updated".to_string()),
         };
-        let result = handler.update(MockId("123".to_string()), dto).await;
+        let result = handler.update(&id, dto).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap().data.name, "Updated");
     }
@@ -448,21 +450,24 @@ mod tests {
     #[tokio::test]
     async fn test_mock_handler_delete() {
         let handler = MockHandler;
-        let result = handler.delete(MockId("123".to_string())).await;
+        let id = MockId("123".to_string());
+        let result = handler.delete(&id).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_mock_soft_delete_handler() {
         let handler = MockHandler;
-        let result = handler.soft_delete(MockId("123".to_string())).await;
+        let id = MockId("123".to_string());
+        let result = handler.soft_delete(&id).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_mock_restore_handler() {
         let handler = MockHandler;
-        let result = handler.restore(MockId("123".to_string())).await;
+        let id = MockId("123".to_string());
+        let result = handler.restore(&id).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap().data.name, "Restored");
     }
