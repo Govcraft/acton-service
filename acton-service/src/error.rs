@@ -782,6 +782,39 @@ impl From<axum::http::Error> for Error {
     }
 }
 
+// Conversion from DatabaseError to RepositoryError
+#[cfg(all(feature = "repository", any(feature = "database", feature = "turso")))]
+impl From<DatabaseError> for crate::repository::RepositoryError {
+    fn from(err: DatabaseError) -> Self {
+        use crate::repository::{RepositoryErrorKind, RepositoryOperation};
+
+        let kind = match err.kind {
+            DatabaseErrorKind::NotFound => RepositoryErrorKind::NotFound,
+            DatabaseErrorKind::ConstraintViolation => RepositoryErrorKind::ConstraintViolation,
+            DatabaseErrorKind::ConnectionFailed => RepositoryErrorKind::ConnectionFailed,
+            DatabaseErrorKind::Timeout => RepositoryErrorKind::Timeout,
+            DatabaseErrorKind::PoolExhausted => RepositoryErrorKind::ConnectionFailed,
+            _ => RepositoryErrorKind::DatabaseError,
+        };
+
+        let operation = match err.operation {
+            DatabaseOperation::Query => RepositoryOperation::FindAll,
+            DatabaseOperation::Insert => RepositoryOperation::Create,
+            DatabaseOperation::Update => RepositoryOperation::Update,
+            DatabaseOperation::Delete => RepositoryOperation::Delete,
+            _ => RepositoryOperation::FindById,
+        };
+
+        Self {
+            operation,
+            kind,
+            message: err.message,
+            entity_type: None,
+            entity_id: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -170,6 +170,9 @@ pagination-axum = ["pagination", "dep:paginator-axum"]
 pagination-sqlx = ["pagination", "dep:paginator-sqlx"]
 pagination-full = ["pagination", "pagination-axum", "pagination-sqlx"]
 
+# Repository traits for database CRUD abstractions
+repository = []
+
 # Basic examples
 [[example]]
 name = "simple-api"

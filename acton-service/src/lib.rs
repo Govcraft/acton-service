@@ -107,6 +107,9 @@ pub mod sse;
 #[cfg(feature = "pagination")]
 pub mod pagination;
 
+#[cfg(feature = "repository")]
+pub mod repository;
+
 /// Internal agent-based components
 ///
 /// Connection pool management is handled internally by agents. Users don't
@@ -455,5 +458,20 @@ pub mod prelude {
     #[cfg(feature = "pagination-sqlx")]
     pub use crate::pagination::{
         validate_field_name, PaginateQuery, PaginatedQuery, QueryBuilderExt,
+    };
+
+    // Repository traits for database CRUD abstractions
+    // Note: FilterCondition, FilterOperator, FilterValue, and Pagination are re-exported
+    // only when pagination feature is disabled to avoid naming conflicts.
+    // When using both features, import these types directly from crate::repository.
+    #[cfg(all(feature = "repository", not(feature = "pagination")))]
+    pub use crate::repository::{
+        FilterCondition, FilterOperator, FilterValue, Pagination,
+    };
+
+    #[cfg(feature = "repository")]
+    pub use crate::repository::{
+        OrderDirection, RelationLoader, Repository, RepositoryError, RepositoryErrorKind,
+        RepositoryOperation, RepositoryResult, SoftDeleteRepository,
     };
 }
