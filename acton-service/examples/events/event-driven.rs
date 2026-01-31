@@ -96,8 +96,6 @@
 //! ```
 
 use acton_service::prelude::*;
-use axum::Json;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
@@ -196,11 +194,11 @@ struct CreateOrderResponse {
 /// 2. Publish event to event bus
 /// 3. Return 202 Accepted (async processing)
 async fn create_order_handler(
-    axum::extract::State(event_bus): axum::extract::State<EventBus>,
+    State(event_bus): State<EventBus>,
     Json(req): Json<CreateOrderRequest>,
 ) -> std::result::Result<
-    (axum::http::StatusCode, Json<CreateOrderResponse>),
-    (axum::http::StatusCode, String),
+    (StatusCode, Json<CreateOrderResponse>),
+    (StatusCode, String),
 > {
     let order_id = uuid::Uuid::new_v4().to_string();
 
@@ -214,18 +212,18 @@ async fn create_order_handler(
 
     // Publish to event bus (in production: NATS JetStream)
     let payload = serde_json::to_vec(&event)
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     event_bus
         .publish("orders.created", payload)
         .await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     tracing::info!(order_id = %order_id, "Order created via HTTP, event published");
 
     // Return immediately - processing happens asynchronously
     Ok((
-        axum::http::StatusCode::ACCEPTED,
+        StatusCode::ACCEPTED,
         Json(CreateOrderResponse {
             order_id,
             status: "accepted".to_string(),
@@ -402,7 +400,7 @@ async fn main() -> Result<()> {
             .await
             .expect("Failed to bind gRPC listener");
 
-        axum::serve(listener, grpc_app)
+        serve(listener, grpc_app)
             .await
             .expect("gRPC server failed");
     });
@@ -427,9 +425,9 @@ async fn main() -> Result<()> {
                 let event_bus_for_handler = event_bus_clone.clone();
                 router.route(
                     "/orders",
-                    axum::routing::post(move |body| {
+                    post(move |body| {
                         let eb = event_bus_for_handler.clone();
-                        async move { create_order_handler(axum::extract::State(eb), body).await }
+                        async move { create_order_handler(State(eb), body).await }
                     }),
                 )
             })

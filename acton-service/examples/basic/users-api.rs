@@ -24,8 +24,6 @@
 //!   curl http://localhost:8080/api/v3/users/550e8400-e29b-41d4-a716-446655440000
 
 use acton_service::prelude::*;
-use axum::{extract::Path, Json};
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct UserV1 {

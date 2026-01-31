@@ -381,8 +381,7 @@ pub mod prelude {
         TemplateContext,
     };
 
-    // Re-export axum Html for non-templated HTML responses
-    pub use axum::response::Html;
+    // Note: Html is re-exported in the main axum block below
 
     // Server-Sent Events support
     #[cfg(feature = "sse")]
@@ -448,13 +447,69 @@ pub mod prelude {
     #[cfg(feature = "account-handlers")]
     pub use crate::accounts::handlers::account_routes;
 
-    pub use axum::{
-        extract::{Form, Path, Query, State},
-        http::{HeaderMap, HeaderValue, StatusCode},
-        response::{IntoResponse, Json, Response},
-        routing::{delete, get, patch, post, put},
-        Extension, Router,
+    // =========================================================================
+    // Axum Re-exports
+    // =========================================================================
+    // Comprehensive axum re-exports so developers don't need axum as a direct
+    // dependency. If you need types not in the prelude, you can still add axum
+    // to your Cargo.toml.
+
+    // Core types
+    pub use axum::{serve, Extension, Router};
+
+    // Extractors - common types for handling request data
+    pub use axum::extract::{
+        ConnectInfo, // Socket address of client
+        Form,        // Form data extraction
+        MatchedPath, // The matched route path
+        OriginalUri, // Original request URI before routing
+        Path,        // URL path parameter extraction
+        Query,       // Query string parameter extraction
+        RawQuery,    // Raw query string
+        State,       // Application state extraction
     };
+
+    // Request type - aliased to avoid conflict with tonic::Request when gRPC is enabled
+    pub use axum::extract::Request as AxumRequest;
+
+    // HTTP types - headers, status codes, and related types
+    pub use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
+
+    // Response types - for building HTTP responses
+    pub use axum::response::{
+        AppendHeaders, // Append headers to response
+        ErrorResponse, // Error response type
+        Html,          // HTML response wrapper
+        IntoResponse,  // Trait for converting types to responses
+        Json,          // JSON response wrapper
+        Redirect,      // Redirect responses
+        Response,      // HTTP response type
+    };
+
+    // Response building types - for complex multi-part responses (useful for HTMX)
+    pub use axum::response::{IntoResponseParts, ResponseParts};
+
+    // Routing - route handlers and method routing
+    pub use axum::routing::{
+        any,          // Match any HTTP method
+        delete,       // DELETE method handler
+        get,          // GET method handler
+        on,           // Match specific method(s)
+        patch,        // PATCH method handler
+        post,         // POST method handler
+        put,          // PUT method handler
+        MethodRouter, // Type for building method-specific routes
+    };
+
+    // Middleware utilities - for writing custom middleware
+    pub use axum::middleware::{from_fn, from_fn_with_state, Next};
+
+    // Body types - for advanced request/response body handling
+    pub use axum::body::{Body, Bytes};
+
+    // Request parts - for custom extractors (FromRequestParts implementations)
+    pub use axum::extract::FromRequestParts;
+    pub use axum::http::request::Parts as RequestParts;
 
     pub use serde::{Deserialize, Serialize};
 

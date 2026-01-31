@@ -71,7 +71,6 @@
 //! ```
 
 use acton_service::prelude::*;
-use axum::extract::Query as AxumQuery;
 use sqlx::{FromRow, PgPool};
 
 // ============================================================================
@@ -237,7 +236,7 @@ async fn get_db(state: &AppState) -> HandlerResult<PgPool> {
 #[instrument(skip(state))]
 async fn list_products(
     State(state): State<AppState>,
-    AxumQuery(query): AxumQuery<ListProductsQuery>,
+    Query(query): Query<ListProductsQuery>,
 ) -> HandlerResult<Json<Vec<Product>>> {
     let pool = get_db(&state).await?;
 

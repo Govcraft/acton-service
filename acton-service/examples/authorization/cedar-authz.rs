@@ -22,8 +22,6 @@
 
 use acton_service::middleware::cedar::CedarAuthz;
 use acton_service::prelude::*;
-use axum::{extract::Path, Json};
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Document {

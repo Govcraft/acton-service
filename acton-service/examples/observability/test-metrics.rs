@@ -6,7 +6,7 @@
 use acton_service::config::Config;
 use acton_service::middleware::metrics::{create_metrics_layer, MetricsConfig};
 use acton_service::observability::{init_tracing, shutdown_tracing};
-use axum::{routing::get, Router};
+use acton_service::prelude::{get, serve, Router};
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 use std::time::Duration;
@@ -80,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("\n✓ Server listening on {}", addr);
 
         tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
+            serve(listener, app).await.unwrap();
         });
 
         // Make test requests

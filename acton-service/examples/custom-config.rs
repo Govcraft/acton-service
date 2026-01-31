@@ -17,8 +17,6 @@
 //!   curl http://localhost:8080/api/v1/config-info
 
 use acton_service::prelude::*;
-use axum::{extract::State, Json};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Custom configuration that extends the framework config

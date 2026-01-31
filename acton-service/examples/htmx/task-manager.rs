@@ -347,7 +347,7 @@ async fn login(
     if username.is_empty() {
         let _ =
             FlashMessages::push(auth.session(), FlashMessage::error("Username is required")).await;
-        return axum::response::Redirect::to("/login").into_response();
+        return Redirect::to("/login").into_response();
     }
 
     // In a real app, you'd validate credentials here
@@ -363,7 +363,7 @@ async fn login(
     )
     .await;
 
-    axum::response::Redirect::to("/").into_response()
+    Redirect::to("/").into_response()
 }
 
 /// Handle logout.
@@ -379,7 +379,7 @@ async fn logout(mut auth: TypedSession<AuthSession>) -> impl IntoResponse {
         tracing::error!("Failed to save session: {}", e);
     }
 
-    axum::response::Redirect::to("/").into_response()
+    Redirect::to("/").into_response()
 }
 
 // ============================================================================

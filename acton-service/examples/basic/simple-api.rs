@@ -17,8 +17,6 @@
 //!   curl http://localhost:8080/api/v2/hello
 
 use acton_service::prelude::*;
-use axum::Json;
-use serde::Serialize;
 
 #[derive(Serialize)]
 struct Message {

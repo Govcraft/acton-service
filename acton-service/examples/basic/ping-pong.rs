@@ -39,8 +39,6 @@
 //!   grpcurl -plaintext -d '{"message":"Direct"}' localhost:9090 ping.v1.PingService/Ping
 
 use acton_service::prelude::*;
-use axum::Json;
-use serde::{Deserialize, Serialize};
 use tonic::{Request, Response, Status};
 
 // Include generated protobuf code
@@ -99,7 +97,7 @@ struct HttpPongResponse {
 
 async fn http_ping_handler(
     Json(req): Json<HttpPingRequest>,
-) -> std::result::Result<Json<HttpPongResponse>, (axum::http::StatusCode, String)> {
+) -> std::result::Result<Json<HttpPongResponse>, (StatusCode, String)> {
     tracing::info!(message = %req.message, "HTTP: Forwarding ping to gRPC backend");
 
     // Connect to gRPC backend
@@ -107,7 +105,7 @@ async fn http_ping_handler(
         .await
         .map_err(|e| {
             (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::INTERNAL_SERVER_ERROR,
                 format!("gRPC connection failed: {}", e),
             )
         })?;
@@ -118,7 +116,7 @@ async fn http_ping_handler(
 
     let response = client.ping(grpc_request).await.map_err(|e| {
         (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::INTERNAL_SERVER_ERROR,
             format!("gRPC call failed: {}", e),
         )
     })?;
@@ -163,7 +161,7 @@ async fn main() -> Result<()> {
             .await
             .expect("Failed to bind gRPC listener");
 
-        axum::serve(listener, grpc_app)
+        serve(listener, grpc_app)
             .await
             .expect("gRPC server failed");
     });
