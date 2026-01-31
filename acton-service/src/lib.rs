@@ -382,7 +382,7 @@ pub mod prelude {
     pub use crate::agents::{AggregatedHealthResponse, HealthStatus};
 
     pub use axum::{
-        extract::{Path, Query, State},
+        extract::{Form, Path, Query, State},
         http::{HeaderMap, HeaderValue, StatusCode},
         response::{IntoResponse, Json, Response},
         routing::{delete, get, patch, post, put},
