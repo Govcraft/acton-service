@@ -48,3 +48,6 @@ pub(crate) use pool::{NatsPoolAgent, SharedNatsClient};
 
 #[cfg(feature = "turso")]
 pub(crate) use pool::{TursoDbAgent, SharedTursoDb};
+
+#[cfg(feature = "surrealdb")]
+pub(crate) use pool::{SurrealDbAgent, SharedSurrealDb};

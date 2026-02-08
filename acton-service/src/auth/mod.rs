@@ -69,6 +69,9 @@ pub use tokens::refresh::PgRefreshStorage;
 #[cfg(feature = "turso")]
 pub use tokens::refresh::TursoRefreshStorage;
 
+#[cfg(feature = "surrealdb")]
+pub use tokens::refresh::SurrealDbRefreshStorage;
+
 #[cfg(feature = "jwt")]
 pub use tokens::jwt_generator::JwtGenerator;
 
@@ -83,6 +86,9 @@ pub use api_keys::PgApiKeyStorage;
 
 #[cfg(feature = "turso")]
 pub use api_keys::TursoApiKeyStorage;
+
+#[cfg(feature = "surrealdb")]
+pub use api_keys::SurrealDbApiKeyStorage;
 
 // OAuth exports (requires oauth feature)
 #[cfg(feature = "oauth")]

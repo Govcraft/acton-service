@@ -118,6 +118,36 @@ impl TursoDbHealth {
     }
 }
 
+/// SurrealDB database health status
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg(feature = "surrealdb")]
+pub struct SurrealDbHealth {
+    /// Connection URL (sanitized, no credentials)
+    pub url: String,
+
+    /// SurrealDB namespace
+    pub namespace: String,
+
+    /// SurrealDB database
+    pub database: String,
+
+    /// Whether the database is connected
+    pub connected: bool,
+}
+
+#[cfg(feature = "surrealdb")]
+impl SurrealDbHealth {
+    /// Create health status from SurrealDB config (when connected)
+    pub fn from_config(config: &crate::config::SurrealDbConfig, connected: bool) -> Self {
+        Self {
+            url: crate::surrealdb_backend::sanitize_url(&config.url),
+            namespace: config.namespace.clone(),
+            database: config.database.clone(),
+            connected,
+        }
+    }
+}
+
 /// NATS client health status
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg(feature = "events")]
@@ -167,6 +197,11 @@ pub struct PoolHealthSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turso: Option<TursoDbHealth>,
 
+    /// SurrealDB database health
+    #[cfg(feature = "surrealdb")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surrealdb: Option<SurrealDbHealth>,
+
     /// Overall healthy status
     pub healthy: bool,
 }
@@ -183,6 +218,8 @@ impl PoolHealthSummary {
             nats: None,
             #[cfg(feature = "turso")]
             turso: None,
+            #[cfg(feature = "surrealdb")]
+            surrealdb: None,
             healthy: true,
         }
     }
@@ -217,7 +254,14 @@ impl PoolHealthSummary {
             { true }
         };
 
-        database_healthy && cache_healthy && events_healthy && turso_healthy
+        let surrealdb_healthy = {
+            #[cfg(feature = "surrealdb")]
+            { self.surrealdb.as_ref().is_none_or(|s| s.connected) }
+            #[cfg(not(feature = "surrealdb"))]
+            { true }
+        };
+
+        database_healthy && cache_healthy && events_healthy && turso_healthy && surrealdb_healthy
     }
 }
 

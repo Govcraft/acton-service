@@ -658,6 +658,131 @@ pub mod turso_storage {
 #[cfg(feature = "turso")]
 pub use turso_storage::TursoRefreshStorage;
 
+/// SurrealDB-based refresh token storage
+#[cfg(feature = "surrealdb")]
+pub mod surrealdb_storage {
+    use super::*;
+    use std::sync::Arc;
+    use crate::surrealdb_backend::SurrealClient;
+
+    /// SurrealDB-backed refresh token storage
+    #[derive(Clone)]
+    pub struct SurrealDbRefreshStorage {
+        client: Arc<SurrealClient>,
+    }
+
+    impl SurrealDbRefreshStorage {
+        /// Create a new SurrealDB refresh token storage
+        pub fn new(client: Arc<SurrealClient>) -> Self {
+            Self { client }
+        }
+    }
+
+    #[async_trait]
+    impl RefreshTokenStorage for SurrealDbRefreshStorage {
+        async fn store(
+            &self,
+            token_id: &str,
+            user_id: &str,
+            family_id: &str,
+            expires_at: DateTime<Utc>,
+            metadata: &RefreshTokenMetadata,
+        ) -> Result<(), Error> {
+            let data = RefreshTokenData {
+                token_id: token_id.to_string(),
+                user_id: user_id.to_string(),
+                family_id: family_id.to_string(),
+                is_revoked: false,
+                expires_at,
+                metadata: metadata.clone(),
+            };
+
+            self.client
+                .query("CREATE refresh_tokens CONTENT $data")
+                .bind(("data", data))
+                .await
+                .map_err(|e| Error::Internal(format!("Failed to store refresh token: {}", e)))?;
+
+            Ok(())
+        }
+
+        async fn get(&self, token_id: &str) -> Result<Option<RefreshTokenData>, Error> {
+            let mut result = self.client
+                .query("SELECT * FROM refresh_tokens WHERE token_id = $token_id AND expires_at > time::now() LIMIT 1")
+                .bind(("token_id", token_id.to_string()))
+                .await
+                .map_err(|e| Error::Internal(format!("Failed to get refresh token: {}", e)))?;
+
+            let data: Option<RefreshTokenData> = result.take(0)
+                .map_err(|e| Error::Internal(format!("Failed to parse refresh token: {}", e)))?;
+
+            Ok(data)
+        }
+
+        async fn revoke(&self, token_id: &str) -> Result<(), Error> {
+            self.client
+                .query("UPDATE refresh_tokens SET is_revoked = true WHERE token_id = $token_id")
+                .bind(("token_id", token_id.to_string()))
+                .await
+                .map_err(|e| Error::Internal(format!("Failed to revoke token: {}", e)))?;
+
+            Ok(())
+        }
+
+        async fn revoke_family(&self, family_id: &str) -> Result<u64, Error> {
+            let mut result = self.client
+                .query("UPDATE refresh_tokens SET is_revoked = true WHERE family_id = $family_id")
+                .bind(("family_id", family_id.to_string()))
+                .await
+                .map_err(|e| Error::Internal(format!("Failed to revoke family: {}", e)))?;
+
+            // SurrealDB returns updated records; count them
+            let updated: Vec<RefreshTokenData> = result.take(0).unwrap_or_default();
+            Ok(updated.len() as u64)
+        }
+
+        async fn revoke_all_for_user(&self, user_id: &str) -> Result<u64, Error> {
+            let mut result = self.client
+                .query("UPDATE refresh_tokens SET is_revoked = true WHERE user_id = $user_id")
+                .bind(("user_id", user_id.to_string()))
+                .await
+                .map_err(|e| Error::Internal(format!("Failed to revoke user tokens: {}", e)))?;
+
+            let updated: Vec<RefreshTokenData> = result.take(0).unwrap_or_default();
+            Ok(updated.len() as u64)
+        }
+
+        async fn rotate(
+            &self,
+            old_token_id: &str,
+            new_token_id: &str,
+            user_id: &str,
+            family_id: &str,
+            expires_at: DateTime<Utc>,
+            metadata: &RefreshTokenMetadata,
+        ) -> Result<(), Error> {
+            // Revoke old and create new
+            self.revoke(old_token_id).await?;
+            self.store(new_token_id, user_id, family_id, expires_at, metadata).await?;
+
+            Ok(())
+        }
+
+        async fn cleanup_expired(&self) -> Result<u64, Error> {
+            let mut result = self.client
+                .query("DELETE FROM refresh_tokens WHERE expires_at < time::now()")
+                .await
+                .map_err(|e| Error::Internal(format!("Failed to cleanup expired tokens: {}", e)))?;
+
+            let deleted: Vec<RefreshTokenData> = result.take(0).unwrap_or_default();
+            Ok(deleted.len() as u64)
+        }
+    }
+}
+
+#[cfg(feature = "surrealdb")]
+pub use surrealdb_storage::SurrealDbRefreshStorage;
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -15,7 +15,7 @@ use thiserror::Error;
 
 /// Database operation being performed when the error occurred
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg(any(feature = "database", feature = "turso"))]
+#[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
 pub enum DatabaseOperation {
     /// Establishing a database connection
     Connect,
@@ -37,7 +37,7 @@ pub enum DatabaseOperation {
     PoolAcquire,
 }
 
-#[cfg(any(feature = "database", feature = "turso"))]
+#[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
 impl fmt::Display for DatabaseOperation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -56,7 +56,7 @@ impl fmt::Display for DatabaseOperation {
 
 /// Category of database error
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg(any(feature = "database", feature = "turso"))]
+#[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
 pub enum DatabaseErrorKind {
     /// Failed to establish connection
     ConnectionFailed,
@@ -84,7 +84,7 @@ pub enum DatabaseErrorKind {
     Other,
 }
 
-#[cfg(any(feature = "database", feature = "turso"))]
+#[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
 impl fmt::Display for DatabaseErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -106,7 +106,7 @@ impl fmt::Display for DatabaseErrorKind {
 
 /// Structured database error with operation context
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg(any(feature = "database", feature = "turso"))]
+#[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
 pub struct DatabaseError {
     /// The operation being performed when the error occurred
     pub operation: DatabaseOperation,
@@ -118,7 +118,7 @@ pub struct DatabaseError {
     pub context: Option<String>,
 }
 
-#[cfg(any(feature = "database", feature = "turso"))]
+#[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
 impl DatabaseError {
     /// Create a new database error
     pub fn new(
@@ -227,7 +227,7 @@ impl DatabaseError {
     }
 }
 
-#[cfg(any(feature = "database", feature = "turso"))]
+#[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
 impl fmt::Display for DatabaseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -242,11 +242,11 @@ impl fmt::Display for DatabaseError {
     }
 }
 
-#[cfg(any(feature = "database", feature = "turso"))]
+#[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
 impl std::error::Error for DatabaseError {}
 
 /// Sanitize a database URL by removing credentials
-#[cfg(any(feature = "database", feature = "turso"))]
+#[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
 pub fn sanitize_url(url: &str) -> String {
     // Handle standard database URLs like postgres://user:pass@host/db
     if let Some(at_pos) = url.find('@') {
@@ -277,7 +277,7 @@ pub enum Error {
     Config(Box<figment::Error>),
 
     /// Structured database error with operation context
-    #[cfg(any(feature = "database", feature = "turso"))]
+    #[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
     #[error("{0}")]
     Database(DatabaseError),
 
@@ -413,7 +413,7 @@ impl IntoResponse for Error {
                 ),
             ),
 
-            #[cfg(any(feature = "database", feature = "turso"))]
+            #[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
             Error::Database(ref e) => {
                 // Log with structured context
                 tracing::error!(
@@ -716,7 +716,7 @@ impl From<sqlx::Error> for Error {
 }
 
 // Conversion from DatabaseError to Error
-#[cfg(any(feature = "database", feature = "turso"))]
+#[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
 impl From<DatabaseError> for Error {
     fn from(err: DatabaseError) -> Self {
         Error::Database(err)
@@ -769,6 +769,44 @@ impl From<libsql::Error> for Error {
     }
 }
 
+// Conversion from surrealdb::Error to DatabaseError
+#[cfg(feature = "surrealdb")]
+impl From<surrealdb::Error> for DatabaseError {
+    fn from(err: surrealdb::Error) -> Self {
+        let msg = err.to_string();
+
+        let (kind, operation) = if msg.contains("already exists")
+            || msg.contains("unique")
+            || msg.contains("duplicate")
+        {
+            (DatabaseErrorKind::ConstraintViolation, DatabaseOperation::Insert)
+        } else if msg.contains("not found") || msg.contains("no record") {
+            (DatabaseErrorKind::NotFound, DatabaseOperation::Query)
+        } else if msg.contains("timeout") || msg.contains("timed out") {
+            (DatabaseErrorKind::Timeout, DatabaseOperation::Query)
+        } else if msg.contains("connect") || msg.contains("Connection") {
+            (DatabaseErrorKind::ConnectionFailed, DatabaseOperation::Connect)
+        } else if msg.contains("permission") || msg.contains("not allowed") || msg.contains("denied") {
+            (DatabaseErrorKind::PermissionDenied, DatabaseOperation::Query)
+        } else if msg.contains("auth") || msg.contains("signin") || msg.contains("credentials") {
+            (DatabaseErrorKind::ConnectionFailed, DatabaseOperation::Connect)
+        } else if msg.contains("parse") || msg.contains("syntax") {
+            (DatabaseErrorKind::QueryFailed, DatabaseOperation::Query)
+        } else {
+            (DatabaseErrorKind::Other, DatabaseOperation::Query)
+        };
+
+        Self::new(operation, kind, msg)
+    }
+}
+
+#[cfg(feature = "surrealdb")]
+impl From<surrealdb::Error> for Error {
+    fn from(err: surrealdb::Error) -> Self {
+        Error::Database(DatabaseError::from(err))
+    }
+}
+
 #[cfg(feature = "jwt")]
 impl From<jsonwebtoken::errors::Error> for Error {
     fn from(err: jsonwebtoken::errors::Error) -> Self {
@@ -783,7 +821,7 @@ impl From<axum::http::Error> for Error {
 }
 
 // Conversion from DatabaseError to RepositoryError
-#[cfg(all(feature = "repository", any(feature = "database", feature = "turso")))]
+#[cfg(all(feature = "repository", any(feature = "database", feature = "turso", feature = "surrealdb")))]
 impl From<DatabaseError> for crate::repository::RepositoryError {
     fn from(err: DatabaseError) -> Self {
         use crate::repository::{RepositoryErrorKind, RepositoryOperation};
@@ -843,7 +881,7 @@ mod tests {
     // DatabaseError Tests
     // =========================================================================
 
-    #[cfg(any(feature = "database", feature = "turso"))]
+    #[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
     mod database_error_tests {
         use super::*;
 

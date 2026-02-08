@@ -286,7 +286,7 @@ where
     ///
     /// Returns a mutable reference to the `ActorRuntime` for spawning agents.
     /// Called automatically by `build()` when connection pools are configured.
-    #[cfg(any(feature = "database", feature = "cache", feature = "events", feature = "turso"))]
+    #[cfg(any(feature = "database", feature = "cache", feature = "events", feature = "turso", feature = "surrealdb"))]
     fn init_agent_runtime(&mut self) -> &mut acton_reactive::prelude::ActorRuntime {
         // Note: agent_runtime should already be initialized in the async block
         // before this is called
@@ -294,7 +294,7 @@ where
     }
 
     /// Get the agent broker handle (internal use only)
-    #[cfg(any(feature = "database", feature = "cache", feature = "events", feature = "turso"))]
+    #[cfg(any(feature = "database", feature = "cache", feature = "events", feature = "turso", feature = "surrealdb"))]
     fn broker(&self) -> Option<acton_reactive::prelude::ActorHandle> {
         self.agent_runtime.as_ref().map(|r| r.broker())
     }
@@ -360,7 +360,10 @@ where
         #[cfg(feature = "turso")]
         let needs_turso_agent = config.turso.is_some();
 
-        #[cfg(any(feature = "database", feature = "cache", feature = "events", feature = "turso"))]
+        #[cfg(feature = "surrealdb")]
+        let needs_surrealdb_agent = config.surrealdb.is_some();
+
+        #[cfg(any(feature = "database", feature = "cache", feature = "events", feature = "turso", feature = "surrealdb"))]
         let needs_agents = {
             #[cfg(feature = "database")]
             let db = needs_db_agent;
@@ -382,7 +385,12 @@ where
             #[cfg(not(feature = "turso"))]
             let turso = false;
 
-            db || redis || nats || turso
+            #[cfg(feature = "surrealdb")]
+            let surrealdb = needs_surrealdb_agent;
+            #[cfg(not(feature = "surrealdb"))]
+            let surrealdb = false;
+
+            db || redis || nats || turso || surrealdb
         };
 
         // Initialize agent runtime and spawn pool agents if needed
@@ -414,6 +422,13 @@ where
             None
         };
 
+        #[cfg(feature = "surrealdb")]
+        let shared_surrealdb_client: Option<crate::agents::SharedSurrealDb> = if needs_surrealdb_agent {
+            Some(std::sync::Arc::new(tokio::sync::RwLock::new(None)))
+        } else {
+            None
+        };
+
         // Agent handles for AppState
         #[cfg(feature = "database")]
         let mut db_agent_handle: Option<acton_reactive::prelude::ActorHandle> = None;
@@ -423,8 +438,10 @@ where
         let mut nats_agent_handle: Option<acton_reactive::prelude::ActorHandle> = None;
         #[cfg(feature = "turso")]
         let mut turso_agent_handle: Option<acton_reactive::prelude::ActorHandle> = None;
+        #[cfg(feature = "surrealdb")]
+        let mut surrealdb_agent_handle: Option<acton_reactive::prelude::ActorHandle> = None;
 
-        #[cfg(any(feature = "database", feature = "cache", feature = "events", feature = "turso"))]
+        #[cfg(any(feature = "database", feature = "cache", feature = "events", feature = "turso", feature = "surrealdb"))]
         let broker_handle = if needs_agents {
             // Use block_in_place to run async code in sync context
             // Initialize agent runtime inside the async block using launch_async()
@@ -507,6 +524,24 @@ where
                                 }
                             }
                         }
+
+                        // Spawn SurrealDB agent
+                        #[cfg(feature = "surrealdb")]
+                        if let Some(ref surrealdb_config) = config.surrealdb {
+                            match crate::agents::SurrealDbAgent::spawn(
+                                runtime,
+                                surrealdb_config.clone(),
+                                shared_surrealdb_client.clone(),
+                            ).await {
+                                Ok(handle) => {
+                                    tracing::info!("SurrealDB agent spawned");
+                                    surrealdb_agent_handle = Some(handle);
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Failed to spawn SurrealDB agent: {}", e);
+                                }
+                            }
+                        }
                     });
                 });
             }
@@ -516,7 +551,7 @@ where
             None
         };
 
-        #[cfg(not(any(feature = "database", feature = "cache", feature = "events", feature = "turso")))]
+        #[cfg(not(any(feature = "database", feature = "cache", feature = "events", feature = "turso", feature = "surrealdb")))]
         let broker_handle: Option<acton_reactive::prelude::ActorHandle> = None;
 
         let routes = self.routes.unwrap_or_default();
@@ -551,6 +586,11 @@ where
             #[cfg(feature = "turso")]
             if let Some(db) = shared_turso_db {
                 state.set_turso_db_storage(db);
+            }
+
+            #[cfg(feature = "surrealdb")]
+            if let Some(client) = shared_surrealdb_client {
+                state.set_surrealdb_client_storage(client);
             }
 
             state

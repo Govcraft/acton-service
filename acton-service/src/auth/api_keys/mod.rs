@@ -840,6 +840,128 @@ pub mod turso_storage {
 #[cfg(feature = "turso")]
 pub use turso_storage::TursoApiKeyStorage;
 
+/// SurrealDB-based API key storage
+#[cfg(feature = "surrealdb")]
+pub mod surrealdb_storage {
+    use super::*;
+    use std::sync::Arc;
+    use crate::surrealdb_backend::SurrealClient;
+
+    /// SurrealDB-backed API key storage
+    #[derive(Clone)]
+    pub struct SurrealDbApiKeyStorage {
+        client: Arc<SurrealClient>,
+        generator: ApiKeyGenerator,
+    }
+
+    impl SurrealDbApiKeyStorage {
+        /// Create a new SurrealDB API key storage
+        pub fn new(client: Arc<SurrealClient>, api_key_prefix: impl Into<String>) -> Self {
+            Self {
+                client,
+                generator: ApiKeyGenerator::new(api_key_prefix),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ApiKeyStorage for SurrealDbApiKeyStorage {
+        async fn get_by_key(&self, key: &str) -> Result<Option<ApiKey>, Error> {
+            let lookup_prefix = ApiKeyGenerator::key_prefix_for_lookup(key)
+                .ok_or_else(|| Error::ValidationError("Invalid API key format".to_string()))?;
+
+            if let Some(api_key) = self.get_by_prefix(&lookup_prefix).await? {
+                if self.generator.verify(key, &api_key.key_hash)? {
+                    return Ok(Some(api_key));
+                }
+            }
+            Ok(None)
+        }
+
+        async fn get_by_prefix(&self, prefix: &str) -> Result<Option<ApiKey>, Error> {
+            let mut result = self.client
+                .query("SELECT * FROM api_keys WHERE prefix = $prefix LIMIT 1")
+                .bind(("prefix", prefix.to_string()))
+                .await
+                .map_err(|e| Error::Internal(format!("Failed to get API key: {}", e)))?;
+
+            let api_key: Option<ApiKey> = result.take(0)
+                .map_err(|e| Error::Internal(format!("Failed to parse API key: {}", e)))?;
+
+            Ok(api_key)
+        }
+
+        async fn get_by_id(&self, id: &str) -> Result<Option<ApiKey>, Error> {
+            let mut result = self.client
+                .query("SELECT * FROM api_keys WHERE id = $id LIMIT 1")
+                .bind(("id", id.to_string()))
+                .await
+                .map_err(|e| Error::Internal(format!("Failed to get API key: {}", e)))?;
+
+            let api_key: Option<ApiKey> = result.take(0)
+                .map_err(|e| Error::Internal(format!("Failed to parse API key: {}", e)))?;
+
+            Ok(api_key)
+        }
+
+        async fn create(&self, api_key: &ApiKey) -> Result<(), Error> {
+            self.client
+                .query("CREATE api_keys CONTENT $data")
+                .bind(("data", api_key.clone()))
+                .await
+                .map_err(|e| Error::Internal(format!("Failed to create API key: {}", e)))?;
+
+            Ok(())
+        }
+
+        async fn update_last_used(&self, id: &str) -> Result<(), Error> {
+            self.client
+                .query("UPDATE api_keys SET last_used_at = time::now() WHERE id = $id")
+                .bind(("id", id.to_string()))
+                .await
+                .map_err(|e| Error::Internal(format!("Failed to update last_used_at: {}", e)))?;
+
+            Ok(())
+        }
+
+        async fn revoke(&self, id: &str) -> Result<(), Error> {
+            self.client
+                .query("UPDATE api_keys SET is_revoked = true WHERE id = $id")
+                .bind(("id", id.to_string()))
+                .await
+                .map_err(|e| Error::Internal(format!("Failed to revoke API key: {}", e)))?;
+
+            Ok(())
+        }
+
+        async fn list_by_user(&self, user_id: &str) -> Result<Vec<ApiKey>, Error> {
+            let mut result = self.client
+                .query("SELECT * FROM api_keys WHERE user_id = $user_id ORDER BY created_at DESC")
+                .bind(("user_id", user_id.to_string()))
+                .await
+                .map_err(|e| Error::Internal(format!("Failed to list API keys: {}", e)))?;
+
+            let keys: Vec<ApiKey> = result.take(0)
+                .map_err(|e| Error::Internal(format!("Failed to parse API keys: {}", e)))?;
+
+            Ok(keys)
+        }
+
+        async fn delete(&self, id: &str) -> Result<(), Error> {
+            self.client
+                .query("DELETE FROM api_keys WHERE id = $id")
+                .bind(("id", id.to_string()))
+                .await
+                .map_err(|e| Error::Internal(format!("Failed to delete API key: {}", e)))?;
+
+            Ok(())
+        }
+    }
+}
+
+#[cfg(feature = "surrealdb")]
+pub use surrealdb_storage::SurrealDbApiKeyStorage;
+
 #[cfg(test)]
 mod tests {
     use super::*;

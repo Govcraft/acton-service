@@ -20,7 +20,7 @@
 use serde::{de::DeserializeOwned, Serialize};
 use std::sync::Arc;
 
-#[cfg(any(feature = "database", feature = "cache", feature = "events", feature = "turso"))]
+#[cfg(any(feature = "database", feature = "cache", feature = "events", feature = "turso", feature = "surrealdb"))]
 use tokio::sync::RwLock;
 
 #[cfg(feature = "database")]
@@ -76,6 +76,9 @@ where
     #[cfg(feature = "events")]
     nats_client: Arc<RwLock<Option<NatsClient>>>,
 
+    #[cfg(feature = "surrealdb")]
+    surrealdb_client: Arc<RwLock<Option<Arc<crate::surrealdb_backend::SurrealClient>>>>,
+
     /// Agent broker handle for type-safe event broadcasting
     broker: Option<ActorHandle>,
 }
@@ -95,6 +98,8 @@ where
             redis_pool: Arc::new(RwLock::new(None)),
             #[cfg(feature = "events")]
             nats_client: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "surrealdb")]
+            surrealdb_client: Arc::new(RwLock::new(None)),
             broker: None,
         }
     }
@@ -119,6 +124,8 @@ where
             redis_pool: Arc::new(RwLock::new(None)),
             #[cfg(feature = "events")]
             nats_client: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "surrealdb")]
+            surrealdb_client: Arc::new(RwLock::new(None)),
             broker: None,
         }
     }
@@ -249,6 +256,33 @@ where
         self.nats_client = storage;
     }
 
+    /// Get the SurrealDB client
+    ///
+    /// Returns a cloned Arc<SurrealClient> if available.
+    ///
+    /// When using agent-based pool management, the client is automatically
+    /// populated by the `SurrealDbAgent` when the connection is established.
+    /// The agent handles reconnection, health monitoring, and graceful shutdown.
+    #[cfg(feature = "surrealdb")]
+    pub async fn surrealdb(&self) -> Option<Arc<crate::surrealdb_backend::SurrealClient>> {
+        self.surrealdb_client.read().await.clone()
+    }
+
+    /// Get direct access to the SurrealDB client RwLock
+    #[cfg(feature = "surrealdb")]
+    pub fn surrealdb_lock(&self) -> &Arc<RwLock<Option<Arc<crate::surrealdb_backend::SurrealClient>>>> {
+        &self.surrealdb_client
+    }
+
+    /// Set the SurrealDB client storage (internal use by ServiceBuilder)
+    ///
+    /// This replaces the internal client storage with the provided shared storage.
+    /// Pool agents will update this storage when connections are established.
+    #[cfg(feature = "surrealdb")]
+    pub(crate) fn set_surrealdb_client_storage(&mut self, storage: Arc<RwLock<Option<Arc<crate::surrealdb_backend::SurrealClient>>>>) {
+        self.surrealdb_client = storage;
+    }
+
     /// Get the agent broker handle for event broadcasting
     ///
     /// Returns the broker handle if the acton-reactive runtime was initialized.
@@ -325,6 +359,16 @@ where
             if let Some(turso_config) = &self.config.turso {
                 summary.turso = Some(crate::pool_health::TursoDbHealth::from_config(
                     turso_config,
+                    true, // connected
+                ));
+            }
+        }
+
+        #[cfg(feature = "surrealdb")]
+        if self.surrealdb().await.is_some() {
+            if let Some(surrealdb_config) = &self.config.surrealdb {
+                summary.surrealdb = Some(crate::pool_health::SurrealDbHealth::from_config(
+                    surrealdb_config,
                     true, // connected
                 ));
             }
@@ -591,6 +635,8 @@ where
             db_pool,
             #[cfg(feature = "turso")]
             turso_db: Arc::new(RwLock::new(None)), // Turso uses agents, not builder
+            #[cfg(feature = "surrealdb")]
+            surrealdb_client: Arc::new(RwLock::new(None)), // SurrealDB uses agents, not builder
             #[cfg(feature = "cache")]
             redis_pool,
             #[cfg(feature = "events")]

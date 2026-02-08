@@ -49,6 +49,9 @@ sqlx = { version = "0.9.0-alpha.1", features = ["runtime-tokio", "postgres", "js
 # Turso/libsql
 libsql = { version = "0.9", features = ["replication", "remote"] }
 
+# SurrealDB
+surrealdb = { version = "2.6", features = ["protocol-ws", "protocol-http", "kv-mem"] }
+
 # Redis
 redis = { version = "0.32", features = ["tokio-comp", "cluster-async", "streams"] }
 deadpool-redis = "0.22.0"

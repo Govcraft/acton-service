@@ -96,7 +96,9 @@ fn parse_service_config(cargo_toml: &str) -> Result<ServiceTemplate> {
             if line.contains("grpc") {
                 grpc = true;
             }
-            if line.contains("database") {
+            if line.contains("surrealdb") {
+                database = Some("surrealdb".to_string());
+            } else if line.contains("database") {
                 database = Some("postgres".to_string());
             }
             if line.contains("cache") {

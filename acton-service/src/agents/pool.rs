@@ -662,6 +662,188 @@ impl TursoDbAgent {
     }
 }
 
+// ============================================================================
+// SurrealDB Agent
+// ============================================================================
+
+#[cfg(all(feature = "surrealdb", not(feature = "database"), not(feature = "cache"), not(feature = "events"), not(feature = "turso")))]
+use std::sync::Arc;
+#[cfg(all(feature = "surrealdb", not(feature = "database"), not(feature = "cache"), not(feature = "events"), not(feature = "turso")))]
+use tokio::sync::RwLock;
+#[cfg(all(feature = "surrealdb", not(feature = "database"), not(feature = "turso")))]
+use tokio_util::sync::CancellationToken;
+#[cfg(all(feature = "surrealdb", not(feature = "database"), not(feature = "events"), not(feature = "cache"), not(feature = "turso")))]
+use acton_reactive::prelude::*;
+#[cfg(feature = "surrealdb")]
+use super::messages::{SurrealDbConnected, SurrealDbConnectionFailed};
+
+/// Shared client storage type for SurrealDB connections
+#[cfg(feature = "surrealdb")]
+pub type SharedSurrealDb = Arc<RwLock<Option<Arc<crate::surrealdb_backend::SurrealClient>>>>;
+
+/// State for the SurrealDB agent
+#[cfg(feature = "surrealdb")]
+#[derive(Debug, Default)]
+pub struct SurrealDbState {
+    /// The underlying SurrealDB client (wrapped in Arc since Surreal doesn't implement Clone)
+    pub client: Option<Arc<crate::surrealdb_backend::SurrealClient>>,
+    /// Configuration for the SurrealDB connection
+    pub config: Option<crate::config::SurrealDbConfig>,
+    /// Whether the agent is currently attempting to connect
+    pub connecting: bool,
+    /// Shared storage that AppState reads from directly
+    pub shared_client: Option<SharedSurrealDb>,
+    /// Cancellation token for graceful shutdown during connection retries
+    pub cancel_token: Option<CancellationToken>,
+}
+
+/// Agent-based SurrealDB client manager
+///
+/// This agent manages a SurrealDB connection using message passing
+/// instead of shared mutable state. Benefits include:
+///
+/// - **No lock contention**: Client access via shared state with minimal locking
+/// - **Automatic connection**: Connection established on agent start
+/// - **Graceful shutdown**: Client closed on agent stop
+#[cfg(feature = "surrealdb")]
+pub struct SurrealDbAgent;
+
+#[cfg(feature = "surrealdb")]
+impl SurrealDbAgent {
+    /// Spawn a new SurrealDB agent with the given configuration
+    ///
+    /// The agent will immediately begin connecting to the database.
+    ///
+    /// # Arguments
+    ///
+    /// * `runtime` - The agent runtime to spawn into
+    /// * `config` - SurrealDB connection configuration
+    /// * `shared_client` - Shared storage that will be updated when the client connects.
+    ///   `AppState::surrealdb()` reads the client directly from this storage.
+    pub async fn spawn(
+        runtime: &mut ActorRuntime,
+        config: crate::config::SurrealDbConfig,
+        shared_client: Option<SharedSurrealDb>,
+    ) -> anyhow::Result<ActorHandle> {
+        let mut agent = runtime.new_actor::<SurrealDbState>();
+
+        // Create cancellation token for graceful shutdown during connection retries
+        let cancel_token = CancellationToken::new();
+
+        // Initialize state before starting
+        agent.model.config = Some(config);
+        agent.model.connecting = true;
+        agent.model.shared_client = shared_client;
+        agent.model.cancel_token = Some(cancel_token);
+
+        // Handle client connected message (sent from spawned task)
+        agent.mutate_on::<SurrealDbConnected>(|agent, envelope| {
+            let client = envelope.message().client.clone();
+            agent.model.client = Some(client.clone());
+            agent.model.connecting = false;
+
+            // Update shared storage if configured
+            let shared_client = agent.model.shared_client.clone();
+
+            Reply::pending(async move {
+                // Update shared storage for direct AppState access
+                if let Some(shared) = shared_client {
+                    *shared.write().await = Some(client);
+                    tracing::info!("SurrealDB client connected and stored in shared state");
+                } else {
+                    tracing::info!("SurrealDB client connected (no shared state)");
+                }
+            })
+        });
+
+        // Handle client connection failed message
+        agent.mutate_on::<SurrealDbConnectionFailed>(|agent, envelope| {
+            let error_msg = envelope.message().error.clone();
+            agent.model.connecting = false;
+            tracing::error!("SurrealDB client connection failed: {}", error_msg);
+
+            Reply::ready()
+        });
+
+        // Initialize connection on startup using spawn pattern
+        // NOTE: We spawn the task but DON'T await it here. The task sends messages
+        // back to the agent when it completes. This allows before_stop to run
+        // immediately when shutdown is requested, which cancels the token and
+        // causes the spawned task to exit via tokio::select!.
+        agent.after_start(|agent| {
+            let config = agent.model.config.clone();
+            let cancel_token = agent.model.cancel_token.clone();
+            let self_handle = agent.handle().clone();
+
+            if let Some(cfg) = config {
+                tracing::info!("SurrealDB agent starting, connecting to database...");
+
+                // Spawn the connection work - it will send a message back when done
+                tokio::spawn(async move {
+                    // Race connection against cancellation
+                    tokio::select! {
+                        biased;
+
+                        // Cancellation branch - triggered by before_stop
+                        () = async {
+                            if let Some(ref token) = cancel_token {
+                                token.cancelled().await;
+                            } else {
+                                // No token, never cancel via this branch
+                                std::future::pending::<()>().await;
+                            }
+                        } => {
+                            tracing::info!("SurrealDB connection cancelled during shutdown");
+                            self_handle
+                                .send(SurrealDbConnectionFailed {
+                                    error: "Connection cancelled during shutdown".to_string(),
+                                })
+                                .await;
+                        }
+
+                        // Connection branch
+                        result = crate::surrealdb_backend::create_client(&cfg) => {
+                            match result {
+                                Ok(client) => {
+                                    self_handle.send(SurrealDbConnected { client: Arc::new(client) }).await;
+                                }
+                                Err(e) => {
+                                    self_handle
+                                        .send(SurrealDbConnectionFailed {
+                                            error: e.to_string(),
+                                        })
+                                        .await;
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            Reply::ready()
+        });
+
+        // Graceful cleanup on shutdown
+        agent.before_stop(|agent| {
+            let cancel_token = agent.model.cancel_token.clone();
+            Reply::pending(async move {
+                // Cancel any ongoing connection retries first
+                if let Some(token) = cancel_token {
+                    token.cancel();
+                    tracing::debug!("SurrealDB connection retry cancelled");
+                }
+
+                // Note: SurrealDB client doesn't have an explicit close method,
+                // dropping it will close the connection
+                tracing::info!("SurrealDB agent stopping");
+            })
+        });
+
+        let handle = agent.start().await;
+        Ok(handle)
+    }
+}
+
 // =============================================================================
 // Tests
 // =============================================================================

@@ -70,9 +70,9 @@ pub async fn readiness<T>(State(state): State<AppState<T>>) -> Result<impl IntoR
 where
     T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
 {
-    #[cfg_attr(not(any(feature = "database", feature = "cache", feature = "events", feature = "turso")), allow(unused_mut))]
+    #[cfg_attr(not(any(feature = "database", feature = "cache", feature = "events", feature = "turso", feature = "surrealdb")), allow(unused_mut))]
     let mut dependencies = HashMap::new();
-    #[cfg_attr(not(any(feature = "database", feature = "cache", feature = "events", feature = "turso")), allow(unused_mut))]
+    #[cfg_attr(not(any(feature = "database", feature = "cache", feature = "events", feature = "turso", feature = "surrealdb")), allow(unused_mut))]
     let mut all_ready = true;
 
     // Check database connection
@@ -422,6 +422,82 @@ where
 
                 dependencies.insert(
                     "turso".to_string(),
+                    DependencyStatus {
+                        healthy: false,
+                        message: Some(message),
+                    },
+                );
+            }
+        }
+    }
+
+    // Check SurrealDB connection
+    #[cfg(feature = "surrealdb")]
+    if state.config().surrealdb.is_some() {
+        match state.surrealdb().await {
+            Some(client) => {
+                // Try a simple query to verify connectivity
+                match client.query("RETURN true").await {
+                    Ok(_) => {
+                        dependencies.insert(
+                            "surrealdb".to_string(),
+                            DependencyStatus {
+                                healthy: true,
+                                message: Some("Connected".to_string()),
+                            },
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!("SurrealDB health check failed: {}", e);
+                        let is_optional = state
+                            .config()
+                            .surrealdb
+                            .as_ref()
+                            .map(|s| s.optional)
+                            .unwrap_or(false);
+
+                        if !is_optional {
+                            all_ready = false;
+                        }
+
+                        dependencies.insert(
+                            "surrealdb".to_string(),
+                            DependencyStatus {
+                                healthy: false,
+                                message: Some(format!("Query failed: {}", e)),
+                            },
+                        );
+                    }
+                }
+            }
+            None => {
+                // SurrealDB configured but not connected yet (lazy init in progress)
+                let is_optional = state
+                    .config()
+                    .surrealdb
+                    .as_ref()
+                    .map(|s| s.optional)
+                    .unwrap_or(false);
+
+                let is_lazy = state
+                    .config()
+                    .surrealdb
+                    .as_ref()
+                    .map(|s| s.lazy_init)
+                    .unwrap_or(false);
+
+                if !is_optional {
+                    all_ready = false;
+                }
+
+                let message = if is_lazy {
+                    "Connection initializing (lazy mode)".to_string()
+                } else {
+                    "Not connected".to_string()
+                };
+
+                dependencies.insert(
+                    "surrealdb".to_string(),
                     DependencyStatus {
                         healthy: false,
                         message: Some(message),

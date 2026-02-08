@@ -47,10 +47,22 @@
 //! }
 //! ```
 
-// Ensure database and turso features are mutually exclusive
+// Ensure database backends are mutually exclusive
 #[cfg(all(feature = "database", feature = "turso"))]
 compile_error!(
     "Features `database` (PostgreSQL) and `turso` (libsql) are mutually exclusive. \
+     Enable only one database backend."
+);
+
+#[cfg(all(feature = "database", feature = "surrealdb"))]
+compile_error!(
+    "Features `database` (PostgreSQL) and `surrealdb` are mutually exclusive. \
+     Enable only one database backend."
+);
+
+#[cfg(all(feature = "turso", feature = "surrealdb"))]
+compile_error!(
+    "Features `turso` (libsql) and `surrealdb` are mutually exclusive. \
      Enable only one database backend."
 );
 
@@ -71,6 +83,9 @@ pub mod database;
 
 #[cfg(feature = "turso")]
 pub mod turso;
+
+#[cfg(feature = "surrealdb")]
+pub mod surrealdb_backend;
 
 #[cfg(feature = "cache")]
 pub mod cache;
@@ -139,7 +154,7 @@ pub mod prelude {
 
     pub use crate::error::{Error, Result};
 
-    #[cfg(any(feature = "database", feature = "turso"))]
+    #[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
     pub use crate::error::{DatabaseError, DatabaseErrorKind, DatabaseOperation};
 
     pub use crate::health::{health, pool_metrics, readiness};
@@ -151,6 +166,9 @@ pub mod prelude {
 
     #[cfg(feature = "turso")]
     pub use crate::pool_health::TursoDbHealth;
+
+    #[cfg(feature = "surrealdb")]
+    pub use crate::pool_health::SurrealDbHealth;
 
     #[cfg(feature = "cache")]
     pub use crate::pool_health::RedisPoolHealth;

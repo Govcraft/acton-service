@@ -102,6 +102,20 @@ pub(crate) struct TursoDbConnectionFailed {
     pub error: String,
 }
 
+/// Internal message sent when a SurrealDB client connects successfully
+#[cfg(feature = "surrealdb")]
+#[derive(Clone, Debug)]
+pub(crate) struct SurrealDbConnected {
+    pub client: std::sync::Arc<crate::surrealdb_backend::SurrealClient>,
+}
+
+/// Internal message sent when a SurrealDB client connection fails
+#[cfg(feature = "surrealdb")]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SurrealDbConnectionFailed {
+    pub error: String,
+}
+
 // =============================================================================
 // Background Worker Agent messages
 // =============================================================================

@@ -12,8 +12,25 @@ log_level = "info"
     );
 
     // Add database configuration
-    if template.database.is_some() {
-        content.push_str(
+    if let Some(ref db_type) = template.database {
+        if db_type == "surrealdb" {
+            content.push_str(
+r#"[surrealdb]
+url = "ws://localhost:8000"
+# For production, use environment variable: ACTON_SURREALDB_URL
+namespace = "default"
+database = "default"
+# username = "root"     # Optional: omit for unauthenticated access
+# password = "root"     # Optional: omit for unauthenticated access
+optional = true       # Service can start without SurrealDB
+lazy_init = true      # Connect in background
+max_retries = 5       # Retry up to 5 times
+retry_delay_secs = 2  # Base delay for exponential backoff
+
+"#
+            );
+        } else {
+            content.push_str(
 r#"[database]
 url = "postgres://localhost:5432/mydb"
 # For production, use environment variable: ACTON_DATABASE_URL
@@ -25,7 +42,8 @@ pool_min_size = 5
 pool_max_size = 20
 
 "#
-        );
+            );
+        }
     }
 
     // Add cache configuration

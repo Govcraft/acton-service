@@ -67,6 +67,11 @@ where
     #[serde(default)]
     pub turso: Option<TursoConfig>,
 
+    /// SurrealDB configuration (optional)
+    #[cfg(feature = "surrealdb")]
+    #[serde(default)]
+    pub surrealdb: Option<SurrealDbConfig>,
+
     /// Redis configuration (optional)
     #[serde(default)]
     pub redis: Option<RedisConfig>,
@@ -367,6 +372,46 @@ pub struct TursoConfig {
     pub read_your_writes: bool,
 
     /// Maximum retry attempts for connection
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
+
+    /// Delay between retry attempts in seconds
+    #[serde(default = "default_retry_delay")]
+    pub retry_delay_secs: u64,
+
+    /// Whether database is optional (service can start without it)
+    #[serde(default = "default_false")]
+    pub optional: bool,
+
+    /// Whether to initialize connection lazily (in background)
+    #[serde(default = "default_lazy_init")]
+    pub lazy_init: bool,
+}
+
+/// SurrealDB database configuration
+#[cfg(feature = "surrealdb")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SurrealDbConfig {
+    /// Connection URL (ws://localhost:8000, mem://, http://localhost:8000, etc.)
+    pub url: String,
+
+    /// Namespace to use
+    #[serde(default = "default_surrealdb_namespace")]
+    pub namespace: String,
+
+    /// Database to use
+    #[serde(default = "default_surrealdb_database")]
+    pub database: String,
+
+    /// Username for authentication (optional, for root-level access)
+    #[serde(default)]
+    pub username: Option<String>,
+
+    /// Password for authentication (optional, for root-level access)
+    #[serde(default)]
+    pub password: Option<String>,
+
+    /// Maximum retry attempts for establishing connection
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
 
@@ -903,6 +948,16 @@ fn default_lazy_init() -> bool {
     true
 }
 
+#[cfg(feature = "surrealdb")]
+fn default_surrealdb_namespace() -> String {
+    "default".to_string()
+}
+
+#[cfg(feature = "surrealdb")]
+fn default_surrealdb_database() -> String {
+    "default".to_string()
+}
+
 // Middleware default functions
 fn default_body_limit_mb() -> usize {
     10 // 10 MB
@@ -1147,6 +1202,12 @@ where
         self.turso.as_ref().and_then(|t| t.url.as_deref())
     }
 
+    /// Get SurrealDB URL
+    #[cfg(feature = "surrealdb")]
+    pub fn surrealdb_url(&self) -> Option<&str> {
+        self.surrealdb.as_ref().map(|s| s.url.as_str())
+    }
+
     /// Enable permissive CORS for local development
     ///
     /// ⚠️  **WARNING: DO NOT USE IN PRODUCTION** ⚠️
@@ -1209,6 +1270,8 @@ where
             database: None,
             #[cfg(feature = "turso")]
             turso: None,
+            #[cfg(feature = "surrealdb")]
+            surrealdb: None,
             redis: None,
             nats: None,
             otlp: None,
@@ -1290,6 +1353,8 @@ mod tests {
             database: None,
             #[cfg(feature = "turso")]
             turso: None,
+            #[cfg(feature = "surrealdb")]
+            surrealdb: None,
             redis: None,
             nats: None,
             otlp: None,
@@ -1336,6 +1401,8 @@ mod tests {
             database: None,
             #[cfg(feature = "turso")]
             turso: None,
+            #[cfg(feature = "surrealdb")]
+            surrealdb: None,
             redis: None,
             nats: None,
             otlp: None,

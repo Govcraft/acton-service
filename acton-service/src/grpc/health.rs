@@ -155,6 +155,40 @@ impl HealthService {
             }
         }
 
+        // Check SurrealDB connection
+        #[cfg(feature = "surrealdb")]
+        if self.state.config().surrealdb.is_some() {
+            match self.state.surrealdb().await {
+                Some(client) => {
+                    if let Err(e) = client.query("RETURN true").await {
+                        tracing::error!("SurrealDB health check failed: {}", e);
+                        let is_optional = self
+                            .state
+                            .config()
+                            .surrealdb
+                            .as_ref()
+                            .map(|s| s.optional)
+                            .unwrap_or(false);
+                        if !is_optional {
+                            all_healthy = false;
+                        }
+                    }
+                }
+                None => {
+                    let is_optional = self
+                        .state
+                        .config()
+                        .surrealdb
+                        .as_ref()
+                        .map(|s| s.optional)
+                        .unwrap_or(false);
+                    if !is_optional {
+                        all_healthy = false;
+                    }
+                }
+            }
+        }
+
         all_healthy
     }
 }

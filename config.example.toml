@@ -113,6 +113,21 @@ optional = false      # Service can start without DB if true
 lazy_init = true      # Initialize connection in background
 
 # ============================================================================
+# SURREALDB CONFIGURATION (Optional)
+# Mutually exclusive with [database] and [turso]
+# ============================================================================
+# [surrealdb]
+# url = "ws://localhost:8000"   # ws://, wss://, http://, https://, or mem://
+# namespace = "default"
+# database = "default"
+# username = "root"             # Optional: omit for unauthenticated access
+# password = "root"             # Optional: omit for unauthenticated access
+# max_retries = 5
+# retry_delay_secs = 2
+# optional = false              # Service can start without SurrealDB if true
+# lazy_init = true              # Initialize connection in background
+
+# ============================================================================
 # REDIS CONFIGURATION (Optional)
 # ============================================================================
 [redis]
