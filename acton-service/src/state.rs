@@ -20,7 +20,13 @@
 use serde::{de::DeserializeOwned, Serialize};
 use std::sync::Arc;
 
-#[cfg(any(feature = "database", feature = "cache", feature = "events", feature = "turso", feature = "surrealdb"))]
+#[cfg(any(
+    feature = "database",
+    feature = "cache",
+    feature = "events",
+    feature = "turso",
+    feature = "surrealdb"
+))]
 use tokio::sync::RwLock;
 
 #[cfg(feature = "database")]
@@ -79,6 +85,10 @@ where
     #[cfg(feature = "surrealdb")]
     surrealdb_client: Arc<RwLock<Option<Arc<crate::surrealdb_backend::SurrealClient>>>>,
 
+    /// Audit logger for emitting audit events
+    #[cfg(feature = "audit")]
+    audit_logger: Option<crate::audit::AuditLogger>,
+
     /// Agent broker handle for type-safe event broadcasting
     broker: Option<ActorHandle>,
 }
@@ -100,6 +110,8 @@ where
             nats_client: Arc::new(RwLock::new(None)),
             #[cfg(feature = "surrealdb")]
             surrealdb_client: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "audit")]
+            audit_logger: None,
             broker: None,
         }
     }
@@ -126,6 +138,8 @@ where
             nats_client: Arc::new(RwLock::new(None)),
             #[cfg(feature = "surrealdb")]
             surrealdb_client: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "audit")]
+            audit_logger: None,
             broker: None,
         }
     }
@@ -196,7 +210,10 @@ where
     /// This replaces the internal database storage with the provided shared storage.
     /// Pool agents will update this storage when connections are established.
     #[cfg(feature = "turso")]
-    pub(crate) fn set_turso_db_storage(&mut self, storage: Arc<RwLock<Option<Arc<libsql::Database>>>>) {
+    pub(crate) fn set_turso_db_storage(
+        &mut self,
+        storage: Arc<RwLock<Option<Arc<libsql::Database>>>>,
+    ) {
         self.turso_db = storage;
     }
 
@@ -270,7 +287,9 @@ where
 
     /// Get direct access to the SurrealDB client RwLock
     #[cfg(feature = "surrealdb")]
-    pub fn surrealdb_lock(&self) -> &Arc<RwLock<Option<Arc<crate::surrealdb_backend::SurrealClient>>>> {
+    pub fn surrealdb_lock(
+        &self,
+    ) -> &Arc<RwLock<Option<Arc<crate::surrealdb_backend::SurrealClient>>>> {
         &self.surrealdb_client
     }
 
@@ -279,7 +298,10 @@ where
     /// This replaces the internal client storage with the provided shared storage.
     /// Pool agents will update this storage when connections are established.
     #[cfg(feature = "surrealdb")]
-    pub(crate) fn set_surrealdb_client_storage(&mut self, storage: Arc<RwLock<Option<Arc<crate::surrealdb_backend::SurrealClient>>>>) {
+    pub(crate) fn set_surrealdb_client_storage(
+        &mut self,
+        storage: Arc<RwLock<Option<Arc<crate::surrealdb_backend::SurrealClient>>>>,
+    ) {
         self.surrealdb_client = storage;
     }
 
@@ -316,6 +338,21 @@ where
     /// Set the agent broker handle (internal use only)
     pub(crate) fn set_broker(&mut self, broker: ActorHandle) {
         self.broker = Some(broker);
+    }
+
+    /// Get the audit logger for emitting audit events
+    ///
+    /// Returns the audit logger if the `audit` feature is enabled and
+    /// audit logging was configured.
+    #[cfg(feature = "audit")]
+    pub fn audit_logger(&self) -> Option<&crate::audit::AuditLogger> {
+        self.audit_logger.as_ref()
+    }
+
+    /// Set the audit logger (internal use by ServiceBuilder)
+    #[cfg(feature = "audit")]
+    pub(crate) fn set_audit_logger(&mut self, logger: crate::audit::AuditLogger) {
+        self.audit_logger = Some(logger);
     }
 
     /// Get pool health metrics for all configured pools
@@ -504,7 +541,10 @@ where
                             if db_config_clone.optional {
                                 tracing::warn!("Optional database connection failed: {}. Service will continue without database.", e);
                             } else {
-                                tracing::error!("Required database connection failed: {}. Service is degraded.", e);
+                                tracing::error!(
+                                    "Required database connection failed: {}. Service is degraded.",
+                                    e
+                                );
                             }
                         }
                     }
@@ -553,7 +593,10 @@ where
                             if redis_config_clone.optional {
                                 tracing::warn!("Optional Redis connection failed: {}. Service will continue without Redis.", e);
                             } else {
-                                tracing::error!("Required Redis connection failed: {}. Service is degraded.", e);
+                                tracing::error!(
+                                    "Required Redis connection failed: {}. Service is degraded.",
+                                    e
+                                );
                             }
                         }
                     }
@@ -602,7 +645,10 @@ where
                             if nats_config_clone.optional {
                                 tracing::warn!("Optional NATS connection failed: {}. Service will continue without NATS.", e);
                             } else {
-                                tracing::error!("Required NATS connection failed: {}. Service is degraded.", e);
+                                tracing::error!(
+                                    "Required NATS connection failed: {}. Service is degraded.",
+                                    e
+                                );
                             }
                         }
                     }
@@ -641,6 +687,8 @@ where
             redis_pool,
             #[cfg(feature = "events")]
             nats_client,
+            #[cfg(feature = "audit")]
+            audit_logger: None,
             broker: None,
         })
     }
@@ -662,9 +710,7 @@ mod tests {
     #[tokio::test]
     async fn test_state_builder() {
         let config = Config::<()>::default();
-        let builder = AppStateBuilder::new()
-            .config(config)
-            .without_tracing(); // Disable tracing in tests to avoid global subscriber conflicts
+        let builder = AppStateBuilder::new().config(config).without_tracing(); // Disable tracing in tests to avoid global subscriber conflicts
 
         // This should succeed even without connection pools
         let state = builder.build().await.unwrap();

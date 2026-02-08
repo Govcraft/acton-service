@@ -65,6 +65,9 @@ const config = {
       jwtOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["jwt"] }`,
       websocketOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["websocket"] }`,
       tursoOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["turso"] }`,
+      audit: `acton-service = { version = "${ACTON_VERSION}", features = ["audit", "http", "observability"] }`,
+      auditOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["audit"] }`,
+      auditDatabase: `acton-service = { version = "${ACTON_VERSION}", features = ["audit", "database", "http", "observability"] }`,
     },
   },
 }

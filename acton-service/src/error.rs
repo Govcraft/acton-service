@@ -361,6 +361,11 @@ pub enum Error {
     #[cfg(feature = "session")]
     #[error("Session error: {0}")]
     Session(String),
+
+    /// Audit logging error
+    #[cfg(feature = "audit")]
+    #[error("Audit error: {0}")]
+    Audit(String),
 }
 
 /// Error response body
@@ -439,7 +444,9 @@ impl IntoResponse for Error {
                 // User-facing message (don't expose internal details)
                 let user_message = match e.kind {
                     DatabaseErrorKind::NotFound => "Resource not found",
-                    DatabaseErrorKind::ConstraintViolation => "Operation conflicts with existing data",
+                    DatabaseErrorKind::ConstraintViolation => {
+                        "Operation conflicts with existing data"
+                    }
                     DatabaseErrorKind::Timeout => "Database operation timed out",
                     DatabaseErrorKind::PermissionDenied => "Database permission denied",
                     _ => "Database operation failed",
@@ -599,6 +606,19 @@ impl IntoResponse for Error {
                     ),
                 )
             }
+
+            #[cfg(feature = "audit")]
+            Error::Audit(msg) => {
+                tracing::error!("Audit error: {}", msg);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    ErrorResponse::with_code(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "AUDIT_ERROR",
+                        "Audit operation failed",
+                    ),
+                )
+            }
         };
 
         (status, Json(error_response)).into_response()
@@ -626,9 +646,7 @@ impl From<sqlx::Error> for DatabaseError {
         match err {
             E::RowNotFound => Self::not_found(DatabaseOperation::Query, "Row not found"),
             E::PoolTimedOut => Self::pool_exhausted("Connection pool timed out"),
-            E::PoolClosed => {
-                Self::connection_failed("Connection pool is closed")
-            }
+            E::PoolClosed => Self::connection_failed("Connection pool is closed"),
             E::Protocol(msg) => Self::new(
                 DatabaseOperation::Query,
                 DatabaseErrorKind::QueryFailed,
@@ -696,9 +714,7 @@ impl From<sqlx::Error> for DatabaseError {
                 };
                 Self::new(DatabaseOperation::Query, kind, db_err.to_string())
             }
-            E::WorkerCrashed => {
-                Self::connection_failed("Database worker crashed")
-            }
+            E::WorkerCrashed => Self::connection_failed("Database worker crashed"),
             _ => Self::new(
                 DatabaseOperation::Query,
                 DatabaseErrorKind::Other,
@@ -743,15 +759,24 @@ impl From<libsql::Error> for DatabaseError {
             || msg.contains("NOT NULL constraint failed")
             || msg.contains("CHECK constraint failed")
         {
-            (DatabaseErrorKind::ConstraintViolation, DatabaseOperation::Insert)
+            (
+                DatabaseErrorKind::ConstraintViolation,
+                DatabaseOperation::Insert,
+            )
         } else if msg.contains("no such table") || msg.contains("no such column") {
             (DatabaseErrorKind::QueryFailed, DatabaseOperation::Query)
         } else if msg.contains("timeout") || msg.contains("timed out") {
             (DatabaseErrorKind::Timeout, DatabaseOperation::Query)
         } else if msg.contains("connection") || msg.contains("Connection") {
-            (DatabaseErrorKind::ConnectionFailed, DatabaseOperation::Connect)
+            (
+                DatabaseErrorKind::ConnectionFailed,
+                DatabaseOperation::Connect,
+            )
         } else if msg.contains("permission denied") || msg.contains("Permission denied") {
-            (DatabaseErrorKind::PermissionDenied, DatabaseOperation::Query)
+            (
+                DatabaseErrorKind::PermissionDenied,
+                DatabaseOperation::Query,
+            )
         } else if msg.contains("sync") || msg.contains("Sync") {
             (DatabaseErrorKind::SyncFailed, DatabaseOperation::Sync)
         } else {
@@ -779,17 +804,32 @@ impl From<surrealdb::Error> for DatabaseError {
             || msg.contains("unique")
             || msg.contains("duplicate")
         {
-            (DatabaseErrorKind::ConstraintViolation, DatabaseOperation::Insert)
+            (
+                DatabaseErrorKind::ConstraintViolation,
+                DatabaseOperation::Insert,
+            )
         } else if msg.contains("not found") || msg.contains("no record") {
             (DatabaseErrorKind::NotFound, DatabaseOperation::Query)
         } else if msg.contains("timeout") || msg.contains("timed out") {
             (DatabaseErrorKind::Timeout, DatabaseOperation::Query)
         } else if msg.contains("connect") || msg.contains("Connection") {
-            (DatabaseErrorKind::ConnectionFailed, DatabaseOperation::Connect)
-        } else if msg.contains("permission") || msg.contains("not allowed") || msg.contains("denied") {
-            (DatabaseErrorKind::PermissionDenied, DatabaseOperation::Query)
+            (
+                DatabaseErrorKind::ConnectionFailed,
+                DatabaseOperation::Connect,
+            )
+        } else if msg.contains("permission")
+            || msg.contains("not allowed")
+            || msg.contains("denied")
+        {
+            (
+                DatabaseErrorKind::PermissionDenied,
+                DatabaseOperation::Query,
+            )
         } else if msg.contains("auth") || msg.contains("signin") || msg.contains("credentials") {
-            (DatabaseErrorKind::ConnectionFailed, DatabaseOperation::Connect)
+            (
+                DatabaseErrorKind::ConnectionFailed,
+                DatabaseOperation::Connect,
+            )
         } else if msg.contains("parse") || msg.contains("syntax") {
             (DatabaseErrorKind::QueryFailed, DatabaseOperation::Query)
         } else {
@@ -821,7 +861,10 @@ impl From<axum::http::Error> for Error {
 }
 
 // Conversion from DatabaseError to RepositoryError
-#[cfg(all(feature = "repository", any(feature = "database", feature = "turso", feature = "surrealdb")))]
+#[cfg(all(
+    feature = "repository",
+    any(feature = "database", feature = "turso", feature = "surrealdb")
+))]
 impl From<DatabaseError> for crate::repository::RepositoryError {
     fn from(err: DatabaseError) -> Self {
         use crate::repository::{RepositoryErrorKind, RepositoryOperation};
@@ -983,9 +1026,13 @@ mod tests {
         #[test]
         fn test_is_retriable_permanent_errors() {
             // Permanent errors should not be retriable
-            assert!(!DatabaseError::not_found(DatabaseOperation::Query, "not found").is_retriable());
-            assert!(!DatabaseError::constraint_violation(DatabaseOperation::Insert, "unique")
-                .is_retriable());
+            assert!(
+                !DatabaseError::not_found(DatabaseOperation::Query, "not found").is_retriable()
+            );
+            assert!(
+                !DatabaseError::constraint_violation(DatabaseOperation::Insert, "unique")
+                    .is_retriable()
+            );
             assert!(!DatabaseError::query_failed("syntax error").is_retriable());
             assert!(!DatabaseError::transaction_failed("rollback").is_retriable());
             assert!(!DatabaseError::new(
@@ -1010,7 +1057,8 @@ mod tests {
 
         #[test]
         fn test_add_context() {
-            let err = DatabaseError::query_failed("Query failed").add_context("SELECT * FROM users");
+            let err =
+                DatabaseError::query_failed("Query failed").add_context("SELECT * FROM users");
             assert_eq!(err.context, Some("SELECT * FROM users".to_string()));
         }
 
@@ -1049,7 +1097,10 @@ mod tests {
             assert_eq!(format!("{}", DatabaseOperation::Transaction), "transaction");
             assert_eq!(format!("{}", DatabaseOperation::Sync), "sync");
             assert_eq!(format!("{}", DatabaseOperation::Migration), "migration");
-            assert_eq!(format!("{}", DatabaseOperation::PoolAcquire), "pool_acquire");
+            assert_eq!(
+                format!("{}", DatabaseOperation::PoolAcquire),
+                "pool_acquire"
+            );
         }
 
         #[test]
@@ -1063,7 +1114,10 @@ mod tests {
                 format!("{}", DatabaseErrorKind::ConstraintViolation),
                 "constraint_violation"
             );
-            assert_eq!(format!("{}", DatabaseErrorKind::QueryFailed), "query_failed");
+            assert_eq!(
+                format!("{}", DatabaseErrorKind::QueryFailed),
+                "query_failed"
+            );
             assert_eq!(
                 format!("{}", DatabaseErrorKind::TransactionFailed),
                 "transaction_failed"

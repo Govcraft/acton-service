@@ -92,6 +92,7 @@ dependencies = [
  "axum 0.8.8",
  "axum-htmx",
  "base64 0.22.1",
+ "blake3",
  "cedar-policy 4.8.2",
  "chrono",
  "dashmap 6.1.0",

@@ -128,6 +128,9 @@ pub mod repository;
 #[cfg(feature = "handlers")]
 pub mod handlers;
 
+#[cfg(feature = "audit")]
+pub mod audit;
+
 /// Internal agent-based components
 ///
 /// Connection pool management is handled internally by agents. Users don't
@@ -399,6 +402,13 @@ pub mod prelude {
     // Health status types (for checking aggregated health)
     pub use crate::agents::{AggregatedHealthResponse, HealthStatus};
 
+    // Audit logging
+    #[cfg(feature = "audit")]
+    pub use crate::audit::{
+        AuditConfig, AuditEvent, AuditEventKind, AuditLogger, AuditRoute, AuditSeverity,
+        AuditSource, AuditStorage,
+    };
+
     pub use axum::{
         extract::{Form, Path, Query, State},
         http::{HeaderMap, HeaderValue, StatusCode},
@@ -440,17 +450,6 @@ pub mod prelude {
     // Pagination support (core types from paginator-rs)
     #[cfg(feature = "pagination")]
     pub use crate::pagination::{
-        // Main types
-        Paginator,
-        PaginatorBuilder,
-        PaginatorError,
-        PaginatorResponse,
-        PaginatorResponseMeta,
-        PaginatorResult,
-        PaginatorTrait,
-        // Parameters
-        IntoPaginationParams,
-        PaginationParams,
         // Cursor pagination
         Cursor,
         CursorBuilder,
@@ -461,6 +460,17 @@ pub mod prelude {
         FilterBuilder,
         FilterOperator,
         FilterValue,
+        // Parameters
+        IntoPaginationParams,
+        PaginationParams,
+        // Main types
+        Paginator,
+        PaginatorBuilder,
+        PaginatorError,
+        PaginatorResponse,
+        PaginatorResponseMeta,
+        PaginatorResult,
+        PaginatorTrait,
         // Search
         SearchBuilder,
         SearchParams,
@@ -486,9 +496,7 @@ pub mod prelude {
     // only when pagination feature is disabled to avoid naming conflicts.
     // When using both features, import these types directly from crate::repository.
     #[cfg(all(feature = "repository", not(feature = "pagination")))]
-    pub use crate::repository::{
-        FilterCondition, FilterOperator, FilterValue, Pagination,
-    };
+    pub use crate::repository::{FilterCondition, FilterOperator, FilterValue, Pagination};
 
     #[cfg(feature = "repository")]
     pub use crate::repository::{
@@ -500,7 +508,7 @@ pub mod prelude {
     #[cfg(feature = "handlers")]
     pub use crate::handlers::{
         ApiError, ApiErrorKind, ApiOperation, CollectionHandler, ItemResponse, ListQuery,
-        ListResponse, PaginationMeta, ResponseMeta, SoftDeleteHandler, SortOrder,
-        DEFAULT_PER_PAGE, MAX_PER_PAGE,
+        ListResponse, PaginationMeta, ResponseMeta, SoftDeleteHandler, SortOrder, DEFAULT_PER_PAGE,
+        MAX_PER_PAGE,
     };
 }

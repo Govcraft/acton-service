@@ -103,7 +103,6 @@ where
     }
 }
 
-
 /// Simplified service builder with sensible defaults
 ///
 /// Generic parameter `T` allows custom config extensions.
@@ -286,15 +285,29 @@ where
     ///
     /// Returns a mutable reference to the `ActorRuntime` for spawning agents.
     /// Called automatically by `build()` when connection pools are configured.
-    #[cfg(any(feature = "database", feature = "cache", feature = "events", feature = "turso", feature = "surrealdb"))]
+    #[cfg(any(
+        feature = "database",
+        feature = "cache",
+        feature = "events",
+        feature = "turso",
+        feature = "surrealdb"
+    ))]
     fn init_agent_runtime(&mut self) -> &mut acton_reactive::prelude::ActorRuntime {
         // Note: agent_runtime should already be initialized in the async block
         // before this is called
-        self.agent_runtime.as_mut().expect("Agent runtime not initialized")
+        self.agent_runtime
+            .as_mut()
+            .expect("Agent runtime not initialized")
     }
 
     /// Get the agent broker handle (internal use only)
-    #[cfg(any(feature = "database", feature = "cache", feature = "events", feature = "turso", feature = "surrealdb"))]
+    #[cfg(any(
+        feature = "database",
+        feature = "cache",
+        feature = "events",
+        feature = "turso",
+        feature = "surrealdb"
+    ))]
     fn broker(&self) -> Option<acton_reactive::prelude::ActorHandle> {
         self.agent_runtime.as_ref().map(|r| r.broker())
     }
@@ -363,7 +376,13 @@ where
         #[cfg(feature = "surrealdb")]
         let needs_surrealdb_agent = config.surrealdb.is_some();
 
-        #[cfg(any(feature = "database", feature = "cache", feature = "events", feature = "turso", feature = "surrealdb"))]
+        #[cfg(any(
+            feature = "database",
+            feature = "cache",
+            feature = "events",
+            feature = "turso",
+            feature = "surrealdb"
+        ))]
         let needs_agents = {
             #[cfg(feature = "database")]
             let db = needs_db_agent;
@@ -423,11 +442,12 @@ where
         };
 
         #[cfg(feature = "surrealdb")]
-        let shared_surrealdb_client: Option<crate::agents::SharedSurrealDb> = if needs_surrealdb_agent {
-            Some(std::sync::Arc::new(tokio::sync::RwLock::new(None)))
-        } else {
-            None
-        };
+        let shared_surrealdb_client: Option<crate::agents::SharedSurrealDb> =
+            if needs_surrealdb_agent {
+                Some(std::sync::Arc::new(tokio::sync::RwLock::new(None)))
+            } else {
+                None
+            };
 
         // Agent handles for AppState
         #[cfg(feature = "database")]
@@ -441,7 +461,13 @@ where
         #[cfg(feature = "surrealdb")]
         let mut surrealdb_agent_handle: Option<acton_reactive::prelude::ActorHandle> = None;
 
-        #[cfg(any(feature = "database", feature = "cache", feature = "events", feature = "turso", feature = "surrealdb"))]
+        #[cfg(any(
+            feature = "database",
+            feature = "cache",
+            feature = "events",
+            feature = "turso",
+            feature = "surrealdb"
+        ))]
         let broker_handle = if needs_agents {
             // Use block_in_place to run async code in sync context
             // Initialize agent runtime inside the async block using launch_async()
@@ -450,7 +476,8 @@ where
                     tokio::runtime::Handle::current().block_on(async {
                         // Initialize the agent runtime using launch_async() for async context
                         tracing::debug!("Initializing acton-reactive agent runtime");
-                        self.agent_runtime = Some(acton_reactive::prelude::ActonApp::launch_async().await);
+                        self.agent_runtime =
+                            Some(acton_reactive::prelude::ActonApp::launch_async().await);
                         let runtime = self.init_agent_runtime();
 
                         // Spawn database pool agent
@@ -460,7 +487,9 @@ where
                                 runtime,
                                 db_config.clone(),
                                 shared_db_pool.clone(),
-                            ).await {
+                            )
+                            .await
+                            {
                                 Ok(handle) => {
                                     tracing::info!("Database pool agent spawned");
                                     db_agent_handle = Some(handle);
@@ -478,7 +507,9 @@ where
                                 runtime,
                                 redis_config.clone(),
                                 shared_redis_pool.clone(),
-                            ).await {
+                            )
+                            .await
+                            {
                                 Ok(handle) => {
                                     tracing::info!("Redis pool agent spawned");
                                     redis_agent_handle = Some(handle);
@@ -496,7 +527,9 @@ where
                                 runtime,
                                 nats_config.clone(),
                                 shared_nats_client.clone(),
-                            ).await {
+                            )
+                            .await
+                            {
                                 Ok(handle) => {
                                     tracing::info!("NATS pool agent spawned");
                                     nats_agent_handle = Some(handle);
@@ -514,7 +547,9 @@ where
                                 runtime,
                                 turso_config.clone(),
                                 shared_turso_db.clone(),
-                            ).await {
+                            )
+                            .await
+                            {
                                 Ok(handle) => {
                                     tracing::info!("Turso database agent spawned");
                                     turso_agent_handle = Some(handle);
@@ -532,7 +567,9 @@ where
                                 runtime,
                                 surrealdb_config.clone(),
                                 shared_surrealdb_client.clone(),
-                            ).await {
+                            )
+                            .await
+                            {
                                 Ok(handle) => {
                                     tracing::info!("SurrealDB agent spawned");
                                     surrealdb_agent_handle = Some(handle);
@@ -551,8 +588,70 @@ where
             None
         };
 
-        #[cfg(not(any(feature = "database", feature = "cache", feature = "events", feature = "turso", feature = "surrealdb")))]
+        #[cfg(not(any(
+            feature = "database",
+            feature = "cache",
+            feature = "events",
+            feature = "turso",
+            feature = "surrealdb"
+        )))]
         let broker_handle: Option<acton_reactive::prelude::ActorHandle> = None;
+
+        // Spawn audit agent if configured
+        #[cfg(feature = "audit")]
+        let audit_logger: Option<crate::audit::AuditLogger> = {
+            let audit_config = config.audit.clone().unwrap_or_default();
+            if audit_config.enabled {
+                let service_name = config.service.name.clone();
+
+                // Storage is None by default. DB-backed storage is initialized lazily
+                // after the pool connects. The agent works with in-memory chain + syslog
+                // until storage becomes available.
+                let storage: Option<std::sync::Arc<dyn crate::audit::AuditStorage>> = None;
+
+                if let Ok(_handle) = tokio::runtime::Handle::try_current() {
+                    let result = tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current().block_on(async {
+                            // Initialize agent runtime if not already done
+                            if self.agent_runtime.is_none() {
+                                self.agent_runtime =
+                                    Some(acton_reactive::prelude::ActonApp::launch_async().await);
+                            }
+
+                            if let Some(ref mut runtime) = self.agent_runtime {
+                                let logger_config = audit_config.clone();
+                                match crate::audit::AuditAgent::spawn(
+                                    runtime,
+                                    audit_config,
+                                    storage,
+                                    service_name.clone(),
+                                )
+                                .await
+                                {
+                                    Ok(handle) => {
+                                        tracing::info!("Audit agent spawned");
+                                        Some(crate::audit::AuditLogger::new(handle, service_name, logger_config))
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to spawn audit agent: {}", e);
+                                        None
+                                    }
+                                }
+                            } else {
+                                tracing::warn!("No agent runtime available for audit agent");
+                                None
+                            }
+                        })
+                    });
+                    result
+                } else {
+                    tracing::warn!("No tokio runtime available for audit agent");
+                    None
+                }
+            } else {
+                None
+            }
+        };
 
         let routes = self.routes.unwrap_or_default();
 
@@ -591,6 +690,11 @@ where
             #[cfg(feature = "surrealdb")]
             if let Some(client) = shared_surrealdb_client {
                 state.set_surrealdb_client_storage(client);
+            }
+
+            #[cfg(feature = "audit")]
+            if let Some(ref logger) = audit_logger {
+                state.set_audit_logger(logger.clone());
             }
 
             state
@@ -645,23 +749,34 @@ where
                                 let redis_url_clone = redis_url.clone();
                                 match tokio::task::block_in_place(|| {
                                     tokio::runtime::Handle::current().block_on(async {
-                                        create_redis_session_layer(&session_config_clone, &redis_url_clone).await
+                                        create_redis_session_layer(
+                                            &session_config_clone,
+                                            &redis_url_clone,
+                                        )
+                                        .await
                                     })
                                 }) {
                                     Ok(session_layer) => {
                                         app = app.layer(session_layer);
                                     }
                                     Err(e) => {
-                                        tracing::error!("Failed to create Redis session store: {}", e);
+                                        tracing::error!(
+                                            "Failed to create Redis session store: {}",
+                                            e
+                                        );
                                     }
                                 }
                             }
                             Err(_) => {
-                                tracing::error!("No tokio runtime available for Redis session initialization");
+                                tracing::error!(
+                                    "No tokio runtime available for Redis session initialization"
+                                );
                             }
                         }
                     } else {
-                        tracing::error!("Redis session storage configured but redis_url is missing");
+                        tracing::error!(
+                            "Redis session storage configured but redis_url is missing"
+                        );
                     }
                 }
                 #[cfg(not(feature = "session-memory"))]
@@ -693,7 +808,9 @@ where
                             let cedar_path_normalizer = self.cedar_path_normalizer;
                             match tokio::task::block_in_place(|| {
                                 tokio::runtime::Handle::current().block_on(async {
-                                    let mut builder = crate::middleware::cedar::CedarAuthz::builder(cedar_config.clone());
+                                    let mut builder = crate::middleware::cedar::CedarAuthz::builder(
+                                        cedar_config.clone(),
+                                    );
                                     if let Some(normalizer) = cedar_path_normalizer {
                                         builder = builder.with_path_normalizer(normalizer);
                                     }
@@ -735,6 +852,18 @@ where
             }
         }
 
+        // Apply audit middleware if configured
+        // NOTE: Applied BEFORE token auth in layer order, so it runs AFTER token auth.
+        // Execution order: Request → General MW → Token Auth → Audit MW → Cedar → Handler
+        // This ensures Claims are available when the audit middleware runs.
+        #[cfg(feature = "audit")]
+        if let Some(ref logger) = audit_logger {
+            app = app.layer(axum::middleware::from_fn_with_state(
+                logger.clone(),
+                crate::audit::middleware::audit_middleware,
+            ));
+        }
+
         // Auto-apply token authentication middleware if configured
         // NOTE: Token auth must be applied AFTER Cedar because Axum layers run in reverse order
         // This ensures the execution order is: Request → General Middleware → Token Auth → Cedar → Handler
@@ -765,11 +894,22 @@ where
                             ));
                         }
                         Err(e) => {
-                            tracing::warn!("JWT configuration invalid, skipping authentication middleware: {}", e);
+                            tracing::warn!(
+                                "JWT configuration invalid, skipping authentication middleware: {}",
+                                e
+                            );
                         }
                     }
                 }
             }
+        }
+
+        // Inject AuditLogger as a request extension so auth middleware can access it.
+        // Applied last in layer order (runs first in execution), making it available
+        // to all subsequent middleware including token auth.
+        #[cfg(feature = "audit")]
+        if let Some(ref logger) = audit_logger {
+            app = app.layer(axum::Extension(logger.clone()));
         }
 
         let listener_addr = std::net::SocketAddr::from(([0, 0, 0, 0], config.service.port));
@@ -780,7 +920,7 @@ where
             app,
             #[cfg(feature = "grpc")]
             grpc_routes: self.grpc_services,
-                    agent_runtime: self.agent_runtime,
+            agent_runtime: self.agent_runtime,
         }
     }
 
@@ -798,7 +938,10 @@ where
             "restrictive" => CorsLayer::new(),
             "disabled" => CorsLayer::new(),
             _ => {
-                tracing::warn!("Unknown CORS mode: {}, defaulting to permissive", config.middleware.cors_mode);
+                tracing::warn!(
+                    "Unknown CORS mode: {}, defaulting to permissive",
+                    config.middleware.cors_mode
+                );
                 CorsLayer::permissive()
             }
         };
@@ -967,7 +1110,10 @@ where
                         http_result?;
                     } else {
                         // Single-port mode: Hybrid HTTP + gRPC on same port
-                        tracing::info!("Starting hybrid HTTP+gRPC service on {}", self.listener_addr);
+                        tracing::info!(
+                            "Starting hybrid HTTP+gRPC service on {}",
+                            self.listener_addr
+                        );
 
                         let listener = TcpListener::bind(&self.listener_addr).await?;
 
@@ -975,9 +1121,7 @@ where
                         // The Routes type automatically handles protocol detection based on content-type
                         // gRPC requests (content-type: application/grpc) are routed to gRPC services
                         // All other requests are handled by the HTTP router
-                        let hybrid_service = grpc_routes
-                            .into_axum_router()
-                            .merge(self.app);
+                        let hybrid_service = grpc_routes.into_axum_router().merge(self.app);
 
                         axum::serve(listener, hybrid_service)
                             .with_graceful_shutdown(shutdown_signal())
@@ -987,7 +1131,7 @@ where
                     tracing::info!("Server shutdown complete");
 
                     // Shutdown agent runtime after server stops (gRPC path)
-                                    if let Some(mut runtime) = self.agent_runtime {
+                    if let Some(mut runtime) = self.agent_runtime {
                         tracing::info!("Shutting down agent runtime...");
                         if let Err(e) = runtime.shutdown_all().await {
                             tracing::error!("Agent runtime shutdown error: {}", e);
@@ -1012,7 +1156,7 @@ where
         tracing::info!("Server shutdown complete");
 
         // Shutdown agent runtime after server stops (HTTP-only path)
-            if let Some(mut runtime) = self.agent_runtime {
+        if let Some(mut runtime) = self.agent_runtime {
             tracing::info!("Shutting down agent runtime...");
             if let Err(e) = runtime.shutdown_all().await {
                 tracing::error!("Agent runtime shutdown error: {}", e);
@@ -1028,7 +1172,6 @@ where
         &self.config
     }
 }
-
 
 #[cfg(test)]
 mod tests {

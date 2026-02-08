@@ -3,7 +3,7 @@ use colored::Colorize;
 use std::fs;
 use std::path::Path;
 
-use crate::templates::{ServiceTemplate, config};
+use crate::templates::{config, ServiceTemplate};
 use crate::utils;
 
 pub async fn execute(output: Option<String>, examples: bool, dry_run: bool) -> Result<()> {
@@ -13,8 +13,8 @@ pub async fn execute(output: Option<String>, examples: bool, dry_run: bool) -> R
 
     // Read Cargo.toml to determine service configuration
     let cargo_toml_path = project_root.join("Cargo.toml");
-    let cargo_content = fs::read_to_string(&cargo_toml_path)
-        .context("Failed to read Cargo.toml")?;
+    let cargo_content =
+        fs::read_to_string(&cargo_toml_path).context("Failed to read Cargo.toml")?;
 
     // Parse service template from Cargo.toml
     let template = parse_service_config(&cargo_content)?;
@@ -56,8 +56,7 @@ pub async fn execute(output: Option<String>, examples: bool, dry_run: bool) -> R
     }
 
     // Write config file
-    fs::write(&output_path, config_content)
-        .context("Failed to write config file")?;
+    fs::write(&output_path, config_content).context("Failed to write config file")?;
 
     show_success(&output_path);
 
@@ -76,6 +75,7 @@ fn parse_service_config(cargo_toml: &str) -> Result<ServiceTemplate> {
     let mut resilience = false;
     let mut rate_limit = false;
     let mut openapi = false;
+    let mut audit = false;
 
     // Parse package name
     for line in cargo_toml.lines() {
@@ -122,6 +122,9 @@ fn parse_service_config(cargo_toml: &str) -> Result<ServiceTemplate> {
             if line.contains("openapi") {
                 openapi = true;
             }
+            if line.contains("audit") {
+                audit = true;
+            }
         }
     }
 
@@ -142,6 +145,7 @@ fn parse_service_config(cargo_toml: &str) -> Result<ServiceTemplate> {
         resilience,
         rate_limit,
         openapi,
+        audit,
     })
 }
 
@@ -202,7 +206,8 @@ fn show_success(output_path: &Path) {
     println!("     export ACTON_DATABASE_URL=postgres://...");
     println!("     export ACTON_CACHE_URL=redis://...");
 
-    if let Ok(relative_path) = output_path.strip_prefix(std::env::current_dir().unwrap_or_default()) {
+    if let Ok(relative_path) = output_path.strip_prefix(std::env::current_dir().unwrap_or_default())
+    {
         println!("\n{} Edit config: {}", "→".blue(), relative_path.display());
     }
 }

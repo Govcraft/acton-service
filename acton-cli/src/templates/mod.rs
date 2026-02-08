@@ -1,13 +1,13 @@
-pub mod service;
 pub mod cargo_toml;
 pub mod config;
-pub mod handlers;
 pub mod deployment;
+pub mod handlers;
+pub mod service;
 pub mod worker;
 
-use serde::{Serialize, Deserialize};
-use serde_json::json;
 use chrono::Datelike;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 /// Template data for service generation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,6 +26,7 @@ pub struct ServiceTemplate {
     pub resilience: bool,
     pub rate_limit: bool,
     pub openapi: bool,
+    pub audit: bool,
 }
 
 impl ServiceTemplate {
@@ -49,6 +50,7 @@ impl ServiceTemplate {
             "resilience": self.resilience,
             "rate_limit": self.rate_limit,
             "openapi": self.openapi,
+            "audit": self.audit,
             "year": chrono::Utc::now().year(),
         })
     }
@@ -86,6 +88,10 @@ impl ServiceTemplate {
 
         if self.rate_limit {
             features.push("rate-limit".to_string());
+        }
+
+        if self.audit {
+            features.push("audit".to_string());
         }
 
         features

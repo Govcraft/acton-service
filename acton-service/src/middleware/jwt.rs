@@ -39,9 +39,7 @@ impl JwtAuth {
                 4. For RS256/ES256: Use PEM format public key\n\
                 5. For HS256: Use raw secret file\n\n\
                 Error: {}",
-                path_display,
-                path_display,
-                e
+                path_display, path_display, e
             ))))
         })?;
 
@@ -119,23 +117,118 @@ impl JwtAuth {
             return Ok(next.run(request).await);
         }
 
+        // Build audit source info before validation
+        #[cfg(feature = "audit")]
+        let audit_source = {
+            use crate::audit::event::AuditSource;
+            AuditSource {
+                ip: request
+                    .headers()
+                    .get("x-forwarded-for")
+                    .or_else(|| request.headers().get("x-real-ip"))
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.split(',').next().unwrap_or(s).trim().to_string()),
+                user_agent: request
+                    .headers()
+                    .get("user-agent")
+                    .and_then(|v| v.to_str().ok())
+                    .map(String::from),
+                subject: None,
+                request_id: request
+                    .headers()
+                    .get("x-request-id")
+                    .and_then(|v| v.to_str().ok())
+                    .map(String::from),
+            }
+        };
+
+        #[cfg(feature = "audit")]
+        let audit_logger = request
+            .extensions()
+            .get::<crate::audit::AuditLogger>()
+            .cloned();
+
         // Extract token from headers
-        let token = extract_token(request.headers())?;
+        let token = match extract_token(request.headers()) {
+            Ok(t) => t,
+            Err(e) => {
+                #[cfg(feature = "audit")]
+                if let Some(ref logger) = audit_logger {
+                    if logger.config().audit_auth_events {
+                        logger
+                            .log_auth(
+                                crate::audit::event::AuditEventKind::AuthLoginFailed,
+                                crate::audit::event::AuditSeverity::Warning,
+                                audit_source,
+                            )
+                            .await;
+                    }
+                }
+                return Err(e);
+            }
+        };
 
         // Validate token and extract claims
-        let claims = auth.validate_token(&token)?;
+        let claims = match auth.validate_token(&token) {
+            Ok(c) => c,
+            Err(e) => {
+                #[cfg(feature = "audit")]
+                if let Some(ref logger) = audit_logger {
+                    if logger.config().audit_auth_events {
+                        logger
+                            .log_auth(
+                                crate::audit::event::AuditEventKind::AuthLoginFailed,
+                                crate::audit::event::AuditSeverity::Warning,
+                                audit_source,
+                            )
+                            .await;
+                    }
+                }
+                return Err(e);
+            }
+        };
 
         // Check JTI revocation if cache feature is enabled and revocation checker is configured
         #[cfg(feature = "cache")]
         if let Some(revocation) = &auth.revocation {
             if let Some(jti) = &claims.jti {
                 if revocation.is_revoked(jti).await? {
+                    #[cfg(feature = "audit")]
+                    if let Some(ref logger) = audit_logger {
+                        if logger.config().audit_auth_events {
+                            let mut source = audit_source.clone();
+                            source.subject = Some(claims.sub.clone());
+                            logger
+                                .log_auth(
+                                    crate::audit::event::AuditEventKind::AuthTokenRevoked,
+                                    crate::audit::event::AuditSeverity::Warning,
+                                    source,
+                                )
+                                .await;
+                        }
+                    }
                     return Err(Error::Unauthorized("Token has been revoked".to_string()));
                 }
             } else {
                 // If revocation is configured but token has no JTI, log a warning
                 // but allow the request (for backward compatibility)
                 tracing::warn!("JWT revocation is enabled but token has no JTI claim");
+            }
+        }
+
+        // Emit successful auth audit event
+        #[cfg(feature = "audit")]
+        if let Some(ref logger) = audit_logger {
+            if logger.config().audit_auth_events {
+                let mut source = audit_source;
+                source.subject = Some(claims.sub.clone());
+                logger
+                    .log_auth(
+                        crate::audit::event::AuditEventKind::AuthLoginSuccess,
+                        crate::audit::event::AuditSeverity::Informational,
+                        source,
+                    )
+                    .await;
             }
         }
 

@@ -103,6 +103,11 @@ where
     #[serde(default)]
     pub session: Option<crate::session::SessionConfig>,
 
+    /// Audit logging configuration (optional)
+    #[cfg(feature = "audit")]
+    #[serde(default)]
+    pub audit: Option<crate::audit::AuditConfig>,
+
     /// Custom configuration extensions
     ///
     /// Any fields in config.toml that don't match the above framework fields
@@ -1006,7 +1011,9 @@ fn default_bulkhead_max_queued() -> usize {
 
 // Metrics default functions
 fn default_latency_buckets() -> Vec<f64> {
-    vec![5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0, 10000.0]
+    vec![
+        5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0, 10000.0,
+    ]
 }
 
 // Governor default functions
@@ -1140,7 +1147,11 @@ where
         }
 
         // 3. System-wide directory (/etc/acton-service/{service_name}/config.toml)
-        paths.push(PathBuf::from("/etc/acton-service").join(service_name).join("config.toml"));
+        paths.push(
+            PathBuf::from("/etc/acton-service")
+                .join(service_name)
+                .join("config.toml"),
+        );
 
         paths
     }
@@ -1154,7 +1165,8 @@ where
         let config_file_path = Path::new(service_name).join("config.toml");
 
         // place_config_file creates parent directories if needed
-        xdg_dirs.place_config_file(&config_file_path)
+        xdg_dirs
+            .place_config_file(&config_file_path)
             .unwrap_or_else(|_| {
                 // Fallback to manual path construction if place_config_file fails
                 PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| String::from("~")))
@@ -1172,11 +1184,13 @@ where
         let config_file_path = Path::new(service_name).join("config.toml");
 
         // place_config_file creates all necessary parent directories
-        let config_path = xdg_dirs.place_config_file(&config_file_path)
-            .map_err(|e| crate::error::Error::Internal(format!("Failed to create config directory: {}", e)))?;
+        let config_path = xdg_dirs.place_config_file(&config_file_path).map_err(|e| {
+            crate::error::Error::Internal(format!("Failed to create config directory: {}", e))
+        })?;
 
         // Return the directory path, not the file path
-        Ok(config_path.parent()
+        Ok(config_path
+            .parent()
             .ok_or_else(|| crate::error::Error::Internal("Invalid config path".to_string()))?
             .to_path_buf())
     }
@@ -1282,6 +1296,8 @@ where
             cedar: None,
             #[cfg(feature = "session")]
             session: None,
+            #[cfg(feature = "audit")]
+            audit: None,
             custom: T::default(),
         }
     }
@@ -1365,6 +1381,8 @@ mod tests {
             cedar: None,
             #[cfg(feature = "session")]
             session: None,
+            #[cfg(feature = "audit")]
+            audit: None,
             custom,
         };
 
@@ -1413,6 +1431,8 @@ mod tests {
             cedar: None,
             #[cfg(feature = "session")]
             session: None,
+            #[cfg(feature = "audit")]
+            audit: None,
             custom: custom.clone(),
         };
 
@@ -1473,7 +1493,10 @@ mod tests {
         // Verify custom config (flattened fields)
         assert_eq!(config.custom.api_key, "prod-api-key");
         assert_eq!(config.custom.timeout_ms, 10000);
-        assert_eq!(config.custom.feature_flags.get("new_dashboard"), Some(&true));
+        assert_eq!(
+            config.custom.feature_flags.get("new_dashboard"),
+            Some(&true)
+        );
         assert_eq!(config.custom.feature_flags.get("analytics"), Some(&true));
     }
 }

@@ -119,6 +119,7 @@ askama_web = { version = "0.15.0", features = ["axum-0.8"], optional = true }
 paginator-rs = { version = "0.2.2", optional = true }
 paginator-axum = { version = "0.2.2", optional = true }
 paginator-sqlx = { version = "0.2.2", optional = true }
+blake3 = { workspace = true, optional = true }
 
 [features]
 default = ["http", "observability"]
@@ -179,6 +180,9 @@ repository = []
 
 # Handler traits for REST CRUD patterns
 handlers = ["repository"]
+
+# Audit logging with BLAKE3 hash chaining
+audit = ["dep:blake3"]
 
 # Basic examples
 [[example]]

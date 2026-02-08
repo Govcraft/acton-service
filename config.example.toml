@@ -152,6 +152,24 @@ optional = false      # Service can start without NATS if true
 lazy_init = true      # Initialize connection in background
 
 # ============================================================================
+# AUDIT LOGGING CONFIGURATION (Optional)
+# Requires feature: audit
+# ============================================================================
+# [audit]
+# enabled = true
+# audit_all_requests = false        # Audit every HTTP request (noisy)
+# audit_auth_events = true          # Auto-audit auth events (login, logout, etc.)
+# otlp_logs_enabled = false         # Export audit logs via OTLP (requires observability)
+# audited_routes = ["/api/v1/admin/*"]   # Glob patterns for per-route auditing
+# excluded_routes = ["/health", "/ready", "/metrics"]
+#
+# [audit.syslog]
+# transport = "udp"                 # "udp", "tcp", or "none"
+# address = "127.0.0.1:514"
+# facility = 13                     # 13 = audit (RFC 5424)
+# # app_name = "my-service"         # Defaults to service.name
+
+# ============================================================================
 # OPENTELEMETRY CONFIGURATION (Optional)
 # ============================================================================
 [otlp]

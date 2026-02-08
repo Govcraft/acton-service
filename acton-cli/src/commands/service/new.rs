@@ -35,12 +35,7 @@ pub async fn execute(
 
     // Determine if we should use interactive mode
     let use_interactive = interactive
-        || (!yes
-            && database.is_none()
-            && cache.is_none()
-            && events.is_none()
-            && !grpc
-            && !full);
+        || (!yes && database.is_none() && cache.is_none() && events.is_none() && !grpc && !full);
 
     // Collect configuration
     let config = if use_interactive && !yes {
@@ -152,11 +147,13 @@ fn collect_interactive_config(name: &str) -> Result<ServiceConfig> {
             .default(0)
             .interact()?;
 
-        Some(match db_idx {
-            0 => "postgres",
-            _ => "postgres",
-        }
-        .to_string())
+        Some(
+            match db_idx {
+                0 => "postgres",
+                _ => "postgres",
+            }
+            .to_string(),
+        )
     } else {
         None
     };
@@ -231,6 +228,7 @@ async fn create_project(config: &ServiceConfig, project_path: &Path, no_git: boo
         resilience: config.resilience,
         rate_limit: config.rate_limit,
         openapi: config.openapi,
+        audit: false,
     };
 
     // Initialize template engine
@@ -240,10 +238,20 @@ async fn create_project(config: &ServiceConfig, project_path: &Path, no_git: boo
     // Prepare template context
     let mut context = template.to_json();
     let context_obj = context.as_object_mut().unwrap();
-    context_obj.insert("acton_service_path".to_string(),
-        serde_json::Value::String(template.acton_service_path().unwrap_or_default()));
-    context_obj.insert("features".to_string(),
-        serde_json::Value::Array(template.features().iter().map(|f| serde_json::Value::String(f.clone())).collect()));
+    context_obj.insert(
+        "acton_service_path".to_string(),
+        serde_json::Value::String(template.acton_service_path().unwrap_or_default()),
+    );
+    context_obj.insert(
+        "features".to_string(),
+        serde_json::Value::Array(
+            template
+                .features()
+                .iter()
+                .map(|f| serde_json::Value::String(f.clone()))
+                .collect(),
+        ),
+    );
 
     pb.set_message("Creating project structure...");
     utils::create_dir_all(project_path)?;
@@ -334,7 +342,10 @@ async fn create_project(config: &ServiceConfig, project_path: &Path, no_git: boo
 
 fn show_dry_run(config: &ServiceConfig, project_path: &Path) {
     println!("\n{}", "Dry run - would generate:".bold());
-    println!("\n{}", format!("Project: {}", project_path.display()).cyan());
+    println!(
+        "\n{}",
+        format!("Project: {}", project_path.display()).cyan()
+    );
 
     println!("\n{}:", "Files".bold());
     println!("  • Cargo.toml");
@@ -380,7 +391,11 @@ fn show_dry_run(config: &ServiceConfig, project_path: &Path) {
 }
 
 fn show_success(config: &ServiceConfig, project_path: &Path) {
-    println!("\n{} {}", "✓".green().bold(), format!("Created {} service", config.name).bold());
+    println!(
+        "\n{} {}",
+        "✓".green().bold(),
+        format!("Created {} service", config.name).bold()
+    );
 
     if config.http || config.grpc || config.database.is_some() {
         println!("\n{}:", "Features enabled".bold());
@@ -408,7 +423,10 @@ fn show_success(config: &ServiceConfig, project_path: &Path) {
     if config.grpc {
         println!("\n{}:", "Port Configuration".bold());
         if config.http {
-            println!("  {} HTTP and gRPC share port 8080 (single-port mode)", "ℹ".cyan());
+            println!(
+                "  {} HTTP and gRPC share port 8080 (single-port mode)",
+                "ℹ".cyan()
+            );
             println!("  {} To use separate ports, edit config.toml:", "→".cyan());
             println!("    Set use_separate_port = true (HTTP: 8080, gRPC: 9090)");
         } else {
@@ -425,5 +443,8 @@ fn show_success(config: &ServiceConfig, project_path: &Path) {
 
     println!("  cargo run");
 
-    println!("\n{} Learn more: https://docs.acton-service.dev/getting-started", "📚".cyan());
+    println!(
+        "\n{} Learn more: https://docs.acton-service.dev/getting-started",
+        "📚".cyan()
+    );
 }
