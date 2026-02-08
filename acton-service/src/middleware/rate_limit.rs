@@ -88,8 +88,7 @@ impl RateLimit {
     /// 2. Global per-user limits (if JWT claims present)
     /// 3. Global per-client limits (if client token)
     pub async fn middleware(
-        #[cfg_attr(not(feature = "cache"), allow(unused_variables))]
-        State(rate_limit): State<Self>,
+        #[cfg_attr(not(feature = "cache"), allow(unused_variables))] State(rate_limit): State<Self>,
         request: Request<Body>,
         next: Next,
     ) -> Result<Response, Error> {
@@ -148,7 +147,11 @@ impl RateLimit {
             };
 
             return self
-                .check_and_increment(&key, route_config.requests_per_minute, self.config.window_secs)
+                .check_and_increment(
+                    &key,
+                    route_config.requests_per_minute,
+                    self.config.window_secs,
+                )
                 .await;
         }
 
@@ -257,18 +260,12 @@ impl RateLimit {
 
         // Standard rate limit headers
         if let Ok(value) = HeaderValue::from_str(&result.limit.to_string()) {
-            headers.insert(
-                HeaderName::from_static("x-ratelimit-limit"),
-                value,
-            );
+            headers.insert(HeaderName::from_static("x-ratelimit-limit"), value);
         }
 
         let remaining = result.limit.saturating_sub(result.count);
         if let Ok(value) = HeaderValue::from_str(&remaining.to_string()) {
-            headers.insert(
-                HeaderName::from_static("x-ratelimit-remaining"),
-                value,
-            );
+            headers.insert(HeaderName::from_static("x-ratelimit-remaining"), value);
         }
 
         // Calculate reset timestamp
@@ -278,10 +275,7 @@ impl RateLimit {
             .unwrap_or(0);
 
         if let Ok(value) = HeaderValue::from_str(&reset_timestamp.to_string()) {
-            headers.insert(
-                HeaderName::from_static("x-ratelimit-reset"),
-                value,
-            );
+            headers.insert(HeaderName::from_static("x-ratelimit-reset"), value);
         }
     }
 }

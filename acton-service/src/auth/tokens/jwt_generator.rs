@@ -120,8 +120,7 @@ impl JwtGenerator {
         };
 
         let header = Header::new(self.algorithm);
-        encode(&header, &jwt_claims, &self.encoding_key)
-            .map_err(|e| Error::Jwt(Box::new(e)))
+        encode(&header, &jwt_claims, &self.encoding_key).map_err(|e| Error::Jwt(Box::new(e)))
     }
 }
 
@@ -164,12 +163,10 @@ fn parse_algorithm(alg: &str) -> Result<Algorithm, Error> {
 fn create_encoding_key(key_bytes: &[u8], algorithm: Algorithm) -> Result<EncodingKey, Error> {
     match algorithm {
         Algorithm::RS256 | Algorithm::RS384 | Algorithm::RS512 => {
-            EncodingKey::from_rsa_pem(key_bytes)
-                .map_err(|e| Error::Jwt(Box::new(e)))
+            EncodingKey::from_rsa_pem(key_bytes).map_err(|e| Error::Jwt(Box::new(e)))
         }
         Algorithm::ES256 | Algorithm::ES384 => {
-            EncodingKey::from_ec_pem(key_bytes)
-                .map_err(|e| Error::Jwt(Box::new(e)))
+            EncodingKey::from_ec_pem(key_bytes).map_err(|e| Error::Jwt(Box::new(e)))
         }
         Algorithm::HS256 | Algorithm::HS384 | Algorithm::HS512 => {
             Ok(EncodingKey::from_secret(key_bytes))

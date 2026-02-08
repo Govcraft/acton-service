@@ -53,9 +53,6 @@ mod tests {
     fn test_method_to_function_name() {
         assert_eq!(method_to_function_name("GET", "/users"), "get_users");
         assert_eq!(method_to_function_name("POST", "/users"), "post_users");
-        assert_eq!(
-            method_to_function_name("GET", "/users/:id"),
-            "get_users_id"
-        );
+        assert_eq!(method_to_function_name("GET", "/users/:id"), "get_users_id");
     }
 }

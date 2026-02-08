@@ -4,7 +4,10 @@
 use async_nats::Client;
 use std::time::Duration;
 
-use crate::{config::NatsConfig, error::{Error, Result}};
+use crate::{
+    config::NatsConfig,
+    error::{Error, Result},
+};
 
 /// Create a NATS client with retry logic
 ///
@@ -76,12 +79,9 @@ async fn try_create_client(config: &NatsConfig) -> Result<Client> {
 
     opts = opts.max_reconnects(Some(config.max_reconnects));
 
-    let client = opts
-        .connect(&config.url)
-        .await
-        .map_err(|e| {
-            Error::Nats(format!(
-                "Failed to connect to NATS server at '{}'\n\n\
+    let client = opts.connect(&config.url).await.map_err(|e| {
+        Error::Nats(format!(
+            "Failed to connect to NATS server at '{}'\n\n\
                 Troubleshooting:\n\
                 1. Verify NATS server is running: nats-server --version\n\
                 2. Check NATS server status: nats-server --signal status\n\
@@ -93,23 +93,19 @@ async fn try_create_client(config: &NatsConfig) -> Result<Client> {
                 Max reconnects: {}\n\
                 Client name: {}\n\
                 Error: {}",
-                config.url,
-                config.max_reconnects,
-                config.name.as_deref().unwrap_or("<none>"),
-                e
-            ))
-        })?;
+            config.url,
+            config.max_reconnects,
+            config.name.as_deref().unwrap_or("<none>"),
+            e
+        ))
+    })?;
 
     Ok(client)
 }
 
 /// Publish an event to NATS
 #[cfg(feature = "events")]
-pub async fn publish_event(
-    client: &Client,
-    subject: &str,
-    payload: Vec<u8>,
-) -> Result<()> {
+pub async fn publish_event(client: &Client, subject: &str, payload: Vec<u8>) -> Result<()> {
     client
         .publish(subject.to_string(), payload.into())
         .await

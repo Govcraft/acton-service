@@ -139,18 +139,20 @@ fn add_handler_to_file(project_root: &Path, handler_code: &str) -> Result<()> {
         );
     }
 
-    let current_content = fs::read_to_string(&handlers_path)
-        .context("Failed to read handlers.rs")?;
+    let current_content =
+        fs::read_to_string(&handlers_path).context("Failed to read handlers.rs")?;
 
     // Append the new handler
-    let new_content = if current_content.trim().is_empty() || current_content.trim() == "// Add your handler modules here\n// Example:\n// pub mod users;" {
+    let new_content = if current_content.trim().is_empty()
+        || current_content.trim()
+            == "// Add your handler modules here\n// Example:\n// pub mod users;"
+    {
         handler_code.to_string()
     } else {
         format!("{}\n\n{}", current_content.trim_end(), handler_code)
     };
 
-    fs::write(&handlers_path, new_content)
-        .context("Failed to write handlers.rs")?;
+    fs::write(&handlers_path, new_content).context("Failed to write handlers.rs")?;
 
     Ok(())
 }
@@ -168,8 +170,7 @@ fn add_route_to_main(
         anyhow::bail!("main.rs not found");
     }
 
-    let main_content = fs::read_to_string(&main_path)
-        .context("Failed to read main.rs")?;
+    let main_content = fs::read_to_string(&main_path).context("Failed to read main.rs")?;
 
     // Generate the route method (get, post, etc.)
     let route_method = match method.to_uppercase().as_str() {
@@ -184,7 +185,10 @@ fn add_route_to_main(
     // Check if route already exists
     let route_check = format!("{}(handlers::{})", route_method, handler);
     if main_content.contains(&route_check) {
-        utils::warning(&format!("Route {} {} already exists in main.rs", method, path));
+        utils::warning(&format!(
+            "Route {} {} already exists in main.rs",
+            method, path
+        ));
         return Ok(());
     }
 
@@ -204,7 +208,10 @@ fn add_route_to_main(
 
         // Find the next line with "router" to insert before it
         let after = &main_content[comment_end..];
-        let route_line = format!("            router.route(\"{}\", {}(handlers::{}))", path, route_method, handler);
+        let route_line = format!(
+            "            router.route(\"{}\", {}(handlers::{}))",
+            path, route_method, handler
+        );
 
         format!("{}{}\n{}", before, route_line, after)
     } else if let Some(pos) = main_content.find(".route(") {
@@ -214,20 +221,25 @@ fn add_route_to_main(
             let route_end = pos + end_pos + 1;
             let before = &main_content[..route_end];
             let after = &main_content[route_end..];
-            let route_line = format!("\n            .route(\"{}\", {}(handlers::{}))", path, route_method, handler);
+            let route_line = format!(
+                "\n            .route(\"{}\", {}(handlers::{}))",
+                path, route_method, handler
+            );
             format!("{}{}{}", before, route_line, after)
         } else {
             main_content
         }
     } else {
-        let route_line = format!("router.route(\"{}\", {}(handlers::{}))", path, route_method, handler);
+        let route_line = format!(
+            "router.route(\"{}\", {}(handlers::{}))",
+            path, route_method, handler
+        );
         utils::warning("Could not automatically add route to main.rs. Please add manually:");
         println!("\n{}", route_line);
         return Ok(());
     };
 
-    fs::write(&main_path, new_content)
-        .context("Failed to write main.rs")?;
+    fs::write(&main_path, new_content).context("Failed to write main.rs")?;
 
     Ok(())
 }
@@ -241,9 +253,15 @@ fn show_dry_run(template: &HandlerTemplate, version: &str) {
     println!("  Path: /{}{}", version, template.path);
 
     if template.has_request_body {
-        println!("  Request: {}Request", name_format::to_pascal_case(&template.function_name));
+        println!(
+            "  Request: {}Request",
+            name_format::to_pascal_case(&template.function_name)
+        );
     }
-    println!("  Response: {}Response", name_format::to_pascal_case(&template.function_name));
+    println!(
+        "  Response: {}Response",
+        name_format::to_pascal_case(&template.function_name)
+    );
 
     println!("\n{}:", "Files Modified".bold());
     println!("  • src/handlers.rs (handler function added)");
@@ -251,22 +269,46 @@ fn show_dry_run(template: &HandlerTemplate, version: &str) {
 }
 
 fn show_success(template: &HandlerTemplate, version: &str, project_root: &Path) {
-    utils::success(&format!("Added endpoint {} /{}{}", template.method, version, template.path));
+    utils::success(&format!(
+        "Added endpoint {} /{}{}",
+        template.method, version, template.path
+    ));
 
     println!("\n{}:", "Generated".bold());
-    println!("  {} Handler function: {}", "✓".green(), template.function_name);
+    println!(
+        "  {} Handler function: {}",
+        "✓".green(),
+        template.function_name
+    );
     if template.has_request_body {
-        println!("  {} Request struct: {}Request", "✓".green(), name_format::to_pascal_case(&template.function_name));
+        println!(
+            "  {} Request struct: {}Request",
+            "✓".green(),
+            name_format::to_pascal_case(&template.function_name)
+        );
     }
-    println!("  {} Response struct: {}Response", "✓".green(), name_format::to_pascal_case(&template.function_name));
+    println!(
+        "  {} Response struct: {}Response",
+        "✓".green(),
+        name_format::to_pascal_case(&template.function_name)
+    );
 
     println!("\n{}:", "Next steps".bold());
-    println!("  1. Implement handler logic in src/handlers.rs:{}", template.function_name);
+    println!(
+        "  1. Implement handler logic in src/handlers.rs:{}",
+        template.function_name
+    );
     println!("  2. Define request/response fields");
     println!("  3. Test: cargo run");
-    println!("  4. Verify: curl -X {} http://localhost:8080/{}{}", template.method, version, template.path);
+    println!(
+        "  4. Verify: curl -X {} http://localhost:8080/{}{}",
+        template.method, version, template.path
+    );
 
-    if let Ok(relative_path) = project_root.join("src/handlers.rs").strip_prefix(std::env::current_dir().unwrap_or_default()) {
+    if let Ok(relative_path) = project_root
+        .join("src/handlers.rs")
+        .strip_prefix(std::env::current_dir().unwrap_or_default())
+    {
         println!("\n{} Edit handler: {}", "→".blue(), relative_path.display());
     }
 }

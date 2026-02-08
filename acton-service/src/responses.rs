@@ -105,7 +105,9 @@ impl<T: Serialize> IntoResponse for Created<T> {
         // Add Location header if provided
         if let Some(location) = self.location {
             if let Ok(header_value) = HeaderValue::from_str(&location) {
-                response.headers_mut().insert(header::LOCATION, header_value);
+                response
+                    .headers_mut()
+                    .insert(header::LOCATION, header_value);
             }
         }
 
@@ -292,10 +294,7 @@ impl ValidationError {
             message: message.into(),
         };
 
-        self.errors
-            .entry(field)
-            .or_default()
-            .push(error);
+        self.errors.entry(field).or_default().push(error);
     }
 
     /// Check if there are any validation errors

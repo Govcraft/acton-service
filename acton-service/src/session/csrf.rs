@@ -182,11 +182,9 @@ where
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         // Get session from request extensions (set by SessionManagerLayer)
-        let session = parts
-            .extensions
-            .get::<Session>()
-            .cloned()
-            .ok_or_else(|| Error::Session("Session not found in request extensions for CSRF".to_string()))?;
+        let session = parts.extensions.get::<Session>().cloned().ok_or_else(|| {
+            Error::Session("Session not found in request extensions for CSRF".to_string())
+        })?;
 
         // Default token length
         const DEFAULT_TOKEN_LENGTH: usize = 32;
@@ -299,17 +297,15 @@ where
             let session = session.unwrap().clone();
 
             // Get expected token from session
-            let expected_token: Option<String> = session
-                .get(CSRF_SESSION_KEY)
-                .await
-                .ok()
-                .flatten();
+            let expected_token: Option<String> = session.get(CSRF_SESSION_KEY).await.ok().flatten();
 
             let expected_token = match expected_token {
                 Some(t) => t,
                 None => {
                     tracing::warn!("CSRF validation failed: no token in session");
-                    return Ok(csrf_error_response("CSRF validation failed: no token in session"));
+                    return Ok(csrf_error_response(
+                        "CSRF validation failed: no token in session",
+                    ));
                 }
             };
 
@@ -327,7 +323,9 @@ where
                 Some(t) => t,
                 None => {
                     tracing::warn!("CSRF validation failed: no token provided in header");
-                    return Ok(csrf_error_response("CSRF validation failed: no token provided"));
+                    return Ok(csrf_error_response(
+                        "CSRF validation failed: no token provided",
+                    ));
                 }
             };
 
@@ -407,7 +405,10 @@ fn csrf_error_response(message: &str) -> Response {
     (
         StatusCode::FORBIDDEN,
         [("Content-Type", "application/json")],
-        format!(r#"{{"error": "csrf_validation_failed", "message": "{}"}}"#, message),
+        format!(
+            r#"{{"error": "csrf_validation_failed", "message": "{}"}}"#,
+            message
+        ),
     )
         .into_response()
 }
@@ -474,5 +475,4 @@ mod tests {
         assert!(!constant_time_compare("abc", "ab"));
         assert!(!constant_time_compare("ab", "abc"));
     }
-
 }

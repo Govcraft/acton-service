@@ -142,9 +142,9 @@ pub use paginator_axum::PaginationQueryParams;
 #[cfg(feature = "pagination-sqlx")]
 pub use paginator_sqlx::validate_field_name;
 #[cfg(feature = "pagination-sqlx")]
-pub use paginator_sqlx::PaginatedQuery;
-#[cfg(feature = "pagination-sqlx")]
 pub use paginator_sqlx::PaginateQuery;
+#[cfg(feature = "pagination-sqlx")]
+pub use paginator_sqlx::PaginatedQuery;
 #[cfg(feature = "pagination-sqlx")]
 pub use paginator_sqlx::QueryBuilderExt;
 

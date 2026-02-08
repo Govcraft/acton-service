@@ -39,10 +39,7 @@ async fn create_database_with_retries(
                         attempt + 1
                     );
                 } else {
-                    tracing::info!(
-                        "Turso database connected: mode={:?}",
-                        config.mode
-                    );
+                    tracing::info!("Turso database connected: mode={:?}", config.mode);
                 }
                 return Ok(db);
             }
@@ -175,8 +172,7 @@ async fn build_embedded_replica(config: &TursoConfig) -> Result<libsql::Database
         url_safe
     );
 
-    let mut builder =
-        libsql::Builder::new_remote_replica(path.clone(), url.clone(), token.clone());
+    let mut builder = libsql::Builder::new_remote_replica(path.clone(), url.clone(), token.clone());
 
     builder = builder.read_your_writes(config.read_your_writes);
 
@@ -228,9 +224,7 @@ fn categorize_turso_error(err: &libsql::Error) -> &'static str {
 
     if err_str.contains("auth") || err_str.contains("token") || err_str.contains("unauthorized") {
         "Authentication error - check your auth token"
-    } else if err_str.contains("connect")
-        || err_str.contains("network")
-        || err_str.contains("dns")
+    } else if err_str.contains("connect") || err_str.contains("network") || err_str.contains("dns")
     {
         "Network connection error - check connectivity"
     } else if err_str.contains("permission") || err_str.contains("denied") {
@@ -367,7 +361,11 @@ mod tests {
         };
 
         let result = create_database(&config).await;
-        assert!(result.is_ok(), "Failed to create local database: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to create local database: {:?}",
+            result.err()
+        );
 
         // libsql doesn't create the file until first write operation, so perform one
         let db = result.unwrap();
@@ -400,7 +398,9 @@ mod tests {
             lazy_init: false,
         };
 
-        let db = create_database(&config).await.expect("Failed to create database");
+        let db = create_database(&config)
+            .await
+            .expect("Failed to create database");
         let conn = db.connect().expect("Failed to get connection");
 
         // Create a table
@@ -426,16 +426,28 @@ mod tests {
             .await
             .expect("Failed to query data");
 
-        let row1 = rows.next().await.expect("Failed to get row").expect("No row found");
+        let row1 = rows
+            .next()
+            .await
+            .expect("Failed to get row")
+            .expect("No row found");
         assert_eq!(row1.get::<i64>(0).unwrap(), 1);
         assert_eq!(row1.get::<String>(1).unwrap(), "Alice");
 
-        let row2 = rows.next().await.expect("Failed to get row").expect("No row found");
+        let row2 = rows
+            .next()
+            .await
+            .expect("Failed to get row")
+            .expect("No row found");
         assert_eq!(row2.get::<i64>(0).unwrap(), 2);
         assert_eq!(row2.get::<String>(1).unwrap(), "Bob");
 
         // Verify no more rows
-        assert!(rows.next().await.expect("Failed to check next row").is_none());
+        assert!(rows
+            .next()
+            .await
+            .expect("Failed to check next row")
+            .is_none());
 
         cleanup_db(&db_path);
     }
@@ -458,7 +470,9 @@ mod tests {
             lazy_init: false,
         };
 
-        let db = create_database(&config).await.expect("Failed to create database");
+        let db = create_database(&config)
+            .await
+            .expect("Failed to create database");
         let conn = db.connect().expect("Failed to get connection");
 
         // Create table
@@ -475,9 +489,12 @@ mod tests {
             .expect("Failed to insert");
 
         // Perform a transaction (simulated with multiple statements)
-        conn.execute("UPDATE accounts SET balance = balance - 50 WHERE id = 1", ())
-            .await
-            .expect("Failed to update");
+        conn.execute(
+            "UPDATE accounts SET balance = balance - 50 WHERE id = 1",
+            (),
+        )
+        .await
+        .expect("Failed to update");
 
         // Verify the update
         let mut rows = conn
@@ -485,7 +502,11 @@ mod tests {
             .await
             .expect("Failed to query");
 
-        let row = rows.next().await.expect("Failed to get row").expect("No row");
+        let row = rows
+            .next()
+            .await
+            .expect("Failed to get row")
+            .expect("No row");
         assert_eq!(row.get::<i64>(0).unwrap(), 50);
 
         cleanup_db(&db_path);
@@ -515,7 +536,10 @@ mod tests {
             if let Ok(conn) = conn {
                 // Try to perform an operation - this should fail for invalid path
                 let op_result = conn.execute("SELECT 1", ()).await;
-                assert!(op_result.is_err(), "Operation should fail with invalid path");
+                assert!(
+                    op_result.is_err(),
+                    "Operation should fail with invalid path"
+                );
             }
             // If connect() fails, that's also acceptable
         }
@@ -539,10 +563,16 @@ mod tests {
         };
 
         let result = create_database(&config).await;
-        assert!(result.is_err(), "Should fail when path is missing for local mode");
+        assert!(
+            result.is_err(),
+            "Should fail when path is missing for local mode"
+        );
 
         let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("path"), "Error should mention missing path");
+        assert!(
+            err_msg.contains("path"),
+            "Error should mention missing path"
+        );
     }
 
     #[tokio::test]
@@ -562,7 +592,10 @@ mod tests {
         };
 
         let result = create_database(&config).await;
-        assert!(result.is_err(), "Should fail when URL is missing for remote mode");
+        assert!(
+            result.is_err(),
+            "Should fail when URL is missing for remote mode"
+        );
 
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("url"), "Error should mention missing URL");
@@ -585,10 +618,16 @@ mod tests {
         };
 
         let result = create_database(&config).await;
-        assert!(result.is_err(), "Should fail when auth_token is missing for remote mode");
+        assert!(
+            result.is_err(),
+            "Should fail when auth_token is missing for remote mode"
+        );
 
         let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("auth_token"), "Error should mention missing auth_token");
+        assert!(
+            err_msg.contains("auth_token"),
+            "Error should mention missing auth_token"
+        );
     }
 
     #[tokio::test]
@@ -609,7 +648,10 @@ mod tests {
         };
 
         let result = create_database(&config).await;
-        assert!(result.is_err(), "Should fail when path is missing for embedded replica mode");
+        assert!(
+            result.is_err(),
+            "Should fail when path is missing for embedded replica mode"
+        );
 
         // Missing URL
         let config = TursoConfig {
@@ -627,7 +669,10 @@ mod tests {
         };
 
         let result = create_database(&config).await;
-        assert!(result.is_err(), "Should fail when URL is missing for embedded replica mode");
+        assert!(
+            result.is_err(),
+            "Should fail when URL is missing for embedded replica mode"
+        );
 
         // Missing token
         let config = TursoConfig {
@@ -645,7 +690,10 @@ mod tests {
         };
 
         let result = create_database(&config).await;
-        assert!(result.is_err(), "Should fail when auth_token is missing for embedded replica mode");
+        assert!(
+            result.is_err(),
+            "Should fail when auth_token is missing for embedded replica mode"
+        );
     }
 
     #[tokio::test]
@@ -667,7 +715,9 @@ mod tests {
         };
 
         let db = std::sync::Arc::new(
-            create_database(&config).await.expect("Failed to create database")
+            create_database(&config)
+                .await
+                .expect("Failed to create database"),
         );
 
         // Setup table
@@ -707,7 +757,11 @@ mod tests {
             .await
             .expect("Failed to query");
 
-        let row = rows.next().await.expect("Failed to get row").expect("No row");
+        let row = rows
+            .next()
+            .await
+            .expect("Failed to get row")
+            .expect("No row");
         let value: i64 = row.get(0).unwrap();
         assert_eq!(value, 5, "Counter should be 5 after 5 increments");
 

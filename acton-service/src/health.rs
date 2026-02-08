@@ -70,49 +70,65 @@ pub async fn readiness<T>(State(state): State<AppState<T>>) -> Result<impl IntoR
 where
     T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
 {
-    #[cfg_attr(not(any(feature = "database", feature = "cache", feature = "events", feature = "turso", feature = "surrealdb")), allow(unused_mut))]
+    #[cfg_attr(
+        not(any(
+            feature = "database",
+            feature = "cache",
+            feature = "events",
+            feature = "turso",
+            feature = "surrealdb"
+        )),
+        allow(unused_mut)
+    )]
     let mut dependencies = HashMap::new();
-    #[cfg_attr(not(any(feature = "database", feature = "cache", feature = "events", feature = "turso", feature = "surrealdb")), allow(unused_mut))]
+    #[cfg_attr(
+        not(any(
+            feature = "database",
+            feature = "cache",
+            feature = "events",
+            feature = "turso",
+            feature = "surrealdb"
+        )),
+        allow(unused_mut)
+    )]
     let mut all_ready = true;
 
     // Check database connection
     #[cfg(feature = "database")]
     if state.config().database.is_some() {
         match state.db().await {
-            Some(db_pool) => {
-                match sqlx::query("SELECT 1").fetch_one(&db_pool).await {
-                    Ok(_) => {
-                        dependencies.insert(
-                            "database".to_string(),
-                            DependencyStatus {
-                                healthy: true,
-                                message: Some("Connected".to_string()),
-                            },
-                        );
-                    }
-                    Err(e) => {
-                        tracing::error!("Database health check failed: {}", e);
-                        let is_optional = state
-                            .config()
-                            .database
-                            .as_ref()
-                            .map(|db| db.optional)
-                            .unwrap_or(false);
-
-                        if !is_optional {
-                            all_ready = false;
-                        }
-
-                        dependencies.insert(
-                            "database".to_string(),
-                            DependencyStatus {
-                                healthy: false,
-                                message: Some(format!("Connection failed: {}", e)),
-                            },
-                        );
-                    }
+            Some(db_pool) => match sqlx::query("SELECT 1").fetch_one(&db_pool).await {
+                Ok(_) => {
+                    dependencies.insert(
+                        "database".to_string(),
+                        DependencyStatus {
+                            healthy: true,
+                            message: Some("Connected".to_string()),
+                        },
+                    );
                 }
-            }
+                Err(e) => {
+                    tracing::error!("Database health check failed: {}", e);
+                    let is_optional = state
+                        .config()
+                        .database
+                        .as_ref()
+                        .map(|db| db.optional)
+                        .unwrap_or(false);
+
+                    if !is_optional {
+                        all_ready = false;
+                    }
+
+                    dependencies.insert(
+                        "database".to_string(),
+                        DependencyStatus {
+                            healthy: false,
+                            message: Some(format!("Connection failed: {}", e)),
+                        },
+                    );
+                }
+            },
             None => {
                 // Database configured but not connected yet (lazy init in progress)
                 let is_optional = state
@@ -154,69 +170,67 @@ where
     #[cfg(feature = "cache")]
     if state.config().redis.is_some() {
         match state.redis().await {
-            Some(redis_pool) => {
-                match redis_pool.get().await {
-                    Ok(mut conn) => {
-                        use std::ops::DerefMut;
-                        match redis::cmd("PING")
-                            .query_async::<String>(conn.deref_mut())
-                            .await
-                        {
-                            Ok(_) => {
-                                dependencies.insert(
-                                    "redis".to_string(),
-                                    DependencyStatus {
-                                        healthy: true,
-                                        message: Some("Connected".to_string()),
-                                    },
-                                );
-                            }
-                            Err(e) => {
-                                tracing::error!("Redis ping failed: {}", e);
-                                let is_optional = state
-                                    .config()
-                                    .redis
-                                    .as_ref()
-                                    .map(|r| r.optional)
-                                    .unwrap_or(false);
-
-                                if !is_optional {
-                                    all_ready = false;
-                                }
-
-                                dependencies.insert(
-                                    "redis".to_string(),
-                                    DependencyStatus {
-                                        healthy: false,
-                                        message: Some(format!("Ping failed: {}", e)),
-                                    },
-                                );
-                            }
+            Some(redis_pool) => match redis_pool.get().await {
+                Ok(mut conn) => {
+                    use std::ops::DerefMut;
+                    match redis::cmd("PING")
+                        .query_async::<String>(conn.deref_mut())
+                        .await
+                    {
+                        Ok(_) => {
+                            dependencies.insert(
+                                "redis".to_string(),
+                                DependencyStatus {
+                                    healthy: true,
+                                    message: Some("Connected".to_string()),
+                                },
+                            );
                         }
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to get Redis connection: {}", e);
-                        let is_optional = state
-                            .config()
-                            .redis
-                            .as_ref()
-                            .map(|r| r.optional)
-                            .unwrap_or(false);
+                        Err(e) => {
+                            tracing::error!("Redis ping failed: {}", e);
+                            let is_optional = state
+                                .config()
+                                .redis
+                                .as_ref()
+                                .map(|r| r.optional)
+                                .unwrap_or(false);
 
-                        if !is_optional {
-                            all_ready = false;
+                            if !is_optional {
+                                all_ready = false;
+                            }
+
+                            dependencies.insert(
+                                "redis".to_string(),
+                                DependencyStatus {
+                                    healthy: false,
+                                    message: Some(format!("Ping failed: {}", e)),
+                                },
+                            );
                         }
-
-                        dependencies.insert(
-                            "redis".to_string(),
-                            DependencyStatus {
-                                healthy: false,
-                                message: Some(format!("Connection pool error: {}", e)),
-                            },
-                        );
                     }
                 }
-            }
+                Err(e) => {
+                    tracing::error!("Failed to get Redis connection: {}", e);
+                    let is_optional = state
+                        .config()
+                        .redis
+                        .as_ref()
+                        .map(|r| r.optional)
+                        .unwrap_or(false);
+
+                    if !is_optional {
+                        all_ready = false;
+                    }
+
+                    dependencies.insert(
+                        "redis".to_string(),
+                        DependencyStatus {
+                            healthy: false,
+                            message: Some(format!("Connection pool error: {}", e)),
+                        },
+                    );
+                }
+            },
             None => {
                 // Redis configured but not connected yet (lazy init in progress)
                 let is_optional = state
@@ -258,40 +272,38 @@ where
     #[cfg(feature = "events")]
     if state.config().nats.is_some() {
         match state.nats().await {
-            Some(nats_client) => {
-                match nats_client.connection_state() {
-                    async_nats::connection::State::Connected => {
-                        dependencies.insert(
-                            "nats".to_string(),
-                            DependencyStatus {
-                                healthy: true,
-                                message: Some("Connected".to_string()),
-                            },
-                        );
-                    }
-                    conn_state => {
-                        tracing::warn!("NATS connection state: {:?}", conn_state);
-                        let is_optional = state
-                            .config()
-                            .nats
-                            .as_ref()
-                            .map(|n| n.optional)
-                            .unwrap_or(false);
-
-                        if !is_optional {
-                            all_ready = false;
-                        }
-
-                        dependencies.insert(
-                            "nats".to_string(),
-                            DependencyStatus {
-                                healthy: false,
-                                message: Some(format!("Connection state: {:?}", conn_state)),
-                            },
-                        );
-                    }
+            Some(nats_client) => match nats_client.connection_state() {
+                async_nats::connection::State::Connected => {
+                    dependencies.insert(
+                        "nats".to_string(),
+                        DependencyStatus {
+                            healthy: true,
+                            message: Some("Connected".to_string()),
+                        },
+                    );
                 }
-            }
+                conn_state => {
+                    tracing::warn!("NATS connection state: {:?}", conn_state);
+                    let is_optional = state
+                        .config()
+                        .nats
+                        .as_ref()
+                        .map(|n| n.optional)
+                        .unwrap_or(false);
+
+                    if !is_optional {
+                        all_ready = false;
+                    }
+
+                    dependencies.insert(
+                        "nats".to_string(),
+                        DependencyStatus {
+                            healthy: false,
+                            message: Some(format!("Connection state: {:?}", conn_state)),
+                        },
+                    );
+                }
+            },
             None => {
                 // NATS configured but not connected yet (lazy init in progress)
                 let is_optional = state
@@ -519,8 +531,7 @@ where
                 message: Some(if grpc_config.enabled {
                     format!(
                         "Enabled (health: {}, reflection: {})",
-                        grpc_config.health_check_enabled,
-                        grpc_config.reflection_enabled
+                        grpc_config.health_check_enabled, grpc_config.reflection_enabled
                     )
                 } else {
                     "Disabled".to_string()

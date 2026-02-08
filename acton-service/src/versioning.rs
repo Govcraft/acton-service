@@ -383,7 +383,11 @@ pub struct VersionedApiBuilder<T = ()>
 where
     T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
 {
-    versions: Vec<(ApiVersion, Router<crate::state::AppState<T>>, Option<DeprecationInfo>)>,
+    versions: Vec<(
+        ApiVersion,
+        Router<crate::state::AppState<T>>,
+        Option<DeprecationInfo>,
+    )>,
     base_path: Option<String>,
     #[cfg(feature = "htmx")]
     frontend_routes: Option<Router<crate::state::AppState<T>>>,
@@ -784,10 +788,7 @@ mod tests {
 
     #[test]
     fn test_extract_version_from_path() {
-        assert_eq!(
-            extract_version_from_path("/v1/users"),
-            Some(ApiVersion::V1)
-        );
+        assert_eq!(extract_version_from_path("/v1/users"), Some(ApiVersion::V1));
         assert_eq!(
             extract_version_from_path("/api/v2/users/123"),
             Some(ApiVersion::V2)
@@ -803,10 +804,7 @@ mod tests {
 
         assert_eq!(info.version, ApiVersion::V1);
         assert_eq!(info.replacement, ApiVersion::V2);
-        assert_eq!(
-            info.sunset_date,
-            Some("2026-12-31T23:59:59Z".to_string())
-        );
+        assert_eq!(info.sunset_date, Some("2026-12-31T23:59:59Z".to_string()));
         assert_eq!(info.message, Some("Please migrate soon".to_string()));
     }
 
@@ -816,7 +814,10 @@ mod tests {
             .with_sunset_date("2026-12-31T23:59:59Z");
 
         assert_eq!(info.deprecation_header(), "version=\"v1\"");
-        assert_eq!(info.sunset_header(), Some("2026-12-31T23:59:59Z".to_string()));
+        assert_eq!(
+            info.sunset_header(),
+            Some("2026-12-31T23:59:59Z".to_string())
+        );
         assert_eq!(info.link_header(), "</v2/>; rel=\"successor-version\"");
     }
 

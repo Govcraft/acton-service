@@ -24,15 +24,15 @@
 // ============================================================================
 
 #[cfg(feature = "database")]
+use super::messages::{DatabasePoolConnected, DatabasePoolConnectionFailed};
+#[cfg(feature = "database")]
+use acton_reactive::prelude::*;
+#[cfg(feature = "database")]
 use std::sync::Arc;
 #[cfg(feature = "database")]
 use tokio::sync::RwLock;
 #[cfg(feature = "database")]
 use tokio_util::sync::CancellationToken;
-#[cfg(feature = "database")]
-use acton_reactive::prelude::*;
-#[cfg(feature = "database")]
-use super::messages::{DatabasePoolConnected, DatabasePoolConnectionFailed};
 
 /// Shared pool storage type for database connections
 #[cfg(feature = "database")]
@@ -210,14 +210,14 @@ impl DatabasePoolAgent {
 // Redis Pool Agent
 // ============================================================================
 
+#[cfg(feature = "cache")]
+use super::messages::{RedisPoolConnected, RedisPoolConnectionFailed};
+#[cfg(all(feature = "cache", not(feature = "database")))]
+use acton_reactive::prelude::*;
 #[cfg(all(feature = "cache", not(feature = "database")))]
 use std::sync::Arc;
 #[cfg(all(feature = "cache", not(feature = "database")))]
 use tokio::sync::RwLock;
-#[cfg(all(feature = "cache", not(feature = "database")))]
-use acton_reactive::prelude::*;
-#[cfg(feature = "cache")]
-use super::messages::{RedisPoolConnected, RedisPoolConnectionFailed};
 
 /// Shared pool storage type for Redis connections
 #[cfg(feature = "cache")]
@@ -345,14 +345,14 @@ impl RedisPoolAgent {
 // NATS Pool Agent
 // ============================================================================
 
+#[cfg(feature = "events")]
+use super::messages::{NatsClientConnected, NatsClientConnectionFailed};
+#[cfg(all(feature = "events", not(feature = "database"), not(feature = "cache")))]
+use acton_reactive::prelude::*;
 #[cfg(all(feature = "events", not(feature = "database"), not(feature = "cache")))]
 use std::sync::Arc;
 #[cfg(all(feature = "events", not(feature = "database"), not(feature = "cache")))]
 use tokio::sync::RwLock;
-#[cfg(all(feature = "events", not(feature = "database"), not(feature = "cache")))]
-use acton_reactive::prelude::*;
-#[cfg(feature = "events")]
-use super::messages::{NatsClientConnected, NatsClientConnectionFailed};
 
 /// Shared client storage type for NATS connections
 #[cfg(feature = "events")]
@@ -484,16 +484,31 @@ impl NatsPoolAgent {
 // Turso Database Agent
 // ============================================================================
 
-#[cfg(all(feature = "turso", not(feature = "database"), not(feature = "cache"), not(feature = "events")))]
+#[cfg(feature = "turso")]
+use super::messages::{TursoDbConnected, TursoDbConnectionFailed};
+#[cfg(all(
+    feature = "turso",
+    not(feature = "database"),
+    not(feature = "events"),
+    not(feature = "cache")
+))]
+use acton_reactive::prelude::*;
+#[cfg(all(
+    feature = "turso",
+    not(feature = "database"),
+    not(feature = "cache"),
+    not(feature = "events")
+))]
 use std::sync::Arc;
-#[cfg(all(feature = "turso", not(feature = "database"), not(feature = "cache"), not(feature = "events")))]
+#[cfg(all(
+    feature = "turso",
+    not(feature = "database"),
+    not(feature = "cache"),
+    not(feature = "events")
+))]
 use tokio::sync::RwLock;
 #[cfg(all(feature = "turso", not(feature = "database")))]
 use tokio_util::sync::CancellationToken;
-#[cfg(all(feature = "turso", not(feature = "database"), not(feature = "events"), not(feature = "cache")))]
-use acton_reactive::prelude::*;
-#[cfg(feature = "turso")]
-use super::messages::{TursoDbConnected, TursoDbConnectionFailed};
 
 /// Shared database storage type for Turso/libsql connections
 #[cfg(feature = "turso")]
@@ -594,7 +609,10 @@ impl TursoDbAgent {
             let self_handle = agent.handle().clone();
 
             if let Some(cfg) = config {
-                tracing::info!("Turso database agent starting, connecting to database (mode={:?})...", cfg.mode);
+                tracing::info!(
+                    "Turso database agent starting, connecting to database (mode={:?})...",
+                    cfg.mode
+                );
 
                 // Spawn the connection work - it will send a message back when done
                 tokio::spawn(async move {
@@ -666,16 +684,38 @@ impl TursoDbAgent {
 // SurrealDB Agent
 // ============================================================================
 
-#[cfg(all(feature = "surrealdb", not(feature = "database"), not(feature = "cache"), not(feature = "events"), not(feature = "turso")))]
-use std::sync::Arc;
-#[cfg(all(feature = "surrealdb", not(feature = "database"), not(feature = "cache"), not(feature = "events"), not(feature = "turso")))]
-use tokio::sync::RwLock;
-#[cfg(all(feature = "surrealdb", not(feature = "database"), not(feature = "turso")))]
-use tokio_util::sync::CancellationToken;
-#[cfg(all(feature = "surrealdb", not(feature = "database"), not(feature = "events"), not(feature = "cache"), not(feature = "turso")))]
-use acton_reactive::prelude::*;
 #[cfg(feature = "surrealdb")]
 use super::messages::{SurrealDbConnected, SurrealDbConnectionFailed};
+#[cfg(all(
+    feature = "surrealdb",
+    not(feature = "database"),
+    not(feature = "events"),
+    not(feature = "cache"),
+    not(feature = "turso")
+))]
+use acton_reactive::prelude::*;
+#[cfg(all(
+    feature = "surrealdb",
+    not(feature = "database"),
+    not(feature = "cache"),
+    not(feature = "events"),
+    not(feature = "turso")
+))]
+use std::sync::Arc;
+#[cfg(all(
+    feature = "surrealdb",
+    not(feature = "database"),
+    not(feature = "cache"),
+    not(feature = "events"),
+    not(feature = "turso")
+))]
+use tokio::sync::RwLock;
+#[cfg(all(
+    feature = "surrealdb",
+    not(feature = "database"),
+    not(feature = "turso")
+))]
+use tokio_util::sync::CancellationToken;
 
 /// Shared client storage type for SurrealDB connections
 #[cfg(feature = "surrealdb")]
@@ -856,13 +896,17 @@ mod tests {
     #[cfg(feature = "turso")]
     mod turso_agent_tests {
         use super::*;
-        use std::path::PathBuf;
         use crate::config::{TursoConfig, TursoMode};
+        use std::path::PathBuf;
 
         /// Helper to create a temporary database path
         fn temp_db_path(name: &str) -> PathBuf {
             let mut path = std::env::temp_dir();
-            path.push(format!("turso_agent_test_{}_{}.db", name, std::process::id()));
+            path.push(format!(
+                "turso_agent_test_{}_{}.db",
+                name,
+                std::process::id()
+            ));
             path
         }
 
@@ -907,7 +951,10 @@ mod tests {
 
             // Verify the database is available in shared storage
             let db_guard = shared_db.read().await;
-            assert!(db_guard.is_some(), "Database should be available in shared storage");
+            assert!(
+                db_guard.is_some(),
+                "Database should be available in shared storage"
+            );
 
             // Test that we can use the database
             if let Some(ref db) = *db_guard {
@@ -923,7 +970,10 @@ mod tests {
             let _ = handle.stop().await;
 
             // Shutdown runtime
-            runtime.shutdown_all().await.expect("Failed to shutdown runtime");
+            runtime
+                .shutdown_all()
+                .await
+                .expect("Failed to shutdown runtime");
 
             cleanup_db(&db_path);
         }
@@ -974,10 +1024,16 @@ mod tests {
             let _ = handle.stop().await;
 
             // Shutdown runtime
-            runtime.shutdown_all().await.expect("Failed to shutdown runtime");
+            runtime
+                .shutdown_all()
+                .await
+                .expect("Failed to shutdown runtime");
 
             // The file should still exist (database closed gracefully)
-            assert!(db_path.exists(), "Database file should still exist after graceful shutdown");
+            assert!(
+                db_path.exists(),
+                "Database file should still exist after graceful shutdown"
+            );
 
             cleanup_db(&db_path);
         }
@@ -1012,7 +1068,10 @@ mod tests {
 
             // Agent should still work, just won't update shared storage
             let _ = handle.stop().await;
-            runtime.shutdown_all().await.expect("Failed to shutdown runtime");
+            runtime
+                .shutdown_all()
+                .await
+                .expect("Failed to shutdown runtime");
 
             cleanup_db(&db_path);
         }
@@ -1051,7 +1110,10 @@ mod tests {
             );
 
             let _ = handle.stop().await;
-            runtime.shutdown_all().await.expect("Failed to shutdown runtime");
+            runtime
+                .shutdown_all()
+                .await
+                .expect("Failed to shutdown runtime");
         }
 
         #[tokio::test]
@@ -1104,14 +1166,21 @@ mod tests {
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
             // Both should be connected
-            assert!(shared_db1.read().await.is_some(), "First database should be available");
-            assert!(shared_db2.read().await.is_some(), "Second database should be available");
+            assert!(
+                shared_db1.read().await.is_some(),
+                "First database should be available"
+            );
+            assert!(
+                shared_db2.read().await.is_some(),
+                "Second database should be available"
+            );
 
             // Verify they are different databases by creating different tables
             {
                 let db1 = shared_db1.read().await;
                 let conn1 = db1.as_ref().unwrap().connect().unwrap();
-                conn1.execute("CREATE TABLE db1_table (id INTEGER)", ())
+                conn1
+                    .execute("CREATE TABLE db1_table (id INTEGER)", ())
                     .await
                     .unwrap();
             }
@@ -1119,14 +1188,18 @@ mod tests {
             {
                 let db2 = shared_db2.read().await;
                 let conn2 = db2.as_ref().unwrap().connect().unwrap();
-                conn2.execute("CREATE TABLE db2_table (id INTEGER)", ())
+                conn2
+                    .execute("CREATE TABLE db2_table (id INTEGER)", ())
                     .await
                     .unwrap();
             }
 
             let _ = handle1.stop().await;
             let _ = handle2.stop().await;
-            runtime.shutdown_all().await.expect("Failed to shutdown runtime");
+            runtime
+                .shutdown_all()
+                .await
+                .expect("Failed to shutdown runtime");
 
             cleanup_db(&db_path1);
             cleanup_db(&db_path2);

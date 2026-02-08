@@ -75,7 +75,9 @@ pub use broadcast::{BroadcastMessage, BroadcastTarget, SseBroadcaster};
 pub use config::SseConfig;
 pub use connection::{ConnectionId, SseConnection};
 pub use event::{SseEventExt, TypedEvent};
-pub use htmx::{htmx_close_event, htmx_event, htmx_json_event, htmx_oob_event, htmx_trigger, HtmxSwap};
+pub use htmx::{
+    htmx_close_event, htmx_event, htmx_json_event, htmx_oob_event, htmx_trigger, HtmxSwap,
+};
 
 // Re-export axum SSE types for convenience
 pub use axum::response::sse::{Event, KeepAlive, Sse};

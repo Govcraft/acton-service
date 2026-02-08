@@ -40,8 +40,7 @@ use serde::{Deserialize, Serialize};
 pub mod hello {
     tonic::include_proto!("hello.v1");
 
-    pub const FILE_DESCRIPTOR_SET: &[u8] =
-        tonic::include_file_descriptor_set!("hello_descriptor");
+    pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("hello_descriptor");
 }
 
 use hello::{
@@ -126,8 +125,7 @@ async fn main() -> Result<()> {
     let http_routes = VersionedApiBuilder::new()
         .with_base_path("/api")
         .add_version(ApiVersion::V1, |router| {
-            router
-                .route("/hello", get(http_hello).post(http_hello_name))
+            router.route("/hello", get(http_hello).post(http_hello_name))
         })
         .build_routes();
 

@@ -74,7 +74,6 @@ pub use tower_sessions_redis_store::RedisStore;
 #[cfg(feature = "session-redis")]
 pub use tower_sessions_redis_store::fred;
 
-
 #[cfg(feature = "session-memory")]
 use time::Duration;
 
@@ -95,9 +94,7 @@ use crate::error::Result;
 /// let layer = create_session_layer(&config)?;
 /// ```
 #[cfg(feature = "session-memory")]
-pub fn create_memory_session_layer(
-    config: &SessionConfig,
-) -> SessionManagerLayer<MemoryStore> {
+pub fn create_memory_session_layer(config: &SessionConfig) -> SessionManagerLayer<MemoryStore> {
     use tower_sessions::cookie::SameSite;
 
     let store = MemoryStore::default();
@@ -153,17 +150,16 @@ pub async fn create_redis_session_layer(
     use tower_sessions::cookie::SameSite;
     use tower_sessions_redis_store::fred::prelude::*;
 
-    let redis_config = Config::from_url(redis_url).map_err(|e| {
-        Error::Internal(format!("Invalid Redis URL for sessions: {e}"))
-    })?;
+    let redis_config = Config::from_url(redis_url)
+        .map_err(|e| Error::Internal(format!("Invalid Redis URL for sessions: {e}")))?;
 
-    let pool = Builder::from_config(redis_config).build_pool(6).map_err(|e| {
-        Error::Internal(format!("Failed to create session Redis pool: {e}"))
-    })?;
+    let pool = Builder::from_config(redis_config)
+        .build_pool(6)
+        .map_err(|e| Error::Internal(format!("Failed to create session Redis pool: {e}")))?;
 
-    pool.init().await.map_err(|e| {
-        Error::Internal(format!("Failed to connect to Redis for sessions: {e}"))
-    })?;
+    pool.init()
+        .await
+        .map_err(|e| Error::Internal(format!("Failed to connect to Redis for sessions: {e}")))?;
 
     let store = RedisStore::new(pool);
 

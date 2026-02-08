@@ -42,7 +42,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Store in the module's global and set as OpenTelemetry global
     // This simulates what init_meter_provider() does
-    acton_service::observability::METER_PROVIDER.set(meter_provider.clone())
+    acton_service::observability::METER_PROVIDER
+        .set(meter_provider.clone())
         .expect("Failed to set meter provider");
     global::set_meter_provider(meter_provider);
     println!("✓ Meter provider initialized (in-memory)\n");
@@ -87,18 +88,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let client = reqwest::Client::new();
 
         for i in 1..=5 {
-            let response = client
-                .get(format!("http://{}/health", addr))
-                .send()
-                .await?;
+            let response = client.get(format!("http://{}/health", addr)).send().await?;
             println!("  Request {}: status={}", i, response.status());
         }
 
         // Test slow endpoint
-        let response = client
-            .get(format!("http://{}/slow", addr))
-            .send()
-            .await?;
+        let response = client.get(format!("http://{}/slow", addr)).send().await?;
         println!("  Slow request: status={}", response.status());
 
         println!("\n✓ All requests completed");

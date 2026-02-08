@@ -93,7 +93,11 @@ impl Broadcaster {
             }
         }
 
-        tracing::debug!(sent = sent, total = connections.len(), "Broadcast to all completed");
+        tracing::debug!(
+            sent = sent,
+            total = connections.len(),
+            "Broadcast to all completed"
+        );
         sent
     }
 
@@ -112,7 +116,11 @@ impl Broadcaster {
             }
         }
 
-        tracing::debug!(sent = sent, requested = ids.len(), "Broadcast to specific connections completed");
+        tracing::debug!(
+            sent = sent,
+            requested = ids.len(),
+            "Broadcast to specific connections completed"
+        );
         sent
     }
 
@@ -219,7 +227,9 @@ mod tests {
         broadcaster.register(id1, tx1).await;
         broadcaster.register(id2, tx2).await;
 
-        let sent = broadcaster.broadcast_all(Message::Text("hello".into())).await;
+        let sent = broadcaster
+            .broadcast_all(Message::Text("hello".into()))
+            .await;
         assert_eq!(sent, 2);
 
         // Verify both received
@@ -239,7 +249,9 @@ mod tests {
         broadcaster.register(id1, tx1).await;
         broadcaster.register(id2, tx2).await;
 
-        let sent = broadcaster.broadcast_except(&[id1], Message::Text("hello".into())).await;
+        let sent = broadcaster
+            .broadcast_except(&[id1], Message::Text("hello".into()))
+            .await;
         assert_eq!(sent, 1);
 
         // Only id2 should receive
@@ -255,13 +267,17 @@ mod tests {
 
         broadcaster.register(id, tx).await;
 
-        let success = broadcaster.send_to(&id, Message::Text("direct".into())).await;
+        let success = broadcaster
+            .send_to(&id, Message::Text("direct".into()))
+            .await;
         assert!(success);
         assert!(rx.try_recv().is_ok());
 
         // Sending to unknown connection should fail
         let unknown = ConnectionId::new();
-        let success = broadcaster.send_to(&unknown, Message::Text("test".into())).await;
+        let success = broadcaster
+            .send_to(&unknown, Message::Text("test".into()))
+            .await;
         assert!(!success);
     }
 }

@@ -15,8 +15,5 @@ pub fn init(path: &Path) -> Result<()> {
 
 /// Check if git is available
 pub fn is_available() -> bool {
-    Command::new("git")
-        .args(["--version"])
-        .output()
-        .is_ok()
+    Command::new("git").args(["--version"]).output().is_ok()
 }

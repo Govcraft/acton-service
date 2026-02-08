@@ -37,12 +37,13 @@ pub use provider::{OAuthProvider, OAuthTokens, OAuthUserInfo};
 
 // Provider implementations
 pub use providers::{
-    google::GoogleProvider, github::GitHubProvider,
-    custom::{CustomOidcProvider, CustomOidcConfig},
+    custom::{CustomOidcConfig, CustomOidcProvider},
+    github::GitHubProvider,
+    google::GoogleProvider,
 };
 
 // State management
-pub use state::{OAuthStateManager, StateData, generate_state};
+pub use state::{generate_state, OAuthStateManager, StateData};
 
 #[cfg(feature = "cache")]
 pub use state::RedisOAuthStateManager;

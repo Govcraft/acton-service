@@ -4,8 +4,8 @@ use std::fs;
 use std::path::Path;
 
 use crate::templates::deployment::{
-    generate_k8s_deployment, generate_k8s_service, generate_k8s_hpa,
-    generate_k8s_ingress, generate_service_monitor, DeploymentConfig,
+    generate_k8s_deployment, generate_k8s_hpa, generate_k8s_ingress, generate_k8s_service,
+    generate_service_monitor, DeploymentConfig,
 };
 use crate::utils;
 
@@ -29,13 +29,12 @@ pub async fn execute(
     output: String,
 ) -> Result<()> {
     // Find project root
-    let project_root = utils::find_project_root()
-        .context("Not in a service project directory")?;
+    let project_root = utils::find_project_root().context("Not in a service project directory")?;
 
     // Get service name from Cargo.toml
     let cargo_toml_path = project_root.join("Cargo.toml");
-    let cargo_toml_content = fs::read_to_string(&cargo_toml_path)
-        .context("Failed to read Cargo.toml")?;
+    let cargo_toml_content =
+        fs::read_to_string(&cargo_toml_path).context("Failed to read Cargo.toml")?;
 
     let service_name = extract_package_name(&cargo_toml_content)?;
 
@@ -118,9 +117,20 @@ fn show_dry_run(config: &DeploymentConfig) {
 
     println!("\n{}:", "Configuration".bold());
     println!("  Service: {}", config.service_name.cyan());
-    println!("  Namespace: {}", config.namespace.as_ref().unwrap_or(&"default".to_string()).cyan());
+    println!(
+        "  Namespace: {}",
+        config
+            .namespace
+            .as_ref()
+            .unwrap_or(&"default".to_string())
+            .cyan()
+    );
     println!("  Replicas: {}", config.replicas.to_string().cyan());
-    println!("  Image: {}:{}", config.image.cyan(), config.image_tag.cyan());
+    println!(
+        "  Image: {}:{}",
+        config.image.cyan(),
+        config.image_tag.cyan()
+    );
 
     println!("\n{}:", "Manifests".bold());
     println!("  • deployment.yaml");

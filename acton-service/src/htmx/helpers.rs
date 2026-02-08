@@ -107,11 +107,15 @@ mod tests {
     #[test]
     fn test_fragment_or_full() {
         // HTMX request should return fragment
-        let response = fragment_or_full(true, "<p>Fragment</p>", || "<html><body><p>Full</p></body></html>".to_string());
+        let response = fragment_or_full(true, "<p>Fragment</p>", || {
+            "<html><body><p>Full</p></body></html>".to_string()
+        });
         assert_eq!(response.status(), axum::http::StatusCode::OK);
 
         // Non-HTMX request should return full page
-        let response = fragment_or_full(false, "<p>Fragment</p>", || "<html><body><p>Full</p></body></html>".to_string());
+        let response = fragment_or_full(false, "<p>Fragment</p>", || {
+            "<html><body><p>Full</p></body></html>".to_string()
+        });
         assert_eq!(response.status(), axum::http::StatusCode::OK);
     }
 }

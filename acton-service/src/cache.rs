@@ -100,18 +100,14 @@ async fn try_create_pool(config: &RedisConfig) -> Result<Pool> {
                 3. Verify connection limits: CONFIG GET maxclients\n\
                 4. Check server logs for connection errors\n\n\
                 Error: {}",
-                e,
-                e
+                e, e
             ))
         })?;
 
     // Test the connection
-    let conn = pool
-        .get()
-        .await
-        .map_err(|e| {
-            crate::error::Error::Internal(format!(
-                "Failed to establish Redis connection\n\n\
+    let conn = pool.get().await.map_err(|e| {
+        crate::error::Error::Internal(format!(
+            "Failed to establish Redis connection\n\n\
                 Troubleshooting:\n\
                 1. Redis server running: sudo systemctl status redis\n\
                 2. Check bind address in redis.conf (bind 0.0.0.0 for remote)\n\
@@ -120,10 +116,10 @@ async fn try_create_pool(config: &RedisConfig) -> Result<Pool> {
                 5. Verify network path: telnet <host> <port>\n\n\
                 URL: {}\n\
                 Error: {}",
-                sanitize_redis_url(&config.url),
-                e
-            ))
-        })?;
+            sanitize_redis_url(&config.url),
+            e
+        ))
+    })?;
     drop(conn);
 
     Ok(pool)

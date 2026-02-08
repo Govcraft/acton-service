@@ -83,7 +83,11 @@ async fn check_endpoint(url: &str, verbose: bool) -> Result<HealthResponse> {
     }
 
     if !status.is_success() {
-        anyhow::bail!("HTTP {}: {}", status.as_u16(), status.canonical_reason().unwrap_or("Unknown"));
+        anyhow::bail!(
+            "HTTP {}: {}",
+            status.as_u16(),
+            status.canonical_reason().unwrap_or("Unknown")
+        );
     }
 
     let body = response

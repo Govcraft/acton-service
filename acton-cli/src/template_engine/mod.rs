@@ -33,12 +33,13 @@ impl TemplateEngine {
 
     /// Initialize user template directory with default templates
     pub fn init_user_templates(&self) -> Result<PathBuf> {
-        let config_dir = self.config_dir.as_ref()
+        let config_dir = self
+            .config_dir
+            .as_ref()
             .context("Could not determine config directory")?;
 
         // Create config directory if it doesn't exist
-        fs::create_dir_all(config_dir)
-            .context("Failed to create config directory")?;
+        fs::create_dir_all(config_dir).context("Failed to create config directory")?;
 
         // Copy all embedded templates to user config directory
         for file_path in EmbeddedTemplates::iter() {
@@ -68,8 +69,10 @@ impl TemplateEngine {
         let template_content = if let Some(ref config_dir) = self.config_dir {
             let user_template_path = config_dir.join(template_name);
             if user_template_path.exists() {
-                fs::read_to_string(&user_template_path)
-                    .context(format!("Failed to read user template: {}", user_template_path.display()))?
+                fs::read_to_string(&user_template_path).context(format!(
+                    "Failed to read user template: {}",
+                    user_template_path.display()
+                ))?
             } else {
                 self.get_embedded_template(template_name)?
             }
@@ -79,11 +82,11 @@ impl TemplateEngine {
 
         // Create a fresh environment and render
         let env = Environment::new();
-        let tmpl = env.template_from_str(&template_content)
+        let tmpl = env
+            .template_from_str(&template_content)
             .context(format!("Failed to parse template: {}", template_name))?;
 
-        let result = tmpl.render(context)
-            .context("Failed to render template")?;
+        let result = tmpl.render(context).context("Failed to render template")?;
 
         Ok(result)
     }
@@ -106,9 +109,7 @@ impl TemplateEngine {
 
     /// List all available templates
     pub fn list_templates(&self) -> Vec<String> {
-        EmbeddedTemplates::iter()
-            .map(|s| s.to_string())
-            .collect()
+        EmbeddedTemplates::iter().map(|s| s.to_string()).collect()
     }
 }
 

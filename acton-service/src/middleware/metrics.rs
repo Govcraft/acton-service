@@ -154,10 +154,12 @@ pub mod metric_labels {
 #[cfg(feature = "otel-metrics")]
 pub fn create_metrics_layer(
     config: &MetricsConfig,
-) -> Option<tower_otel_http_metrics::HTTPMetricsLayer<
-    tower_otel_http_metrics::NoOpExtractor,
-    tower_otel_http_metrics::NoOpExtractor,
->> {
+) -> Option<
+    tower_otel_http_metrics::HTTPMetricsLayer<
+        tower_otel_http_metrics::NoOpExtractor,
+        tower_otel_http_metrics::NoOpExtractor,
+    >,
+> {
     if !config.enabled {
         tracing::info!("HTTP metrics disabled in configuration");
         return None;
@@ -167,10 +169,7 @@ pub fn create_metrics_layer(
     let meter = crate::observability::get_meter()?;
 
     // Build the metrics layer
-    match HTTPMetricsLayerBuilder::builder()
-        .with_meter(meter)
-        .build()
-    {
+    match HTTPMetricsLayerBuilder::builder().with_meter(meter).build() {
         Ok(layer) => {
             tracing::info!(
                 service_name = %config.service_name,
@@ -225,8 +224,7 @@ mod tests {
 
     #[test]
     fn test_latency_buckets_conversion() {
-        let config = MetricsConfig::new()
-            .with_latency_buckets(vec![10.0, 100.0, 1000.0]);
+        let config = MetricsConfig::new().with_latency_buckets(vec![10.0, 100.0, 1000.0]);
 
         let durations = config.latency_buckets_as_duration();
         assert_eq!(durations.len(), 3);
@@ -237,8 +235,14 @@ mod tests {
 
     #[test]
     fn test_metric_names() {
-        assert_eq!(metric_names::HTTP_SERVER_REQUEST_COUNT, "http.server.request.count");
-        assert_eq!(metric_names::HTTP_SERVER_REQUEST_DURATION, "http.server.request.duration");
+        assert_eq!(
+            metric_names::HTTP_SERVER_REQUEST_COUNT,
+            "http.server.request.count"
+        );
+        assert_eq!(
+            metric_names::HTTP_SERVER_REQUEST_DURATION,
+            "http.server.request.duration"
+        );
     }
 
     #[test]
@@ -251,7 +255,10 @@ mod tests {
     fn test_create_metrics_layer_disabled() {
         let config = MetricsConfig::new().with_enabled(false);
         let layer = create_metrics_layer(&config);
-        assert!(layer.is_none(), "Should return None when metrics are disabled");
+        assert!(
+            layer.is_none(),
+            "Should return None when metrics are disabled"
+        );
     }
 
     #[test]
@@ -260,14 +267,16 @@ mod tests {
         // Without initializing the meter provider, should return None
         let config = MetricsConfig::new().with_enabled(true);
         let layer = create_metrics_layer(&config);
-        assert!(layer.is_none(), "Should return None when meter provider is not initialized");
+        assert!(
+            layer.is_none(),
+            "Should return None when meter provider is not initialized"
+        );
     }
 
     #[test]
     fn test_metrics_config_custom_buckets() {
         let custom_buckets = vec![1.0, 5.0, 10.0];
-        let config = MetricsConfig::new()
-            .with_latency_buckets(custom_buckets.clone());
+        let config = MetricsConfig::new().with_latency_buckets(custom_buckets.clone());
 
         assert_eq!(config.latency_buckets, custom_buckets);
 

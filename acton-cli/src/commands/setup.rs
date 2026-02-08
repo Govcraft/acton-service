@@ -7,8 +7,8 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use crate::Cli;
 use crate::template_engine::TemplateEngine;
+use crate::Cli;
 
 #[derive(Subcommand)]
 pub enum SetupCommands {
@@ -75,7 +75,8 @@ async fn completions(shell: Option<Shell>, stdout: bool, show_instructions: bool
 
 /// Detect the user's current shell from $SHELL environment variable
 fn detect_shell() -> Result<Shell> {
-    let shell_path = env::var("SHELL").context("Failed to detect shell. $SHELL not set. Use --shell to specify explicitly.")?;
+    let shell_path = env::var("SHELL")
+        .context("Failed to detect shell. $SHELL not set. Use --shell to specify explicitly.")?;
 
     let shell_name = Path::new(&shell_path)
         .file_name()
@@ -152,10 +153,7 @@ fn install_completions(shell: Shell) -> Result<()> {
         format!("{:?}", shell).cyan()
     );
     println!();
-    println!(
-        "  {}",
-        completion_path.to_string_lossy().dimmed()
-    );
+    println!("  {}", completion_path.to_string_lossy().dimmed());
     println!();
 
     // Display post-installation instructions
@@ -280,11 +278,7 @@ async fn templates(list: bool, show_path: bool) -> Result<()> {
         println!();
         println!(
             "{}",
-            format!(
-                "Total: {} templates",
-                engine.list_templates().len()
-            )
-            .dimmed()
+            format!("Total: {} templates", engine.list_templates().len()).dimmed()
         );
         return Ok(());
     }
@@ -296,7 +290,10 @@ async fn templates(list: bool, show_path: bool) -> Result<()> {
             println!("  {}", config_dir.display().to_string().cyan());
         } else {
             println!("{}", "Templates directory not initialized yet.".yellow());
-            println!("Run {} to initialize templates.", "acton setup templates".cyan());
+            println!(
+                "Run {} to initialize templates.",
+                "acton setup templates".cyan()
+            );
         }
         return Ok(());
     }
@@ -307,10 +304,7 @@ async fn templates(list: bool, show_path: bool) -> Result<()> {
 
     let config_dir = engine.init_user_templates()?;
 
-    println!(
-        "{} Templates initialized successfully!",
-        "✓".green().bold()
-    );
+    println!("{} Templates initialized successfully!", "✓".green().bold());
     println!();
     println!("  {}", config_dir.display().to_string().cyan());
     println!();

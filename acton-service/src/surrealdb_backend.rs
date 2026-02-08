@@ -83,27 +83,26 @@ async fn try_create_client(config: &SurrealDbConfig) -> Result<SurrealClient> {
     tracing::debug!("Connecting to SurrealDB: {}", url_safe);
 
     // Connect using the any engine (protocol determined by URL scheme)
-    let client = surrealdb::engine::any::connect(&config.url).await.map_err(|e| {
-        crate::error::Error::Internal(format!(
-            "Failed to connect to SurrealDB at '{}': {}\n\n\
+    let client = surrealdb::engine::any::connect(&config.url)
+        .await
+        .map_err(|e| {
+            crate::error::Error::Internal(format!(
+                "Failed to connect to SurrealDB at '{}': {}\n\n\
             Troubleshooting:\n\
             1. Verify the database URL is correct (e.g., ws://localhost:8000, mem://)\n\
             2. Check that the SurrealDB server is running and accessible\n\
             3. Verify network connectivity\n\n\
             Original error: {}",
-            url_safe,
-            categorize_surrealdb_error(&e),
-            e
-        ))
-    })?;
+                url_safe,
+                categorize_surrealdb_error(&e),
+                e
+            ))
+        })?;
 
     // Authenticate if credentials are provided
     if let (Some(username), Some(password)) = (&config.username, &config.password) {
         client
-            .signin(surrealdb::opt::auth::Root {
-                username,
-                password,
-            })
+            .signin(surrealdb::opt::auth::Root { username, password })
             .await
             .map_err(|e| {
                 crate::error::Error::Internal(format!(
@@ -120,20 +119,24 @@ async fn try_create_client(config: &SurrealDbConfig) -> Result<SurrealClient> {
     }
 
     // Select namespace and database
-    client.use_ns(&config.namespace).use_db(&config.database).await.map_err(|e| {
-        crate::error::Error::Internal(format!(
-            "Failed to select namespace '{}' / database '{}' on SurrealDB at '{}': {}\n\n\
+    client
+        .use_ns(&config.namespace)
+        .use_db(&config.database)
+        .await
+        .map_err(|e| {
+            crate::error::Error::Internal(format!(
+                "Failed to select namespace '{}' / database '{}' on SurrealDB at '{}': {}\n\n\
             Troubleshooting:\n\
             1. Verify the namespace and database names are correct\n\
             2. Check that you have permission to access them\n\n\
             Original error: {}",
-            config.namespace,
-            config.database,
-            url_safe,
-            categorize_surrealdb_error(&e),
-            e
-        ))
-    })?;
+                config.namespace,
+                config.database,
+                url_safe,
+                categorize_surrealdb_error(&e),
+                e
+            ))
+        })?;
 
     Ok(client)
 }
@@ -169,7 +172,10 @@ fn categorize_surrealdb_error(err: &surrealdb::Error) -> &'static str {
         || err_str.contains("refused")
     {
         "Network connection error - check connectivity"
-    } else if err_str.contains("permission") || err_str.contains("denied") || err_str.contains("not allowed") {
+    } else if err_str.contains("permission")
+        || err_str.contains("denied")
+        || err_str.contains("not allowed")
+    {
         "Permission error - check database permissions"
     } else if err_str.contains("not found") || err_str.contains("no such") {
         "Resource not found - check namespace/database exists"
@@ -221,7 +227,11 @@ mod tests {
         };
 
         let result = create_client(&config).await;
-        assert!(result.is_ok(), "Failed to connect to in-memory SurrealDB: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to connect to in-memory SurrealDB: {:?}",
+            result.err()
+        );
     }
 
     #[tokio::test]
@@ -239,6 +249,10 @@ mod tests {
         };
 
         let result = create_client(&config).await;
-        assert!(result.is_ok(), "Failed to connect to in-memory SurrealDB with auth: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to connect to in-memory SurrealDB with auth: {:?}",
+            result.err()
+        );
     }
 }

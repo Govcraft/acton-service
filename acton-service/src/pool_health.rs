@@ -228,37 +228,57 @@ impl PoolHealthSummary {
     pub fn is_healthy(&self) -> bool {
         let database_healthy = {
             #[cfg(feature = "database")]
-            { self.database.as_ref().is_none_or(|db| db.healthy) }
+            {
+                self.database.as_ref().is_none_or(|db| db.healthy)
+            }
             #[cfg(not(feature = "database"))]
-            { true }
+            {
+                true
+            }
         };
 
         let cache_healthy = {
             #[cfg(feature = "cache")]
-            { self.redis.as_ref().is_none_or(|redis| redis.available) }
+            {
+                self.redis.as_ref().is_none_or(|redis| redis.available)
+            }
             #[cfg(not(feature = "cache"))]
-            { true }
+            {
+                true
+            }
         };
 
         let events_healthy = {
             #[cfg(feature = "events")]
-            { self.nats.as_ref().is_none_or(|nats| nats.connected) }
+            {
+                self.nats.as_ref().is_none_or(|nats| nats.connected)
+            }
             #[cfg(not(feature = "events"))]
-            { true }
+            {
+                true
+            }
         };
 
         let turso_healthy = {
             #[cfg(feature = "turso")]
-            { self.turso.as_ref().is_none_or(|turso| turso.connected) }
+            {
+                self.turso.as_ref().is_none_or(|turso| turso.connected)
+            }
             #[cfg(not(feature = "turso"))]
-            { true }
+            {
+                true
+            }
         };
 
         let surrealdb_healthy = {
             #[cfg(feature = "surrealdb")]
-            { self.surrealdb.as_ref().is_none_or(|s| s.connected) }
+            {
+                self.surrealdb.as_ref().is_none_or(|s| s.connected)
+            }
             #[cfg(not(feature = "surrealdb"))]
-            { true }
+            {
+                true
+            }
         };
 
         database_healthy && cache_healthy && events_healthy && turso_healthy && surrealdb_healthy

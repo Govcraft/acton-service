@@ -15,7 +15,7 @@ pub struct DeploymentConfig {
 
 pub fn generate_dockerfile(service_name: &str) -> String {
     format!(
-r#"# Multi-stage build for {}
+        r#"# Multi-stage build for {}
 
 # Stage 1: Build
 FROM rust:1.75-alpine AS builder
@@ -48,22 +48,27 @@ CMD ["/app/{}"]
 }
 
 pub fn generate_dockerignore() -> String {
-r#"target/
+    r#"target/
 .git/
 .gitignore
 *.md
 .env
 .env.local
 config.local.toml
-"#.to_string()
+"#
+    .to_string()
 }
 
 pub fn generate_k8s_deployment(config: &DeploymentConfig) -> String {
     let namespace = config.namespace.as_deref().unwrap_or("default");
-    let env_label = config.environment.as_ref().map(|e| format!("\n    environment: {}", e)).unwrap_or_default();
+    let env_label = config
+        .environment
+        .as_ref()
+        .map(|e| format!("\n    environment: {}", e))
+        .unwrap_or_default();
 
     format!(
-r#"apiVersion: apps/v1
+        r#"apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {service_name}
@@ -153,7 +158,7 @@ pub fn generate_k8s_service(config: &DeploymentConfig) -> String {
     let namespace = config.namespace.as_deref().unwrap_or("default");
 
     format!(
-r#"apiVersion: v1
+        r#"apiVersion: v1
 kind: Service
 metadata:
   name: {service_name}
@@ -183,7 +188,7 @@ pub fn generate_k8s_hpa(config: &DeploymentConfig) -> String {
     let namespace = config.namespace.as_deref().unwrap_or("default");
 
     format!(
-r#"apiVersion: autoscaling/v2
+        r#"apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: {service_name}
@@ -237,7 +242,7 @@ pub fn generate_k8s_ingress(config: &DeploymentConfig) -> String {
     let namespace = config.namespace.as_deref().unwrap_or("default");
     let tls_section = if config.enable_tls {
         format!(
-r#"  tls:
+            r#"  tls:
   - hosts:
     - {service_name}.example.com
     secretName: {service_name}-tls
@@ -249,7 +254,7 @@ r#"  tls:
     };
 
     format!(
-r#"apiVersion: networking.k8s.io/v1
+        r#"apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {service_name}
@@ -281,7 +286,7 @@ pub fn generate_service_monitor(config: &DeploymentConfig) -> String {
     let namespace = config.namespace.as_deref().unwrap_or("default");
 
     format!(
-r#"apiVersion: monitoring.coreos.com/v1
+        r#"apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: {service_name}

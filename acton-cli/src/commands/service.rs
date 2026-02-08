@@ -1,11 +1,11 @@
 use anyhow::Result;
 use clap::Subcommand;
 
-mod new;
 mod add;
-mod generate;
-mod validate;
 mod dev;
+mod generate;
+mod new;
+mod validate;
 
 #[derive(Subcommand)]
 pub enum ServiceCommands {

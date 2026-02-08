@@ -5,13 +5,19 @@ pub async fn execute(follow: bool, level: Option<String>, filter: Option<String>
     println!("{}", "Service Logs".bold());
     println!();
 
-    println!("{}", "Log viewing depends on how you're running the service:".bold());
+    println!(
+        "{}",
+        "Log viewing depends on how you're running the service:".bold()
+    );
     println!();
 
     // cargo run
     println!("{}:", "If running locally with cargo run".green().bold());
     println!("  Logs are printed to stdout/stderr");
-    println!("  Set log level with: RUST_LOG={} cargo run", level.as_deref().unwrap_or("info"));
+    println!(
+        "  Set log level with: RUST_LOG={} cargo run",
+        level.as_deref().unwrap_or("info")
+    );
     println!();
 
     // docker
@@ -21,10 +27,16 @@ pub async fn execute(follow: bool, level: Option<String>, filter: Option<String>
         println!("  Follow logs: docker logs -f <container-name>");
     }
     if let Some(lvl) = &level {
-        println!("  Filter by level: docker logs <container-name> | grep {}", lvl.to_uppercase());
+        println!(
+            "  Filter by level: docker logs <container-name> | grep {}",
+            lvl.to_uppercase()
+        );
     }
     if let Some(pattern) = &filter {
-        println!("  Filter pattern: docker logs <container-name> | grep '{}'", pattern);
+        println!(
+            "  Filter pattern: docker logs <container-name> | grep '{}'",
+            pattern
+        );
     }
     println!();
 
@@ -35,10 +47,16 @@ pub async fn execute(follow: bool, level: Option<String>, filter: Option<String>
         println!("  Follow logs: kubectl logs -f <pod-name>");
     }
     if let Some(lvl) = &level {
-        println!("  Filter by level: kubectl logs <pod-name> | grep {}", lvl.to_uppercase());
+        println!(
+            "  Filter by level: kubectl logs <pod-name> | grep {}",
+            lvl.to_uppercase()
+        );
     }
     if let Some(pattern) = &filter {
-        println!("  Filter pattern: kubectl logs <pod-name> | grep '{}'", pattern);
+        println!(
+            "  Filter pattern: kubectl logs <pod-name> | grep '{}'",
+            pattern
+        );
     }
     println!();
 
@@ -52,7 +70,10 @@ pub async fn execute(follow: bool, level: Option<String>, filter: Option<String>
         println!("  Filter by level: journalctl -u <service-name> -p {}", lvl);
     }
     if let Some(pattern) = &filter {
-        println!("  Filter pattern: journalctl -u <service-name> | grep '{}'", pattern);
+        println!(
+            "  Filter pattern: journalctl -u <service-name> | grep '{}'",
+            pattern
+        );
     }
     println!();
 

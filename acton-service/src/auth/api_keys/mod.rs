@@ -129,10 +129,7 @@ impl ApiKeyGenerator {
         // Hash the key for storage
         // Note: We use a custom hasher config with lower memory for API keys
         // since they have high entropy and don't need the same protection as passwords
-        let hash = self
-            .hasher
-            .hash(&key)
-            .expect("Failed to hash API key");
+        let hash = self.hasher.hash(&key).expect("Failed to hash API key");
 
         (key, hash)
     }
@@ -278,9 +275,10 @@ pub mod redis_storage {
         }
 
         async fn get_by_prefix(&self, prefix: &str) -> Result<Option<ApiKey>, Error> {
-            let mut conn = self.pool.get().await.map_err(|e| {
-                Error::Internal(format!("Failed to get Redis connection: {}", e))
-            })?;
+            let mut conn =
+                self.pool.get().await.map_err(|e| {
+                    Error::Internal(format!("Failed to get Redis connection: {}", e))
+                })?;
 
             let key = self.prefix_key(prefix);
             let id: Option<String> = conn
@@ -295,9 +293,10 @@ pub mod redis_storage {
         }
 
         async fn get_by_id(&self, id: &str) -> Result<Option<ApiKey>, Error> {
-            let mut conn = self.pool.get().await.map_err(|e| {
-                Error::Internal(format!("Failed to get Redis connection: {}", e))
-            })?;
+            let mut conn =
+                self.pool.get().await.map_err(|e| {
+                    Error::Internal(format!("Failed to get Redis connection: {}", e))
+                })?;
 
             let key = self.id_key(id);
             let json: Option<String> = conn
@@ -316,9 +315,10 @@ pub mod redis_storage {
         }
 
         async fn create(&self, api_key: &ApiKey) -> Result<(), Error> {
-            let mut conn = self.pool.get().await.map_err(|e| {
-                Error::Internal(format!("Failed to get Redis connection: {}", e))
-            })?;
+            let mut conn =
+                self.pool.get().await.map_err(|e| {
+                    Error::Internal(format!("Failed to get Redis connection: {}", e))
+                })?;
 
             let json = serde_json::to_string(api_key)
                 .map_err(|e| Error::Internal(format!("Failed to serialize API key: {}", e)))?;
@@ -381,9 +381,10 @@ pub mod redis_storage {
         }
 
         async fn list_by_user(&self, user_id: &str) -> Result<Vec<ApiKey>, Error> {
-            let mut conn = self.pool.get().await.map_err(|e| {
-                Error::Internal(format!("Failed to get Redis connection: {}", e))
-            })?;
+            let mut conn =
+                self.pool.get().await.map_err(|e| {
+                    Error::Internal(format!("Failed to get Redis connection: {}", e))
+                })?;
 
             let user_key = self.user_key(user_id);
             let ids: Vec<String> = conn
@@ -408,9 +409,9 @@ pub mod redis_storage {
 
                 // Remove from user set
                 let user_key = self.user_key(&api_key.user_id);
-                conn.srem::<_, _, ()>(&user_key, id)
-                    .await
-                    .map_err(|e| Error::Internal(format!("Failed to remove from user set: {}", e)))?;
+                conn.srem::<_, _, ()>(&user_key, id).await.map_err(|e| {
+                    Error::Internal(format!("Failed to remove from user set: {}", e))
+                })?;
 
                 // Remove prefix mapping
                 let prefix_key = self.prefix_key(&api_key.prefix);
@@ -485,8 +486,21 @@ pub mod pg_storage {
             .map_err(|e| Error::Internal(format!("Failed to get API key: {}", e)))?;
 
             match row {
-                Some((id, user_id, name, prefix, key_hash, scopes_json, rate_limit, is_revoked, last_used_at, expires_at, created_at)) => {
-                    let scopes: Vec<String> = serde_json::from_value(scopes_json).unwrap_or_default();
+                Some((
+                    id,
+                    user_id,
+                    name,
+                    prefix,
+                    key_hash,
+                    scopes_json,
+                    rate_limit,
+                    is_revoked,
+                    last_used_at,
+                    expires_at,
+                    created_at,
+                )) => {
+                    let scopes: Vec<String> =
+                        serde_json::from_value(scopes_json).unwrap_or_default();
                     Ok(Some(ApiKey {
                         id,
                         user_id,
@@ -519,8 +533,21 @@ pub mod pg_storage {
             .map_err(|e| Error::Internal(format!("Failed to get API key: {}", e)))?;
 
             match row {
-                Some((id, user_id, name, prefix, key_hash, scopes_json, rate_limit, is_revoked, last_used_at, expires_at, created_at)) => {
-                    let scopes: Vec<String> = serde_json::from_value(scopes_json).unwrap_or_default();
+                Some((
+                    id,
+                    user_id,
+                    name,
+                    prefix,
+                    key_hash,
+                    scopes_json,
+                    rate_limit,
+                    is_revoked,
+                    last_used_at,
+                    expires_at,
+                    created_at,
+                )) => {
+                    let scopes: Vec<String> =
+                        serde_json::from_value(scopes_json).unwrap_or_default();
                     Ok(Some(ApiKey {
                         id,
                         user_id,
@@ -602,22 +629,37 @@ pub mod pg_storage {
 
             let keys = rows
                 .into_iter()
-                .map(|(id, user_id, name, prefix, key_hash, scopes_json, rate_limit, is_revoked, last_used_at, expires_at, created_at)| {
-                    let scopes: Vec<String> = serde_json::from_value(scopes_json).unwrap_or_default();
-                    ApiKey {
+                .map(
+                    |(
                         id,
                         user_id,
                         name,
                         prefix,
                         key_hash,
-                        scopes,
-                        rate_limit: rate_limit.map(|r| r as u32),
+                        scopes_json,
+                        rate_limit,
                         is_revoked,
                         last_used_at,
                         expires_at,
                         created_at,
-                    }
-                })
+                    )| {
+                        let scopes: Vec<String> =
+                            serde_json::from_value(scopes_json).unwrap_or_default();
+                        ApiKey {
+                            id,
+                            user_id,
+                            name,
+                            prefix,
+                            key_hash,
+                            scopes,
+                            rate_limit: rate_limit.map(|r| r as u32),
+                            is_revoked,
+                            last_used_at,
+                            expires_at,
+                            created_at,
+                        }
+                    },
+                )
                 .collect();
 
             Ok(keys)
@@ -686,9 +728,11 @@ pub mod turso_storage {
                 .await
                 .map_err(|e| Error::Internal(format!("Failed to get API key: {}", e)))?;
 
-            if let Some(row) = rows.next().await.map_err(|e| {
-                Error::Internal(format!("Failed to fetch row: {}", e))
-            })? {
+            if let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| Error::Internal(format!("Failed to fetch row: {}", e)))?
+            {
                 let api_key = parse_api_key_row(&row)?;
                 Ok(Some(api_key))
             } else {
@@ -706,9 +750,11 @@ pub mod turso_storage {
                 .await
                 .map_err(|e| Error::Internal(format!("Failed to get API key: {}", e)))?;
 
-            if let Some(row) = rows.next().await.map_err(|e| {
-                Error::Internal(format!("Failed to fetch row: {}", e))
-            })? {
+            if let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| Error::Internal(format!("Failed to fetch row: {}", e)))?
+            {
                 let api_key = parse_api_key_row(&row)?;
                 Ok(Some(api_key))
             } else {
@@ -779,9 +825,11 @@ pub mod turso_storage {
                 .map_err(|e| Error::Internal(format!("Failed to list API keys: {}", e)))?;
 
             let mut keys = Vec::new();
-            while let Some(row) = rows.next().await.map_err(|e| {
-                Error::Internal(format!("Failed to fetch row: {}", e))
-            })? {
+            while let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| Error::Internal(format!("Failed to fetch row: {}", e)))?
+            {
                 let api_key = parse_api_key_row(&row)?;
                 keys.push(api_key);
             }
@@ -790,10 +838,7 @@ pub mod turso_storage {
 
         async fn delete(&self, id: &str) -> Result<(), Error> {
             self.conn
-                .execute(
-                    "DELETE FROM api_keys WHERE id = ?1",
-                    libsql::params![id],
-                )
+                .execute("DELETE FROM api_keys WHERE id = ?1", libsql::params![id])
                 .await
                 .map_err(|e| Error::Internal(format!("Failed to delete API key: {}", e)))?;
 
@@ -802,21 +847,41 @@ pub mod turso_storage {
     }
 
     fn parse_api_key_row(row: &libsql::Row) -> Result<ApiKey, Error> {
-        let id: String = row.get(0).map_err(|e| Error::Internal(format!("Failed to get id: {}", e)))?;
-        let user_id: String = row.get(1).map_err(|e| Error::Internal(format!("Failed to get user_id: {}", e)))?;
-        let name: String = row.get(2).map_err(|e| Error::Internal(format!("Failed to get name: {}", e)))?;
-        let prefix: String = row.get(3).map_err(|e| Error::Internal(format!("Failed to get key_prefix: {}", e)))?;
-        let key_hash: String = row.get(4).map_err(|e| Error::Internal(format!("Failed to get key_hash: {}", e)))?;
-        let scopes_str: String = row.get(5).map_err(|e| Error::Internal(format!("Failed to get scopes: {}", e)))?;
+        let id: String = row
+            .get(0)
+            .map_err(|e| Error::Internal(format!("Failed to get id: {}", e)))?;
+        let user_id: String = row
+            .get(1)
+            .map_err(|e| Error::Internal(format!("Failed to get user_id: {}", e)))?;
+        let name: String = row
+            .get(2)
+            .map_err(|e| Error::Internal(format!("Failed to get name: {}", e)))?;
+        let prefix: String = row
+            .get(3)
+            .map_err(|e| Error::Internal(format!("Failed to get key_prefix: {}", e)))?;
+        let key_hash: String = row
+            .get(4)
+            .map_err(|e| Error::Internal(format!("Failed to get key_hash: {}", e)))?;
+        let scopes_str: String = row
+            .get(5)
+            .map_err(|e| Error::Internal(format!("Failed to get scopes: {}", e)))?;
         let rate_limit: Option<i64> = row.get(6).ok();
-        let is_revoked: i64 = row.get(7).map_err(|e| Error::Internal(format!("Failed to get is_revoked: {}", e)))?;
+        let is_revoked: i64 = row
+            .get(7)
+            .map_err(|e| Error::Internal(format!("Failed to get is_revoked: {}", e)))?;
         let last_used_at_str: Option<String> = row.get(8).ok();
         let expires_at_str: Option<String> = row.get(9).ok();
-        let created_at_str: String = row.get(10).map_err(|e| Error::Internal(format!("Failed to get created_at: {}", e)))?;
+        let created_at_str: String = row
+            .get(10)
+            .map_err(|e| Error::Internal(format!("Failed to get created_at: {}", e)))?;
 
         let scopes: Vec<String> = serde_json::from_str(&scopes_str).unwrap_or_default();
-        let last_used_at = last_used_at_str.and_then(|s| DateTime::parse_from_rfc3339(&s).ok()).map(|dt| dt.with_timezone(&Utc));
-        let expires_at = expires_at_str.and_then(|s| DateTime::parse_from_rfc3339(&s).ok()).map(|dt| dt.with_timezone(&Utc));
+        let last_used_at = last_used_at_str
+            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+            .map(|dt| dt.with_timezone(&Utc));
+        let expires_at = expires_at_str
+            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+            .map(|dt| dt.with_timezone(&Utc));
         let created_at = DateTime::parse_from_rfc3339(&created_at_str)
             .map(|dt| dt.with_timezone(&Utc))
             .unwrap_or_else(|_| Utc::now());
@@ -844,8 +909,8 @@ pub use turso_storage::TursoApiKeyStorage;
 #[cfg(feature = "surrealdb")]
 pub mod surrealdb_storage {
     use super::*;
-    use std::sync::Arc;
     use crate::surrealdb_backend::SurrealClient;
+    use std::sync::Arc;
 
     /// SurrealDB-backed API key storage
     #[derive(Clone)]
@@ -879,26 +944,30 @@ pub mod surrealdb_storage {
         }
 
         async fn get_by_prefix(&self, prefix: &str) -> Result<Option<ApiKey>, Error> {
-            let mut result = self.client
+            let mut result = self
+                .client
                 .query("SELECT * FROM api_keys WHERE prefix = $prefix LIMIT 1")
                 .bind(("prefix", prefix.to_string()))
                 .await
                 .map_err(|e| Error::Internal(format!("Failed to get API key: {}", e)))?;
 
-            let api_key: Option<ApiKey> = result.take(0)
+            let api_key: Option<ApiKey> = result
+                .take(0)
                 .map_err(|e| Error::Internal(format!("Failed to parse API key: {}", e)))?;
 
             Ok(api_key)
         }
 
         async fn get_by_id(&self, id: &str) -> Result<Option<ApiKey>, Error> {
-            let mut result = self.client
+            let mut result = self
+                .client
                 .query("SELECT * FROM api_keys WHERE id = $id LIMIT 1")
                 .bind(("id", id.to_string()))
                 .await
                 .map_err(|e| Error::Internal(format!("Failed to get API key: {}", e)))?;
 
-            let api_key: Option<ApiKey> = result.take(0)
+            let api_key: Option<ApiKey> = result
+                .take(0)
                 .map_err(|e| Error::Internal(format!("Failed to parse API key: {}", e)))?;
 
             Ok(api_key)
@@ -935,13 +1004,15 @@ pub mod surrealdb_storage {
         }
 
         async fn list_by_user(&self, user_id: &str) -> Result<Vec<ApiKey>, Error> {
-            let mut result = self.client
+            let mut result = self
+                .client
                 .query("SELECT * FROM api_keys WHERE user_id = $user_id ORDER BY created_at DESC")
                 .bind(("user_id", user_id.to_string()))
                 .await
                 .map_err(|e| Error::Internal(format!("Failed to list API keys: {}", e)))?;
 
-            let keys: Vec<ApiKey> = result.take(0)
+            let keys: Vec<ApiKey> = result
+                .take(0)
                 .map_err(|e| Error::Internal(format!("Failed to parse API keys: {}", e)))?;
 
             Ok(keys)

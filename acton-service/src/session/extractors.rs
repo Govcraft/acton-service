@@ -178,11 +178,12 @@ where
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         // Get session from request extensions (set by SessionManagerLayer)
-        let session = parts
-            .extensions
-            .get::<Session>()
-            .cloned()
-            .ok_or_else(|| Error::Session("Session not found in request extensions. Is SessionManagerLayer configured?".to_string()))?;
+        let session = parts.extensions.get::<Session>().cloned().ok_or_else(|| {
+            Error::Session(
+                "Session not found in request extensions. Is SessionManagerLayer configured?"
+                    .to_string(),
+            )
+        })?;
 
         let data: T = session
             .get(Self::DATA_KEY)
@@ -203,8 +204,11 @@ pub trait SessionData {
     async fn get_value<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>, Error>;
 
     /// Set a value in the session.
-    async fn set_value<T: Serialize + Send + Sync>(&self, key: &str, value: &T)
-        -> Result<(), Error>;
+    async fn set_value<T: Serialize + Send + Sync>(
+        &self,
+        key: &str,
+        value: &T,
+    ) -> Result<(), Error>;
 
     /// Remove a value from the session.
     async fn remove_value<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>, Error>;

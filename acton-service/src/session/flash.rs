@@ -251,11 +251,9 @@ where
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         // Get session from request extensions (set by SessionManagerLayer)
-        let session = parts
-            .extensions
-            .get::<Session>()
-            .cloned()
-            .ok_or_else(|| Error::Session("Session not found in request extensions for flash messages".to_string()))?;
+        let session = parts.extensions.get::<Session>().cloned().ok_or_else(|| {
+            Error::Session("Session not found in request extensions for flash messages".to_string())
+        })?;
 
         // Read and remove flash messages (consume pattern)
         let messages: Vec<FlashMessage> = session

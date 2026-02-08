@@ -292,9 +292,7 @@ impl GovernorRateLimit {
         // Get or create limiter for this key
         let limiter = limiters
             .entry(key.to_string())
-            .or_insert_with(|| {
-                Arc::new(Self::create_limiter(requests_per_minute, burst_size))
-            })
+            .or_insert_with(|| Arc::new(Self::create_limiter(requests_per_minute, burst_size)))
             .clone();
 
         // Try to acquire a permit
@@ -462,7 +460,8 @@ mod tests {
 
     #[test]
     fn test_rate_limit_exceeded() {
-        let exceeded = RateLimitExceeded::new(Duration::from_secs(30), 100, Duration::from_secs(60));
+        let exceeded =
+            RateLimitExceeded::new(Duration::from_secs(30), 100, Duration::from_secs(60));
 
         assert_eq!(exceeded.retry_after_secs(), 30);
         assert_eq!(exceeded.limit, 100);

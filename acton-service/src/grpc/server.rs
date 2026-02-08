@@ -4,8 +4,8 @@ use crate::config::GrpcConfig;
 use crate::error::Result;
 use crate::state::AppState;
 use std::net::SocketAddr;
-use tonic::transport::Server;
 use tonic::server::NamedService;
+use tonic::transport::Server;
 // Reflection types are not used directly, we use the Builder API
 
 /// gRPC server builder
@@ -20,9 +20,7 @@ pub struct GrpcServer {
 impl GrpcServer {
     /// Create a new gRPC server with the given configuration
     pub fn new(config: GrpcConfig) -> Self {
-        Self {
-            config,
-        }
+        Self { config }
     }
 
     /// Build the tonic server
@@ -125,10 +123,14 @@ impl GrpcServicesBuilder {
     pub fn add_service<S>(mut self, service: S) -> Self
     where
         S: tower::Service<
-            http::Request<tonic::body::Body>,
-            Response = http::Response<tonic::body::Body>,
-            Error = std::convert::Infallible,
-        > + NamedService + Clone + Send + Sync + 'static,
+                http::Request<tonic::body::Body>,
+                Response = http::Response<tonic::body::Body>,
+                Error = std::convert::Infallible,
+            > + NamedService
+            + Clone
+            + Send
+            + Sync
+            + 'static,
         S::Future: Send + 'static,
     {
         self.routes = self.routes.add_service(service);
@@ -146,13 +148,16 @@ impl GrpcServicesBuilder {
         if self.health_enabled {
             if let Some(app_state) = state.clone() {
                 let health_service = crate::grpc::HealthService::new(app_state);
-                let health_server = tonic_health::pb::health_server::HealthServer::new(health_service);
+                let health_server =
+                    tonic_health::pb::health_server::HealthServer::new(health_service);
 
                 self.routes = self.routes.add_service(health_server);
 
                 tracing::info!("gRPC health service enabled");
             } else {
-                tracing::warn!("Health service enabled but no AppState provided, skipping health service");
+                tracing::warn!(
+                    "Health service enabled but no AppState provided, skipping health service"
+                );
             }
         }
 

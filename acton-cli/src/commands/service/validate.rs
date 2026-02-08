@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 use colored::Colorize;
 use std::path::Path;
 
-use crate::validator::{ValidationResult, validate_service};
+use crate::validator::{validate_service, ValidationResult};
 
 #[allow(clippy::too_many_arguments)]
 pub async fn execute(
@@ -165,7 +165,9 @@ fn run_validation(path: &str, checks: &[String], verbose: bool) -> Result<Valida
             "tests" => validate_tests(&mut result, path, verbose),
             "documentation" => validate_documentation(&mut result, path, verbose),
             _ => {
-                result.warnings.push(format!("Unknown check type: {}", check_type));
+                result
+                    .warnings
+                    .push(format!("Unknown check type: {}", check_type));
             }
         }
     }
@@ -204,16 +206,22 @@ fn validate_structure(result: &mut ValidationResult, path: &str, _verbose: bool)
 
     // Check for main.rs or lib.rs
     if service_path.join("src/main.rs").exists() || service_path.join("src/lib.rs").exists() {
-        result.passed.push("✓ Entry point exists (main.rs or lib.rs)".to_string());
+        result
+            .passed
+            .push("✓ Entry point exists (main.rs or lib.rs)".to_string());
     } else {
-        result.errors.push("✗ No entry point found (main.rs or lib.rs)".to_string());
+        result
+            .errors
+            .push("✗ No entry point found (main.rs or lib.rs)".to_string());
     }
 
     // Check for config.toml
     if service_path.join("config.toml").exists() {
         result.passed.push("✓ config.toml exists".to_string());
     } else {
-        result.warnings.push("⚠ config.toml not found (recommended)".to_string());
+        result
+            .warnings
+            .push("⚠ config.toml not found (recommended)".to_string());
     }
 }
 
@@ -228,9 +236,13 @@ fn validate_dependencies(result: &mut ValidationResult, path: &str, _verbose: bo
     // Read Cargo.toml and check for acton-service dependency
     if let Ok(content) = std::fs::read_to_string(cargo_toml) {
         if content.contains("acton-service") {
-            result.passed.push("✓ acton-service dependency found".to_string());
+            result
+                .passed
+                .push("✓ acton-service dependency found".to_string());
         } else {
-            result.warnings.push("⚠ acton-service dependency not found".to_string());
+            result
+                .warnings
+                .push("⚠ acton-service dependency not found".to_string());
         }
 
         // Check for common production dependencies
@@ -256,19 +268,27 @@ fn validate_config(result: &mut ValidationResult, path: &str, _verbose: bool) {
     if let Ok(content) = std::fs::read_to_string(config_file) {
         // Check for service configuration
         if content.contains("[service]") {
-            result.passed.push("✓ Service configuration section found".to_string());
+            result
+                .passed
+                .push("✓ Service configuration section found".to_string());
         } else {
-            result.warnings.push("⚠ [service] section missing in config.toml".to_string());
+            result
+                .warnings
+                .push("⚠ [service] section missing in config.toml".to_string());
         }
 
         // Check for middleware configuration
         if content.contains("[middleware]") {
-            result.passed.push("✓ Middleware configuration found".to_string());
+            result
+                .passed
+                .push("✓ Middleware configuration found".to_string());
         }
 
         // Check for environment-specific settings
         if content.contains("environment") {
-            result.passed.push("✓ Environment configuration found".to_string());
+            result
+                .passed
+                .push("✓ Environment configuration found".to_string());
         }
     }
 }
@@ -281,13 +301,19 @@ fn validate_security(result: &mut ValidationResult, path: &str, _verbose: bool) 
         if service_path.join(".gitignore").exists() {
             if let Ok(content) = std::fs::read_to_string(service_path.join(".gitignore")) {
                 if content.contains(".env") {
-                    result.passed.push("✓ .env file properly ignored".to_string());
+                    result
+                        .passed
+                        .push("✓ .env file properly ignored".to_string());
                 } else {
-                    result.errors.push("✗ .env file exists but not in .gitignore".to_string());
+                    result
+                        .errors
+                        .push("✗ .env file exists but not in .gitignore".to_string());
                 }
             }
         } else {
-            result.warnings.push("⚠ .env file exists, ensure it's not committed".to_string());
+            result
+                .warnings
+                .push("⚠ .env file exists, ensure it's not committed".to_string());
         }
     }
 
@@ -298,9 +324,13 @@ fn validate_security(result: &mut ValidationResult, path: &str, _verbose: bool) 
 
             // Check for secure algorithm
             if content.contains("RS256") || content.contains("ES256") {
-                result.passed.push("✓ Secure JWT algorithm configured".to_string());
+                result
+                    .passed
+                    .push("✓ Secure JWT algorithm configured".to_string());
             } else if content.contains("HS256") {
-                result.warnings.push("⚠ HS256 JWT algorithm (consider RS256/ES256)".to_string());
+                result
+                    .warnings
+                    .push("⚠ HS256 JWT algorithm (consider RS256/ES256)".to_string());
             }
         }
     }
@@ -308,9 +338,13 @@ fn validate_security(result: &mut ValidationResult, path: &str, _verbose: bool) 
     // Check for HTTPS/TLS configuration
     if let Ok(content) = std::fs::read_to_string(service_path.join("config.toml")) {
         if content.contains("tls") || content.contains("https") {
-            result.passed.push("✓ TLS/HTTPS configuration found".to_string());
+            result
+                .passed
+                .push("✓ TLS/HTTPS configuration found".to_string());
         } else {
-            result.warnings.push("⚠ No TLS/HTTPS configuration (required for production)".to_string());
+            result
+                .warnings
+                .push("⚠ No TLS/HTTPS configuration (required for production)".to_string());
         }
     }
 }
@@ -322,7 +356,9 @@ fn validate_deployment(result: &mut ValidationResult, path: &str, _verbose: bool
     if service_path.join("Dockerfile").exists() {
         result.passed.push("✓ Dockerfile exists".to_string());
     } else {
-        result.warnings.push("⚠ Dockerfile not found (required for containerized deployment)".to_string());
+        result
+            .warnings
+            .push("⚠ Dockerfile not found (required for containerized deployment)".to_string());
     }
 
     // Check for Kubernetes manifests
@@ -333,9 +369,13 @@ fn validate_deployment(result: &mut ValidationResult, path: &str, _verbose: bool
     ];
 
     if k8s_paths.iter().any(|p| p.exists()) {
-        result.passed.push("✓ Kubernetes manifests directory found".to_string());
+        result
+            .passed
+            .push("✓ Kubernetes manifests directory found".to_string());
     } else {
-        result.warnings.push("⚠ No Kubernetes manifests found".to_string());
+        result
+            .warnings
+            .push("⚠ No Kubernetes manifests found".to_string());
     }
 
     // Check for health check endpoints
@@ -349,9 +389,13 @@ fn validate_deployment(result: &mut ValidationResult, path: &str, _verbose: bool
         });
 
         if has_health {
-            result.passed.push("✓ Health check endpoints configured".to_string());
+            result
+                .passed
+                .push("✓ Health check endpoints configured".to_string());
         } else {
-            result.warnings.push("⚠ No health check endpoints found".to_string());
+            result
+                .warnings
+                .push("⚠ No health check endpoints found".to_string());
         }
     }
 }
@@ -363,7 +407,9 @@ fn validate_tests(result: &mut ValidationResult, path: &str, _verbose: bool) {
     if service_path.join("tests").exists() {
         result.passed.push("✓ tests/ directory exists".to_string());
     } else {
-        result.warnings.push("⚠ tests/ directory not found".to_string());
+        result
+            .warnings
+            .push("⚠ tests/ directory not found".to_string());
     }
 
     // Check for test modules in src
@@ -377,9 +423,13 @@ fn validate_tests(result: &mut ValidationResult, path: &str, _verbose: bool) {
         });
 
         if has_tests {
-            result.passed.push("✓ Test modules found in src/".to_string());
+            result
+                .passed
+                .push("✓ Test modules found in src/".to_string());
         } else {
-            result.warnings.push("⚠ No test modules found in src/".to_string());
+            result
+                .warnings
+                .push("⚠ No test modules found in src/".to_string());
         }
     }
 }
@@ -396,7 +446,9 @@ fn validate_documentation(result: &mut ValidationResult, path: &str, _verbose: b
 
     // Check for API documentation
     if service_path.join("docs").exists() || service_path.join("api-docs").exists() {
-        result.passed.push("✓ Documentation directory found".to_string());
+        result
+            .passed
+            .push("✓ Documentation directory found".to_string());
     }
 }
 
@@ -496,17 +548,29 @@ fn write_report(result: &ValidationResult, path: &str) -> Result<()> {
         if result.passed.is_empty() {
             "None\n".to_string()
         } else {
-            result.passed.iter().map(|s| format!("- {}\n", s)).collect::<String>()
+            result
+                .passed
+                .iter()
+                .map(|s| format!("- {}\n", s))
+                .collect::<String>()
         },
         if result.warnings.is_empty() {
             "None\n".to_string()
         } else {
-            result.warnings.iter().map(|s| format!("- {}\n", s)).collect::<String>()
+            result
+                .warnings
+                .iter()
+                .map(|s| format!("- {}\n", s))
+                .collect::<String>()
         },
         if result.errors.is_empty() {
             "None\n".to_string()
         } else {
-            result.errors.iter().map(|s| format!("- {}\n", s)).collect::<String>()
+            result
+                .errors
+                .iter()
+                .map(|s| format!("- {}\n", s))
+                .collect::<String>()
         }
     );
 

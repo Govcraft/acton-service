@@ -21,7 +21,10 @@ pub async fn execute(
         return Ok(());
     }
 
-    println!("{}", format!("Adding gRPC service: {}", service_name).bold());
+    println!(
+        "{}",
+        format!("Adding gRPC service: {}", service_name).bold()
+    );
     println!();
 
     // Determine package name
@@ -29,17 +32,20 @@ pub async fn execute(
         .clone()
         .unwrap_or_else(|| format!("{}.v1", service_name.to_lowercase()));
 
-    println!(
-        "{}: {}",
-        "Package".cyan().bold(),
-        package_name.cyan()
-    );
+    println!("{}: {}", "Package".cyan().bold(), package_name.cyan());
     println!();
 
     // Step 1: Show proto file setup
     println!("{}", "1. Create proto file:".green().bold());
     println!();
-    show_proto_file(&service_name, &package_name, &method, &request, &response, streaming);
+    show_proto_file(
+        &service_name,
+        &package_name,
+        &method,
+        &request,
+        &response,
+        streaming,
+    );
     println!();
 
     // Step 2: Show build.rs setup
@@ -64,7 +70,12 @@ pub async fn execute(
 
     // Step 5: Show server setup
     let server_step = if handler { "5" } else { "4" };
-    println!("{}", format!("{}. Set up gRPC server:", server_step).green().bold());
+    println!(
+        "{}",
+        format!("{}. Set up gRPC server:", server_step)
+            .green()
+            .bold()
+    );
     println!();
     show_server_setup(&service_name, &package_name, health, reflection);
     println!();
@@ -72,7 +83,12 @@ pub async fn execute(
     // Step 6: Show client setup if requested
     if client {
         let client_step = if handler { "6" } else { "5" };
-        println!("{}", format!("{}. Create gRPC client:", client_step).green().bold());
+        println!(
+            "{}",
+            format!("{}. Create gRPC client:", client_step)
+                .green()
+                .bold()
+        );
         println!();
         show_client_setup(&service_name, &package_name);
         println!();
@@ -100,7 +116,10 @@ pub async fn execute(
     println!();
     println!("{}", "Test with grpcurl:".cyan().bold());
     println!("  grpcurl -plaintext localhost:9090 list");
-    println!("  grpcurl -plaintext -d '{{}}' localhost:9090 {}.{}/MethodName", package_name, service_name);
+    println!(
+        "  grpcurl -plaintext -d '{{}}' localhost:9090 {}.{}/MethodName",
+        package_name, service_name
+    );
     println!();
 
     println!("{}", "Learn more:".yellow().bold());
@@ -150,11 +169,20 @@ fn show_proto_file(
 
     if streaming {
         println!("     // Server streaming");
-        println!("     rpc {}({}) returns (stream {});", method_name, request_type, response_type);
+        println!(
+            "     rpc {}({}) returns (stream {});",
+            method_name, request_type, response_type
+        );
         println!("     // Or bidirectional streaming:");
-        println!("     // rpc {}(stream {}) returns (stream {});", method_name, request_type, response_type);
+        println!(
+            "     // rpc {}(stream {}) returns (stream {});",
+            method_name, request_type, response_type
+        );
     } else {
-        println!("     rpc {}({}) returns ({});", method_name, request_type, response_type);
+        println!(
+            "     rpc {}({}) returns ({});",
+            method_name, request_type, response_type
+        );
     }
 
     println!("   }}");
@@ -181,7 +209,10 @@ fn show_build_setup() {
     println!("       Ok(())");
     println!("   }}");
     println!();
-    println!("   {}: See acton-service/examples/build.rs.example", "Example".yellow());
+    println!(
+        "   {}: See acton-service/examples/build.rs.example",
+        "Example".yellow()
+    );
 }
 
 fn show_cargo_setup() {
@@ -207,12 +238,19 @@ fn show_service_implementation(
     println!(r#"       tonic::include_proto!("{}");"#, package_name);
     println!();
     println!("       pub const FILE_DESCRIPTOR_SET: &[u8] =");
-    println!(r#"           tonic::include_file_descriptor_set!("{}_descriptor");"#, pkg_mod);
+    println!(
+        r#"           tonic::include_file_descriptor_set!("{}_descriptor");"#,
+        pkg_mod
+    );
     println!("   }}");
     println!();
     println!("   use {}::{{", pkg_mod);
-    println!("       {}_service_server::{{{}Service, {}ServiceServer}},",
-        service_name.to_lowercase(), service_name, service_name);
+    println!(
+        "       {}_service_server::{{{}Service, {}ServiceServer}},",
+        service_name.to_lowercase(),
+        service_name,
+        service_name
+    );
     println!("       {}Request, {}Response,", method_name, method_name);
     println!("   }};");
     println!();
@@ -220,24 +258,39 @@ fn show_service_implementation(
     println!("   struct {}ServiceImpl {{}}", service_name);
     println!();
     println!("   #[tonic::async_trait]");
-    println!("   impl {}Service for {}ServiceImpl {{", service_name, service_name);
+    println!(
+        "   impl {}Service for {}ServiceImpl {{",
+        service_name, service_name
+    );
 
     if streaming {
-        println!("       type {}Stream = tokio_stream::wrappers::ReceiverStream<", method_name);
+        println!(
+            "       type {}Stream = tokio_stream::wrappers::ReceiverStream<",
+            method_name
+        );
         println!("           Result<{}Response, tonic::Status>", method_name);
         println!("       >;");
         println!();
         println!("       async fn {}(", method_snake);
         println!("           &self,");
-        println!("           request: tonic::Request<{}Request>,", method_name);
-        println!("       ) -> Result<tonic::Response<Self::{}Stream>, tonic::Status> {{", method_name);
+        println!(
+            "           request: tonic::Request<{}Request>,",
+            method_name
+        );
+        println!(
+            "       ) -> Result<tonic::Response<Self::{}Stream>, tonic::Status> {{",
+            method_name
+        );
         println!("           let req = request.into_inner();");
         println!("           let (tx, rx) = tokio::sync::mpsc::channel(128);");
         println!();
         println!("           // Stream responses");
         println!("           tokio::spawn(async move {{");
         println!("               for i in 0..10 {{");
-        println!("                   let response = {}Response {{", method_name);
+        println!(
+            "                   let response = {}Response {{",
+            method_name
+        );
         println!(r#"                       result: format!("Item {{}}", i),"#);
         println!("                   }};");
         println!("                   if tx.send(Ok(response)).await.is_err() {{");
@@ -253,8 +306,14 @@ fn show_service_implementation(
     } else {
         println!("       async fn {}(", method_snake);
         println!("           &self,");
-        println!("           request: tonic::Request<{}Request>,", method_name);
-        println!("       ) -> Result<tonic::Response<{}Response>, tonic::Status> {{", method_name);
+        println!(
+            "           request: tonic::Request<{}Request>,",
+            method_name
+        );
+        println!(
+            "       ) -> Result<tonic::Response<{}Response>, tonic::Status> {{",
+            method_name
+        );
         println!("           let req = request.into_inner();");
         println!();
         println!("           tracing::info!(id = %req.id, \"Processing request\");");
@@ -286,10 +345,16 @@ fn show_server_setup(service_name: &str, package_name: &str, health: bool, refle
     }
     if reflection {
         println!("       .with_reflection()");
-        println!("       .add_file_descriptor_set({}::FILE_DESCRIPTOR_SET)", pkg_mod);
+        println!(
+            "       .add_file_descriptor_set({}::FILE_DESCRIPTOR_SET)",
+            pkg_mod
+        );
     }
 
-    println!("       .add_service({}ServiceServer::new(service));", service_name);
+    println!(
+        "       .add_service({}ServiceServer::new(service));",
+        service_name
+    );
     println!();
     println!("   let router = builder.build(None).unwrap();");
     println!();
@@ -300,15 +365,25 @@ fn show_server_setup(service_name: &str, package_name: &str, health: bool, refle
 fn show_client_setup(service_name: &str, package_name: &str) {
     let pkg_mod = package_name.replace('.', "_");
 
-    println!("   use {}::{}_service_client::{}ServiceClient;",
-        pkg_mod, service_name.to_lowercase(), service_name);
+    println!(
+        "   use {}::{}_service_client::{}ServiceClient;",
+        pkg_mod,
+        service_name.to_lowercase(),
+        service_name
+    );
     println!();
     println!("   // Connect to gRPC server");
-    println!(r#"   let mut client = {}ServiceClient::connect("http://localhost:9090")"#, service_name);
+    println!(
+        r#"   let mut client = {}ServiceClient::connect("http://localhost:9090")"#,
+        service_name
+    );
     println!("       .await?;");
     println!();
     println!("   // Make request");
-    println!("   let request = tonic::Request::new({}Request {{", service_name);
+    println!(
+        "   let request = tonic::Request::new({}Request {{",
+        service_name
+    );
     println!(r#"       id: "123".to_string(),"#);
     println!("   }});");
     println!();

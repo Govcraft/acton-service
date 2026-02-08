@@ -52,11 +52,9 @@ impl std::fmt::Display for BuildError {
         match self {
             BuildError::Io(e) => write!(f, "IO error: {}", e),
             BuildError::ProtoBuild(e) => write!(f, "Proto compilation error: {}", e),
-            BuildError::NoProtoFiles(dir) => write!(
-                f,
-                "No .proto files found in directory: {}",
-                dir.display()
-            ),
+            BuildError::NoProtoFiles(dir) => {
+                write!(f, "No .proto files found in directory: {}", dir.display())
+            }
             BuildError::InvalidProtoDir(dir) => write!(
                 f,
                 "Proto directory does not exist or is not a directory: {}",
@@ -132,7 +130,11 @@ pub fn compile_protos_from_dir<P: AsRef<Path>>(proto_dir: P) -> BuildResult<()> 
     // Build descriptor set path
     let descriptor_path = format!("{}/{}_descriptor.bin", out_dir, pkg_name);
 
-    println!("cargo:warning=Compiling {} proto files from {}", proto_files.len(), proto_dir.display());
+    println!(
+        "cargo:warning=Compiling {} proto files from {}",
+        proto_files.len(),
+        proto_dir.display()
+    );
     for proto_file in &proto_files {
         println!("cargo:warning=  - {}", proto_file.display());
     }
@@ -278,10 +280,7 @@ pub fn compile_specific_protos<P: AsRef<Path>>(
         .collect();
 
     compile_protos_with_descriptor(
-        &proto_paths
-            .iter()
-            .map(PathBuf::from)
-            .collect::<Vec<_>>(),
+        &proto_paths.iter().map(PathBuf::from).collect::<Vec<_>>(),
         Path::new(include_paths[0]),
         &descriptor_path,
     )?;

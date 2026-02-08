@@ -502,10 +502,8 @@ mod tests {
 
     #[test]
     fn test_list_query_with_filters() {
-        let query = ListQuery::new().with_filters(vec![
-            "status=active".to_string(),
-            "role=admin".to_string(),
-        ]);
+        let query = ListQuery::new()
+            .with_filters(vec!["status=active".to_string(), "role=admin".to_string()]);
         assert_eq!(query.filter.len(), 2);
     }
 

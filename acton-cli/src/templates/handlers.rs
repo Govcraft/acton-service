@@ -82,7 +82,6 @@ pub fn generate_endpoint_handler(template: &HandlerTemplate) -> String {
     result
 }
 
-
 fn to_pascal_case(s: &str) -> String {
     s.split('_')
         .map(|word| {

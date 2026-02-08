@@ -20,11 +20,7 @@ static TRACING_INIT: Once = Once::new();
 use {
     opentelemetry::{global, trace::TracerProvider},
     opentelemetry_otlp::{SpanExporter, WithExportConfig},
-    opentelemetry_sdk::{
-        propagation::TraceContextPropagator,
-        trace::SdkTracerProvider,
-        Resource,
-    },
+    opentelemetry_sdk::{propagation::TraceContextPropagator, trace::SdkTracerProvider, Resource},
     tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer},
 };
 
@@ -81,13 +77,11 @@ where
 
         // Build subscriber with JSON formatting
         // Respect RUST_LOG environment variable if set, otherwise use config
-        let fmt_layer = tracing_subscriber::fmt::layer()
-            .json()
-            .with_filter(
-                EnvFilter::try_from_default_env()
-                    .or_else(|_| EnvFilter::try_new(&log_level))
-                    .unwrap_or_else(|_| EnvFilter::new("info")),
-            );
+        let fmt_layer = tracing_subscriber::fmt::layer().json().with_filter(
+            EnvFilter::try_from_default_env()
+                .or_else(|_| EnvFilter::try_new(&log_level))
+                .unwrap_or_else(|_| EnvFilter::new("info")),
+        );
 
         // Try to initialize OpenTelemetry if configured
         if let Some(otlp_config) = &otlp_config {
@@ -164,11 +158,9 @@ pub(crate) fn init_otlp_tracer(
         exporter_builder = exporter_builder.with_endpoint(&otlp_config.endpoint);
     }
 
-    let exporter = exporter_builder
-        .build()
-        .map_err(|e| {
-            crate::error::Error::Internal(format!("Failed to build OTLP exporter: {}", e))
-        })?;
+    let exporter = exporter_builder.build().map_err(|e| {
+        crate::error::Error::Internal(format!("Failed to build OTLP exporter: {}", e))
+    })?;
 
     // Build tracer provider with production-ready configuration
     let provider = SdkTracerProvider::builder()
@@ -205,11 +197,9 @@ pub(crate) fn init_otlp_meter(
         exporter_builder = exporter_builder.with_endpoint(&otlp_config.endpoint);
     }
 
-    let exporter = exporter_builder
-        .build()
-        .map_err(|e| {
-            crate::error::Error::Internal(format!("Failed to build OTLP metric exporter: {}", e))
-        })?;
+    let exporter = exporter_builder.build().map_err(|e| {
+        crate::error::Error::Internal(format!("Failed to build OTLP metric exporter: {}", e))
+    })?;
 
     // Create periodic reader with appropriate export interval (15s for Prometheus compatibility)
     let reader = PeriodicReader::builder(exporter)
@@ -399,7 +389,10 @@ mod tests {
         let result = init_otlp_tracer(&otlp_config, "test-service");
 
         // Should succeed - the exporter doesn't validate connectivity at build time
-        assert!(result.is_ok(), "OTLP tracer should build even with invalid endpoint (connection is lazy)");
+        assert!(
+            result.is_ok(),
+            "OTLP tracer should build even with invalid endpoint (connection is lazy)"
+        );
     }
 
     #[test]
@@ -414,7 +407,10 @@ mod tests {
         let config = Config::<()>::default();
         // Should succeed even without OTLP config
         let result = init_meter_provider(&config);
-        assert!(result.is_ok(), "Meter provider init should succeed without config");
+        assert!(
+            result.is_ok(),
+            "Meter provider init should succeed without config"
+        );
     }
 
     #[tokio::test]
@@ -430,7 +426,10 @@ mod tests {
         // It will only fail when trying to actually send metrics (lazy connection)
         let result = init_otlp_meter(&otlp_config, "test-service");
 
-        assert!(result.is_ok(), "OTLP meter should build even with potentially invalid endpoint (connection is lazy)");
+        assert!(
+            result.is_ok(),
+            "OTLP meter should build even with potentially invalid endpoint (connection is lazy)"
+        );
     }
 
     #[test]
@@ -438,6 +437,9 @@ mod tests {
     fn test_get_meter_without_init() {
         // Before initialization, get_meter should return None
         let meter = get_meter();
-        assert!(meter.is_none(), "get_meter should return None before initialization");
+        assert!(
+            meter.is_none(),
+            "get_meter should return None before initialization"
+        );
     }
 }

@@ -53,8 +53,7 @@ pub async fn execute(service: String, output: Option<String>, dry_run: bool) -> 
     }
 
     // Write proto file
-    fs::write(&output_path, proto_content)
-        .context("Failed to write proto file")?;
+    fs::write(&output_path, proto_content).context("Failed to write proto file")?;
 
     show_success(&output_path, &service_name, &project_root);
 
@@ -132,13 +131,17 @@ fn show_success(output_path: &Path, service_name: &str, project_root: &Path) {
     println!("     acton-service = {{ version = \"*\", features = [\"build\"] }}");
     println!("  4. Run: cargo build --features grpc");
 
-    if let Ok(relative_path) = output_path.strip_prefix(std::env::current_dir().unwrap_or_default()) {
+    if let Ok(relative_path) = output_path.strip_prefix(std::env::current_dir().unwrap_or_default())
+    {
         println!("\n{} Edit proto: {}", "→".blue(), relative_path.display());
     }
 
     // Check if build.rs exists
     let build_rs = project_root.join("build.rs");
     if !build_rs.exists() {
-        println!("\n{} build.rs not found. Create it to compile protos!", "⚠".yellow());
+        println!(
+            "\n{} build.rs not found. Create it to compile protos!",
+            "⚠".yellow()
+        );
     }
 }

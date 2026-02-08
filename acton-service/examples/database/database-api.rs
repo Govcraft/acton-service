@@ -345,7 +345,9 @@ async fn create_product(
     let pool = get_db(&state).await?;
 
     if req.name.trim().is_empty() {
-        return Err(AppError::InvalidInput("Product name cannot be empty".into()));
+        return Err(AppError::InvalidInput(
+            "Product name cannot be empty".into(),
+        ));
     }
 
     if req.price_cents < 0 {

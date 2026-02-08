@@ -27,7 +27,9 @@ use std::convert::Infallible;
 use std::sync::Arc;
 
 use acton_service::prelude::*;
-use acton_service::session::{create_memory_session_layer, AuthSession, FlashMessage, SessionConfig, TypedSession};
+use acton_service::session::{
+    create_memory_session_layer, AuthSession, FlashMessage, SessionConfig, TypedSession,
+};
 use acton_service::versioning::VersionedApiBuilder;
 use tokio::sync::RwLock;
 
@@ -203,7 +205,8 @@ async fn create_task(
 ) -> impl IntoResponse {
     let title = form.title.trim();
     if title.is_empty() {
-        return Html("<div class=\"flash flash-error\">Task title cannot be empty</div>").into_response();
+        return Html("<div class=\"flash flash-error\">Task title cannot be empty</div>")
+            .into_response();
     }
 
     let task = store.write().await.add(title.to_string());
@@ -336,10 +339,14 @@ async fn login_page(flash: FlashMessages, auth: TypedSession<AuthSession>) -> im
 }
 
 /// Handle login.
-async fn login(mut auth: TypedSession<AuthSession>, Form(form): Form<LoginForm>) -> impl IntoResponse {
+async fn login(
+    mut auth: TypedSession<AuthSession>,
+    Form(form): Form<LoginForm>,
+) -> impl IntoResponse {
     let username = form.username.trim();
     if username.is_empty() {
-        let _ = FlashMessages::push(auth.session(), FlashMessage::error("Username is required")).await;
+        let _ =
+            FlashMessages::push(auth.session(), FlashMessage::error("Username is required")).await;
         return axum::response::Redirect::to("/login").into_response();
     }
 
@@ -353,14 +360,19 @@ async fn login(mut auth: TypedSession<AuthSession>, Form(form): Form<LoginForm>)
     let _ = FlashMessages::push(
         auth.session(),
         FlashMessage::success(format!("Welcome back, {}!", username)),
-    ).await;
+    )
+    .await;
 
     axum::response::Redirect::to("/").into_response()
 }
 
 /// Handle logout.
 async fn logout(mut auth: TypedSession<AuthSession>) -> impl IntoResponse {
-    let _ = FlashMessages::push(auth.session(), FlashMessage::info("You have been logged out")).await;
+    let _ = FlashMessages::push(
+        auth.session(),
+        FlashMessage::info("You have been logged out"),
+    )
+    .await;
 
     auth.data_mut().logout();
     if let Err(e) = auth.save().await {

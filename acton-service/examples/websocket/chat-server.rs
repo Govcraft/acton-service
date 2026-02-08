@@ -29,9 +29,7 @@
 //! ```
 
 use acton_service::prelude::*;
-use acton_service::websocket::{
-    Broadcaster, ConnectionId, Message, WebSocket, WebSocketUpgrade,
-};
+use acton_service::websocket::{Broadcaster, ConnectionId, Message, WebSocket, WebSocketUpgrade};
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -94,7 +92,9 @@ async fn handle_socket(socket: WebSocket, broadcaster: Arc<Broadcaster>) {
         message: format!("Welcome! Your connection ID is {}", connection_id),
     };
     let _ = sender
-        .send(Message::Text(serde_json::to_string(&welcome).unwrap().into()))
+        .send(Message::Text(
+            serde_json::to_string(&welcome).unwrap().into(),
+        ))
         .await;
 
     // Spawn a task to forward messages from the channel to the WebSocket
@@ -112,28 +112,26 @@ async fn handle_socket(socket: WebSocket, broadcaster: Arc<Broadcaster>) {
 
     while let Some(result) = receiver.next().await {
         match result {
-            Ok(Message::Text(text)) => {
-                match serde_json::from_str::<IncomingMessage>(&text) {
-                    Ok(msg) => {
-                        handle_incoming_message(
-                            msg,
-                            connection_id,
-                            &conn_id_str,
-                            &tx,
-                            &broadcaster_clone,
-                        )
-                        .await;
-                    }
-                    Err(e) => {
-                        let error = OutgoingMessage::Error {
-                            message: format!("Invalid message format: {}", e),
-                        };
-                        let _ = tx
-                            .send(Message::Text(serde_json::to_string(&error).unwrap().into()))
-                            .await;
-                    }
+            Ok(Message::Text(text)) => match serde_json::from_str::<IncomingMessage>(&text) {
+                Ok(msg) => {
+                    handle_incoming_message(
+                        msg,
+                        connection_id,
+                        &conn_id_str,
+                        &tx,
+                        &broadcaster_clone,
+                    )
+                    .await;
                 }
-            }
+                Err(e) => {
+                    let error = OutgoingMessage::Error {
+                        message: format!("Invalid message format: {}", e),
+                    };
+                    let _ = tx
+                        .send(Message::Text(serde_json::to_string(&error).unwrap().into()))
+                        .await;
+                }
+            },
             Ok(Message::Ping(data)) => {
                 let _ = tx.send(Message::Pong(data)).await;
             }
@@ -169,7 +167,9 @@ async fn handle_incoming_message(
 
             let response = OutgoingMessage::Joined { room: room.clone() };
             let _ = tx
-                .send(Message::Text(serde_json::to_string(&response).unwrap().into()))
+                .send(Message::Text(
+                    serde_json::to_string(&response).unwrap().into(),
+                ))
                 .await;
 
             // Notify others in the room (in a full implementation, you'd track room membership)
@@ -188,7 +188,9 @@ async fn handle_incoming_message(
 
             let response = OutgoingMessage::Left { room };
             let _ = tx
-                .send(Message::Text(serde_json::to_string(&response).unwrap().into()))
+                .send(Message::Text(
+                    serde_json::to_string(&response).unwrap().into(),
+                ))
                 .await;
         }
         IncomingMessage::Message { room, content } => {

@@ -28,10 +28,12 @@ pub fn request_id_interceptor<T>(mut req: Request<T>) -> Result<Request<T>, Stat
         .unwrap_or_else(|| RequestId::new().to_string());
 
     // Insert/update request ID in metadata
-    req.metadata_mut()
-        .insert("x-request-id", request_id.parse().map_err(|_| {
-            Status::internal("Failed to parse request ID")
-        })?);
+    req.metadata_mut().insert(
+        "x-request-id",
+        request_id
+            .parse()
+            .map_err(|_| Status::internal("Failed to parse request ID"))?,
+    );
 
     // Store request ID in extensions for response propagation
     req.extensions_mut().insert(RequestIdExtension(request_id));
@@ -50,11 +52,12 @@ pub fn add_request_id_to_response<B>(
     response: &mut Response<B>,
     request_id: &str,
 ) -> Result<(), Status> {
-    response
-        .metadata_mut()
-        .insert("x-request-id", request_id.parse().map_err(|_| {
-            Status::internal("Failed to add request ID to response")
-        })?);
+    response.metadata_mut().insert(
+        "x-request-id",
+        request_id
+            .parse()
+            .map_err(|_| Status::internal("Failed to add request ID to response"))?,
+    );
     Ok(())
 }
 
@@ -149,7 +152,10 @@ pub fn jwt_auth_interceptor(
 /// Simple authentication interceptor (deprecated - use token_auth_interceptor instead)
 ///
 /// This is kept for backward compatibility but doesn't perform actual validation.
-#[deprecated(since = "0.2.0", note = "Use paseto_auth_interceptor or jwt_auth_interceptor instead")]
+#[deprecated(
+    since = "0.2.0",
+    note = "Use paseto_auth_interceptor or jwt_auth_interceptor instead"
+)]
 pub fn auth_interceptor<T>(req: Request<T>) -> Result<Request<T>, Status> {
     // Extract authorization token from metadata
     let _token = req

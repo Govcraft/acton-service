@@ -68,29 +68,14 @@ impl HealthService {
         #[cfg(feature = "cache")]
         if self.state.config().redis.is_some() {
             match self.state.redis().await {
-                Some(redis_pool) => {
-                    match redis_pool.get().await {
-                        Ok(mut conn) => {
-                            use std::ops::DerefMut;
-                            if let Err(e) = redis::cmd("PING")
-                                .query_async::<String>(conn.deref_mut())
-                                .await
-                            {
-                                tracing::error!("Redis ping failed: {}", e);
-                                let is_optional = self
-                                    .state
-                                    .config()
-                                    .redis
-                                    .as_ref()
-                                    .map(|r| r.optional)
-                                    .unwrap_or(false);
-                                if !is_optional {
-                                    all_healthy = false;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to get Redis connection: {}", e);
+                Some(redis_pool) => match redis_pool.get().await {
+                    Ok(mut conn) => {
+                        use std::ops::DerefMut;
+                        if let Err(e) = redis::cmd("PING")
+                            .query_async::<String>(conn.deref_mut())
+                            .await
+                        {
+                            tracing::error!("Redis ping failed: {}", e);
                             let is_optional = self
                                 .state
                                 .config()
@@ -103,7 +88,20 @@ impl HealthService {
                             }
                         }
                     }
-                }
+                    Err(e) => {
+                        tracing::error!("Failed to get Redis connection: {}", e);
+                        let is_optional = self
+                            .state
+                            .config()
+                            .redis
+                            .as_ref()
+                            .map(|r| r.optional)
+                            .unwrap_or(false);
+                        if !is_optional {
+                            all_healthy = false;
+                        }
+                    }
+                },
                 None => {
                     let is_optional = self
                         .state
@@ -196,11 +194,7 @@ impl HealthService {
 #[tonic::async_trait]
 impl tonic_health::pb::health_server::Health for HealthService {
     type WatchStream = std::pin::Pin<
-        Box<
-            dyn futures::Stream<Item = Result<HealthCheckResponse, Status>>
-                + Send
-                + 'static,
-        >,
+        Box<dyn futures::Stream<Item = Result<HealthCheckResponse, Status>> + Send + 'static>,
     >;
 
     /// Check the health of the service
@@ -266,8 +260,9 @@ impl tonic_health::pb::health_server::Health for HealthService {
             let _ = tx.send(Ok(response)).await;
         });
 
-        Ok(Response::new(Box::pin(ReceiverStream::new(rx))
-            as Self::WatchStream))
+        Ok(Response::new(
+            Box::pin(ReceiverStream::new(rx)) as Self::WatchStream
+        ))
     }
 }
 

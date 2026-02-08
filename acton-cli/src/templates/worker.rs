@@ -15,8 +15,7 @@ pub fn generate_worker(template: &WorkerTemplate) -> String {
 }
 
 fn generate_nats_worker(template: &WorkerTemplate) -> String {
-    let subject = template.subject.as_deref()
-        .unwrap_or("events.>");
+    let subject = template.subject.as_deref().unwrap_or("events.>");
 
     format!(
         r#"use anyhow::Result;

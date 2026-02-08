@@ -290,7 +290,10 @@ pub trait SoftDeleteHandler<Id, Entity, CreateDto, UpdateDto>:
     /// let response = handler.restore(&user_id).await?;
     /// println!("Restored user: {}", response.data.name);
     /// ```
-    fn restore(&self, id: &Id) -> impl Future<Output = Result<ItemResponse<Entity>, ApiError>> + Send;
+    fn restore(
+        &self,
+        id: &Id,
+    ) -> impl Future<Output = Result<ItemResponse<Entity>, ApiError>> + Send;
 
     /// List all entities including soft-deleted ones
     ///

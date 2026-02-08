@@ -215,7 +215,10 @@ impl SseBroadcaster {
     /// Broadcast a message to all connections.
     ///
     /// Returns the number of receivers that will receive the message.
-    pub fn broadcast(&self, message: BroadcastMessage) -> Result<usize, broadcast::error::SendError<BroadcastMessage>> {
+    pub fn broadcast(
+        &self,
+        message: BroadcastMessage,
+    ) -> Result<usize, broadcast::error::SendError<BroadcastMessage>> {
         self.sender.send(message)
     }
 
@@ -296,7 +299,9 @@ mod tests {
         let broadcaster = SseBroadcaster::new();
         let mut receiver = broadcaster.subscribe();
 
-        broadcaster.broadcast(BroadcastMessage::new("Test")).unwrap();
+        broadcaster
+            .broadcast(BroadcastMessage::new("Test"))
+            .unwrap();
 
         let msg = receiver.recv().await.unwrap();
         assert_eq!(msg.data, "Test");

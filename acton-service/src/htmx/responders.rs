@@ -296,9 +296,7 @@ mod tests {
 
     #[test]
     fn test_trigger_events_simple() {
-        let events = HxTriggerEvents::new()
-            .event("event1")
-            .event("event2");
+        let events = HxTriggerEvents::new().event("event1").event("event2");
         assert_eq!(events.events.len(), 2);
     }
 }

@@ -175,7 +175,10 @@ impl TemplateContext {
     #[must_use]
     pub fn csrf_meta(&self) -> String {
         match &self.csrf_token {
-            Some(token) => format!(r#"<meta name="csrf-token" content="{}">"#, html_escape(token)),
+            Some(token) => format!(
+                r#"<meta name="csrf-token" content="{}">"#,
+                html_escape(token)
+            ),
             None => String::new(),
         }
     }

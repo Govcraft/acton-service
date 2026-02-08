@@ -64,24 +64,19 @@ pub use health::HealthService;
 
 #[cfg(feature = "grpc")]
 pub use interceptors::{
-    request_id_interceptor, token_auth_interceptor, paseto_auth_interceptor,
-    RequestIdExtension, add_request_id_to_response,
+    add_request_id_to_response, paseto_auth_interceptor, request_id_interceptor,
+    token_auth_interceptor, RequestIdExtension,
 };
 
 #[cfg(all(feature = "grpc", feature = "jwt"))]
 pub use interceptors::jwt_auth_interceptor;
 
 #[cfg(feature = "grpc")]
-pub use middleware::{
-    GrpcTracingLayer, GrpcTracingService,
-    LoggingLayer, LoggingService,
-};
+pub use middleware::{GrpcTracingLayer, GrpcTracingService, LoggingLayer, LoggingService};
 
 #[cfg(all(feature = "grpc", feature = "governor"))]
-pub use middleware::{
-    GrpcRateLimitLayer, GrpcRateLimitService,
-};
+pub use middleware::{GrpcRateLimitLayer, GrpcRateLimitService};
 
 // Re-export tonic types for convenience
 #[cfg(feature = "grpc")]
-pub use tonic::{Request, Response, Status, Code};
+pub use tonic::{Code, Request, Response, Status};

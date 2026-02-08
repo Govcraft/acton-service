@@ -27,7 +27,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .file_descriptor_set_path(format!("{}/ping_descriptor.bin", out_dir))
             .compile_protos(&["proto/ping.proto"], &["proto"])?;
 
-        println!("cargo:warning=Compiled ping.proto -> {}/ping_descriptor.bin", out_dir);
+        println!(
+            "cargo:warning=Compiled ping.proto -> {}/ping_descriptor.bin",
+            out_dir
+        );
 
         // Event-driven example
         tonic_prost_build::configure()

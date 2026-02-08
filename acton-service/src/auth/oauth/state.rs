@@ -110,11 +110,10 @@ mod redis_impl {
             let data_json = serde_json::to_string(data)
                 .map_err(|e| Error::Internal(format!("Failed to serialize state data: {}", e)))?;
 
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| Error::Internal(format!("Failed to get Redis connection: {}", e)))?;
+            let mut conn =
+                self.pool.get().await.map_err(|e| {
+                    Error::Internal(format!("Failed to get Redis connection: {}", e))
+                })?;
 
             conn.set_ex::<_, _, ()>(&key, data_json, self.ttl_secs)
                 .await
@@ -128,11 +127,10 @@ mod redis_impl {
 
             let key = self.state_key(state);
 
-            let mut conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|e| Error::Internal(format!("Failed to get Redis connection: {}", e)))?;
+            let mut conn =
+                self.pool.get().await.map_err(|e| {
+                    Error::Internal(format!("Failed to get Redis connection: {}", e))
+                })?;
 
             // Get and delete atomically (GETDEL command)
             let data_json: Option<String> = conn

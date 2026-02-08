@@ -166,7 +166,6 @@ impl ResilienceConfig {
                 .build(),
         )
     }
-
 }
 
 #[cfg(test)]

@@ -19,7 +19,10 @@
 //! ```
 
 use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher as Argon2Hasher, PasswordVerifier, SaltString},
+    password_hash::{
+        rand_core::OsRng, PasswordHash, PasswordHasher as Argon2Hasher, PasswordVerifier,
+        SaltString,
+    },
     Algorithm, Argon2, Params, Version,
 };
 

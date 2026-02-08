@@ -83,7 +83,12 @@ async fn main() -> anyhow::Result<()> {
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     // Check task statuses
-    for task_id in ["quick-task", "long-task", "failing-task", "cancellable-task"] {
+    for task_id in [
+        "quick-task",
+        "long-task",
+        "failing-task",
+        "cancellable-task",
+    ] {
         let status = worker.get_task_status(task_id).await;
         tracing::info!("Task '{}' status: {:?}", task_id, status);
     }
@@ -110,7 +115,12 @@ async fn main() -> anyhow::Result<()> {
 
     // Final status check
     tracing::info!("\n=== Final Task Statuses ===");
-    for task_id in ["quick-task", "long-task", "failing-task", "cancellable-task"] {
+    for task_id in [
+        "quick-task",
+        "long-task",
+        "failing-task",
+        "cancellable-task",
+    ] {
         let status = worker.get_task_status(task_id).await;
         let status_str = match &status {
             TaskStatus::Pending => "Pending".to_string(),
@@ -124,10 +134,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Clean up finished tasks
     worker.cleanup_finished_tasks().await;
-    tracing::info!(
-        "After cleanup: {} tasks tracked",
-        worker.task_count()
-    );
+    tracing::info!("After cleanup: {} tasks tracked", worker.task_count());
 
     // Graceful shutdown
     tracing::info!("Shutting down runtime...");

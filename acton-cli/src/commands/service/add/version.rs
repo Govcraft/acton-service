@@ -10,10 +10,16 @@ pub async fn execute(version: String, from: Option<String>, dry_run: bool) -> Re
         return Ok(());
     }
 
-    println!("{}", format!("Adding API version {}...", version_upper).bold());
+    println!(
+        "{}",
+        format!("Adding API version {}...", version_upper).bold()
+    );
     println!();
 
-    println!("{}", "acton-service uses type-safe API versioning with VersionedApiBuilder.".bold());
+    println!(
+        "{}",
+        "acton-service uses type-safe API versioning with VersionedApiBuilder.".bold()
+    );
     println!();
 
     if let Some(ref source_version) = from {
@@ -35,34 +41,60 @@ pub async fn execute(version: String, from: Option<String>, dry_run: bool) -> Re
     if let Some(source) = &from {
         let source_upper = source.to_uppercase();
         println!("       // Existing {} routes", source_upper);
-        println!("       .add_version(ApiVersion::{}, |routes| {{", source_upper);
-        println!("           routes.route(\"/users\", get(list_users_{}))  // existing", source.to_lowercase());
+        println!(
+            "       .add_version(ApiVersion::{}, |routes| {{",
+            source_upper
+        );
+        println!(
+            "           routes.route(\"/users\", get(list_users_{}))  // existing",
+            source.to_lowercase()
+        );
         println!("       }})");
     }
 
     println!("       // New {} routes", version_upper);
-    println!("       .add_version(ApiVersion::{}, |routes| {{", version_upper);
+    println!(
+        "       .add_version(ApiVersion::{}, |routes| {{",
+        version_upper
+    );
     println!("           routes");
-    println!("               .route(\"/users\", get(list_users_{}))  // your handlers", version_lower);
-    println!("               .route(\"/users/{{id}}\", get(get_user_{}))", version_lower);
+    println!(
+        "               .route(\"/users\", get(list_users_{}))  // your handlers",
+        version_lower
+    );
+    println!(
+        "               .route(\"/users/{{id}}\", get(get_user_{}))",
+        version_lower
+    );
     println!("       }})");
     println!("       .build_routes();");
     println!();
 
     println!("{}", "2. Create handler functions:".green().bold());
     println!();
-    println!("   async fn list_users_{}() -> Json<Vec<User{}>> {{", version_lower, version_upper);
+    println!(
+        "   async fn list_users_{}() -> Json<Vec<User{}>> {{",
+        version_lower, version_upper
+    );
     println!("       // Implement your logic");
     println!("       Json(vec![])");
     println!("   }}");
     println!();
-    println!("   async fn get_user_{}(Path(id): Path<String>) -> Json<User{}> {{", version_lower, version_upper);
+    println!(
+        "   async fn get_user_{}(Path(id): Path<String>) -> Json<User{}> {{",
+        version_lower, version_upper
+    );
     println!("       // Implement your logic");
     println!("   }}");
     println!();
 
     if from.is_some() {
-        println!("{}", "3. Define version-specific types (if schema changed):".green().bold());
+        println!(
+            "{}",
+            "3. Define version-specific types (if schema changed):"
+                .green()
+                .bold()
+        );
         println!();
         println!("   #[derive(Serialize)]");
         println!("   struct User{} {{", version_upper);
@@ -76,7 +108,10 @@ pub async fn execute(version: String, from: Option<String>, dry_run: bool) -> Re
     println!("   .add_version_deprecated(");
     println!("       ApiVersion::V1,");
     println!("       |routes| {{ /* routes */ }},");
-    println!("       DeprecationInfo::new(ApiVersion::V1, ApiVersion::{})", version_upper);
+    println!(
+        "       DeprecationInfo::new(ApiVersion::V1, ApiVersion::{})",
+        version_upper
+    );
     println!("           .with_sunset_date(\"2026-12-31T23:59:59Z\")");
     println!("           .with_message(\"Migrate to {}\")", version_upper);
     println!("   )");
@@ -101,5 +136,8 @@ fn show_dry_run(version: &str, from: &Option<String>) {
         println!("Copy from: {}", source.to_uppercase().cyan());
     }
     println!();
-    println!("Instructions for adding version {} to your service", version);
+    println!(
+        "Instructions for adding version {} to your service",
+        version
+    );
 }

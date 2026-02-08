@@ -128,7 +128,10 @@ impl WebSocketConnection {
     }
 
     /// Send a text message to this connection
-    pub async fn send_text(&self, text: impl Into<String>) -> Result<(), mpsc::error::SendError<Message>> {
+    pub async fn send_text(
+        &self,
+        text: impl Into<String>,
+    ) -> Result<(), mpsc::error::SendError<Message>> {
         self.send(Message::Text(text.into().into())).await
     }
 

@@ -134,7 +134,10 @@ pub trait Repository<Id, Entity, Create, Update>: Send + Sync {
     /// let active_count = repo.count(&[FilterCondition::eq("status", "active")]).await?;
     /// println!("Active users: {}", active_count);
     /// ```
-    fn count(&self, filters: &[FilterCondition]) -> impl Future<Output = RepositoryResult<u64>> + Send;
+    fn count(
+        &self,
+        filters: &[FilterCondition],
+    ) -> impl Future<Output = RepositoryResult<u64>> + Send;
 
     /// Check if an entity exists by its identifier
     ///
@@ -182,7 +185,11 @@ pub trait Repository<Id, Entity, Create, Update>: Send + Sync {
     /// };
     /// let updated = repo.update(&user_id, update).await?;
     /// ```
-    fn update(&self, id: &Id, data: Update) -> impl Future<Output = RepositoryResult<Entity>> + Send;
+    fn update(
+        &self,
+        id: &Id,
+        data: Update,
+    ) -> impl Future<Output = RepositoryResult<Entity>> + Send;
 
     /// Delete an entity by its identifier (hard delete)
     ///
@@ -337,12 +344,18 @@ where
     /// Load a single related entity for the given parent
     ///
     /// Returns `None` if no related entity exists.
-    fn load_one(&self, entity: &Entity) -> impl Future<Output = RepositoryResult<Option<Related>>> + Send;
+    fn load_one(
+        &self,
+        entity: &Entity,
+    ) -> impl Future<Output = RepositoryResult<Option<Related>>> + Send;
 
     /// Load multiple related entities for the given parent
     ///
     /// Returns an empty vector if no related entities exist.
-    fn load_many(&self, entity: &Entity) -> impl Future<Output = RepositoryResult<Vec<Related>>> + Send;
+    fn load_many(
+        &self,
+        entity: &Entity,
+    ) -> impl Future<Output = RepositoryResult<Vec<Related>>> + Send;
 
     /// Batch load related entities by their IDs
     ///
@@ -374,8 +387,9 @@ mod tests {
         let ok_result: RepositoryResult<i32> = Ok(42);
         assert!(ok_result.is_ok());
 
-        let err_result: RepositoryResult<i32> =
-            Err(super::super::error::RepositoryError::not_found("Test", "123"));
+        let err_result: RepositoryResult<i32> = Err(
+            super::super::error::RepositoryError::not_found("Test", "123"),
+        );
         assert!(err_result.is_err());
     }
 
@@ -530,10 +544,7 @@ mod tests {
     #[tokio::test]
     async fn test_mock_relation_loader_batch() {
         let loader = MockRelationLoader;
-        let ids = vec![
-            RelatedId("1".to_string()),
-            RelatedId("2".to_string()),
-        ];
+        let ids = vec![RelatedId("1".to_string()), RelatedId("2".to_string())];
         let result = loader.batch_load(&ids).await;
         assert!(result.is_ok());
         let map = result.unwrap();

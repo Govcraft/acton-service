@@ -47,12 +47,12 @@ use tonic::{Request, Response, Status};
 pub mod ping {
     tonic::include_proto!("ping.v1");
 
-    pub const FILE_DESCRIPTOR_SET: &[u8] =
-        tonic::include_file_descriptor_set!("ping_descriptor");
+    pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("ping_descriptor");
 }
 
 use ping::{
-    ping_service_client::PingServiceClient, ping_service_server::{PingService, PingServiceServer},
+    ping_service_client::PingServiceClient,
+    ping_service_server::{PingService, PingServiceServer},
     PingRequest, PongResponse,
 };
 
@@ -97,22 +97,31 @@ struct HttpPongResponse {
     timestamp: i64,
 }
 
-async fn http_ping_handler(Json(req): Json<HttpPingRequest>) -> std::result::Result<Json<HttpPongResponse>, (axum::http::StatusCode, String)> {
+async fn http_ping_handler(
+    Json(req): Json<HttpPingRequest>,
+) -> std::result::Result<Json<HttpPongResponse>, (axum::http::StatusCode, String)> {
     tracing::info!(message = %req.message, "HTTP: Forwarding ping to gRPC backend");
 
     // Connect to gRPC backend
     let mut client = PingServiceClient::connect("http://localhost:9090")
         .await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("gRPC connection failed: {}", e)))?;
+        .map_err(|e| {
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("gRPC connection failed: {}", e),
+            )
+        })?;
 
     let grpc_request = PingRequest {
         message: req.message,
     };
 
-    let response = client
-        .ping(grpc_request)
-        .await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("gRPC call failed: {}", e)))?;
+    let response = client.ping(grpc_request).await.map_err(|e| {
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("gRPC call failed: {}", e),
+        )
+    })?;
 
     let response = response.into_inner();
 
@@ -150,7 +159,9 @@ async fn main() -> Result<()> {
 
         // Convert routes to axum router and serve
         let grpc_app = routes.into_axum_router();
-        let listener = tokio::net::TcpListener::bind(grpc_addr).await.expect("Failed to bind gRPC listener");
+        let listener = tokio::net::TcpListener::bind(grpc_addr)
+            .await
+            .expect("Failed to bind gRPC listener");
 
         axum::serve(listener, grpc_app)
             .await
@@ -186,14 +197,18 @@ async fn main() -> Result<()> {
     tracing::info!("");
     tracing::info!("Try these commands:");
     tracing::info!("  # Send ping via HTTP → gRPC:");
-    tracing::info!(r#"  curl -X POST http://localhost:8080/api/v1/ping -H "Content-Type: application/json" -d '{{"message":"Hello"}}'"#);
+    tracing::info!(
+        r#"  curl -X POST http://localhost:8080/api/v1/ping -H "Content-Type: application/json" -d '{{"message":"Hello"}}'"#
+    );
     tracing::info!("");
     tracing::info!("  # Check health:");
     tracing::info!("  curl http://localhost:8080/health");
     tracing::info!("  curl http://localhost:8080/ready");
     tracing::info!("");
     tracing::info!("  # Call gRPC directly (with grpcurl):");
-    tracing::info!(r#"  grpcurl -plaintext -d '{{"message":"Direct"}}' localhost:9090 ping.v1.PingService/Ping"#);
+    tracing::info!(
+        r#"  grpcurl -plaintext -d '{{"message":"Direct"}}' localhost:9090 ping.v1.PingService/Ping"#
+    );
     tracing::info!(r#"  grpcurl -plaintext localhost:9090 list"#);
     tracing::info!("");
 

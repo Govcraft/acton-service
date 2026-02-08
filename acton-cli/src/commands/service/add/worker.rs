@@ -59,8 +59,7 @@ pub async fn execute(
     // Write worker file
     pb.set_message("Writing worker file...");
     let worker_file = workers_dir.join(format!("{}.rs", name.replace('-', "_")));
-    fs::write(&worker_file, worker_code)
-        .context("Failed to write worker file")?;
+    fs::write(&worker_file, worker_code).context("Failed to write worker file")?;
 
     // Update workers/mod.rs
     pb.set_message("Updating workers module...");
@@ -120,7 +119,10 @@ fn update_workers_mod(workers_dir: &Path, name: &str) -> Result<()> {
     let content = if mod_file.exists() {
         let current = fs::read_to_string(&mod_file)?;
         if current.contains(&format!("pub mod {};", module_name)) {
-            utils::warning(&format!("Worker '{}' already exists in workers/mod.rs", name));
+            utils::warning(&format!(
+                "Worker '{}' already exists in workers/mod.rs",
+                name
+            ));
             return Ok(());
         }
         format!("{}\npub mod {};", current.trim_end(), module_name)
@@ -128,8 +130,7 @@ fn update_workers_mod(workers_dir: &Path, name: &str) -> Result<()> {
         format!("pub mod {};", module_name)
     };
 
-    fs::write(&mod_file, content)
-        .context("Failed to write workers/mod.rs")?;
+    fs::write(&mod_file, content).context("Failed to write workers/mod.rs")?;
 
     Ok(())
 }
@@ -154,20 +155,29 @@ fn show_success(template: &WorkerTemplate, project_root: &Path) {
     utils::success(&format!("Added worker '{}'", template.name));
 
     println!("\n{}:", "Generated".bold());
-    println!("  {} Worker module: src/workers/{}.rs", "✓".green(), template.name.replace('-', "_"));
+    println!(
+        "  {} Worker module: src/workers/{}.rs",
+        "✓".green(),
+        template.name.replace('-', "_")
+    );
     println!("  {} Source: {}", "✓".green(), template.source);
     println!("  {} Stream: {}", "✓".green(), template.stream);
 
     println!("\n{}:", "Next steps".bold());
-    println!("  1. Implement worker logic in src/workers/{}.rs", template.name.replace('-', "_"));
+    println!(
+        "  1. Implement worker logic in src/workers/{}.rs",
+        template.name.replace('-', "_")
+    );
     println!("  2. Add worker to main.rs:");
     println!("     ```rust");
     println!("     mod workers;");
     println!("     ");
     println!("     // In main() or service setup:");
-    println!("     let worker = workers::{}::{}Worker::new(/* deps */);",
-             template.name.replace('-', "_"),
-             to_pascal_case(&template.name));
+    println!(
+        "     let worker = workers::{}::{}Worker::new(/* deps */);",
+        template.name.replace('-', "_"),
+        to_pascal_case(&template.name)
+    );
     println!("     tokio::spawn(async move {{");
     println!("         worker.run().await");
     println!("     }});");
@@ -183,7 +193,11 @@ fn show_success(template: &WorkerTemplate, project_root: &Path) {
         println!("  redis = {{ version = \"*\", features = [\"tokio-comp\", \"streams\"] }}");
     }
 
-    if let Ok(relative_path) = project_root.join("src/workers").join(format!("{}.rs", template.name.replace('-', "_"))).strip_prefix(std::env::current_dir().unwrap_or_default()) {
+    if let Ok(relative_path) = project_root
+        .join("src/workers")
+        .join(format!("{}.rs", template.name.replace('-', "_")))
+        .strip_prefix(std::env::current_dir().unwrap_or_default())
+    {
         println!("\n{} Edit worker: {}", "→".blue(), relative_path.display());
     }
 }

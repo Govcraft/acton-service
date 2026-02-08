@@ -47,8 +47,7 @@ pub mod oauth;
 
 // Re-exports for convenience
 pub use config::{
-    AuthConfig, PasswordConfig, TokenGenerationConfig, PasetoGenerationConfig,
-    RefreshTokenConfig,
+    AuthConfig, PasetoGenerationConfig, PasswordConfig, RefreshTokenConfig, TokenGenerationConfig,
 };
 
 #[cfg(feature = "oauth")]
@@ -56,9 +55,9 @@ pub use config::{ApiKeyConfig, OAuthConfig, OAuthProviderConfig};
 
 pub use password::PasswordHasher;
 
-pub use tokens::{TokenGenerator, TokenPair};
 pub use tokens::paseto_generator::PasetoGenerator;
-pub use tokens::refresh::{RefreshTokenStorage, RefreshTokenData, RefreshTokenMetadata};
+pub use tokens::refresh::{RefreshTokenData, RefreshTokenMetadata, RefreshTokenStorage};
+pub use tokens::{TokenGenerator, TokenPair};
 
 #[cfg(feature = "cache")]
 pub use tokens::refresh::RedisRefreshStorage;
@@ -93,9 +92,8 @@ pub use api_keys::SurrealDbApiKeyStorage;
 // OAuth exports (requires oauth feature)
 #[cfg(feature = "oauth")]
 pub use oauth::{
-    OAuthProvider, OAuthTokens, OAuthUserInfo,
-    GoogleProvider, GitHubProvider, CustomOidcProvider, CustomOidcConfig,
-    OAuthStateManager, StateData, generate_state,
+    generate_state, CustomOidcConfig, CustomOidcProvider, GitHubProvider, GoogleProvider,
+    OAuthProvider, OAuthStateManager, OAuthTokens, OAuthUserInfo, StateData,
 };
 
 #[cfg(all(feature = "oauth", feature = "cache"))]

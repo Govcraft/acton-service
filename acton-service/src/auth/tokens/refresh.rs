@@ -157,9 +157,10 @@ pub mod redis_storage {
             expires_at: DateTime<Utc>,
             metadata: &RefreshTokenMetadata,
         ) -> Result<(), Error> {
-            let mut conn = self.pool.get().await.map_err(|e| {
-                Error::Internal(format!("Failed to get Redis connection: {}", e))
-            })?;
+            let mut conn =
+                self.pool.get().await.map_err(|e| {
+                    Error::Internal(format!("Failed to get Redis connection: {}", e))
+                })?;
 
             let data = RefreshTokenData {
                 token_id: token_id.to_string(),
@@ -203,9 +204,10 @@ pub mod redis_storage {
         }
 
         async fn get(&self, token_id: &str) -> Result<Option<RefreshTokenData>, Error> {
-            let mut conn = self.pool.get().await.map_err(|e| {
-                Error::Internal(format!("Failed to get Redis connection: {}", e))
-            })?;
+            let mut conn =
+                self.pool.get().await.map_err(|e| {
+                    Error::Internal(format!("Failed to get Redis connection: {}", e))
+                })?;
 
             let key = self.token_key(token_id);
             let json: Option<String> = conn
@@ -224,9 +226,10 @@ pub mod redis_storage {
         }
 
         async fn revoke(&self, token_id: &str) -> Result<(), Error> {
-            let mut conn = self.pool.get().await.map_err(|e| {
-                Error::Internal(format!("Failed to get Redis connection: {}", e))
-            })?;
+            let mut conn =
+                self.pool.get().await.map_err(|e| {
+                    Error::Internal(format!("Failed to get Redis connection: {}", e))
+                })?;
 
             // Get the token first to mark it as revoked
             if let Some(mut data) = self.get(token_id).await? {
@@ -245,9 +248,10 @@ pub mod redis_storage {
         }
 
         async fn revoke_family(&self, family_id: &str) -> Result<u64, Error> {
-            let mut conn = self.pool.get().await.map_err(|e| {
-                Error::Internal(format!("Failed to get Redis connection: {}", e))
-            })?;
+            let mut conn =
+                self.pool.get().await.map_err(|e| {
+                    Error::Internal(format!("Failed to get Redis connection: {}", e))
+                })?;
 
             let family_key = self.family_key(family_id);
             let token_ids: Vec<String> = conn
@@ -265,9 +269,10 @@ pub mod redis_storage {
         }
 
         async fn revoke_all_for_user(&self, user_id: &str) -> Result<u64, Error> {
-            let mut conn = self.pool.get().await.map_err(|e| {
-                Error::Internal(format!("Failed to get Redis connection: {}", e))
-            })?;
+            let mut conn =
+                self.pool.get().await.map_err(|e| {
+                    Error::Internal(format!("Failed to get Redis connection: {}", e))
+                })?;
 
             let user_key = self.user_key(user_id);
             let token_ids: Vec<String> = conn
@@ -365,7 +370,17 @@ pub mod pg_storage {
         }
 
         async fn get(&self, token_id: &str) -> Result<Option<RefreshTokenData>, Error> {
-            let row = sqlx::query_as::<_, (String, String, String, bool, DateTime<Utc>, serde_json::Value)>(
+            let row = sqlx::query_as::<
+                _,
+                (
+                    String,
+                    String,
+                    String,
+                    bool,
+                    DateTime<Utc>,
+                    serde_json::Value,
+                ),
+            >(
                 r#"
                 SELECT id, user_id, family_id, is_revoked, expires_at, metadata
                 FROM refresh_tokens
@@ -379,8 +394,8 @@ pub mod pg_storage {
 
             match row {
                 Some((id, user_id, family_id, is_revoked, expires_at, metadata_json)) => {
-                    let metadata: RefreshTokenMetadata = serde_json::from_value(metadata_json)
-                        .unwrap_or_default();
+                    let metadata: RefreshTokenMetadata =
+                        serde_json::from_value(metadata_json).unwrap_or_default();
                     Ok(Some(RefreshTokenData {
                         token_id: id,
                         user_id,
@@ -405,25 +420,23 @@ pub mod pg_storage {
         }
 
         async fn revoke_family(&self, family_id: &str) -> Result<u64, Error> {
-            let result = sqlx::query(
-                "UPDATE refresh_tokens SET is_revoked = true WHERE family_id = $1",
-            )
-            .bind(family_id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| Error::Internal(format!("Failed to revoke family: {}", e)))?;
+            let result =
+                sqlx::query("UPDATE refresh_tokens SET is_revoked = true WHERE family_id = $1")
+                    .bind(family_id)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| Error::Internal(format!("Failed to revoke family: {}", e)))?;
 
             Ok(result.rows_affected())
         }
 
         async fn revoke_all_for_user(&self, user_id: &str) -> Result<u64, Error> {
-            let result = sqlx::query(
-                "UPDATE refresh_tokens SET is_revoked = true WHERE user_id = $1",
-            )
-            .bind(user_id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| Error::Internal(format!("Failed to revoke user tokens: {}", e)))?;
+            let result =
+                sqlx::query("UPDATE refresh_tokens SET is_revoked = true WHERE user_id = $1")
+                    .bind(user_id)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| Error::Internal(format!("Failed to revoke user tokens: {}", e)))?;
 
             Ok(result.rows_affected())
         }
@@ -438,9 +451,11 @@ pub mod pg_storage {
             metadata: &RefreshTokenMetadata,
         ) -> Result<(), Error> {
             // Use a transaction for atomic rotation
-            let mut tx = self.pool.begin().await.map_err(|e| {
-                Error::Internal(format!("Failed to begin transaction: {}", e))
-            })?;
+            let mut tx = self
+                .pool
+                .begin()
+                .await
+                .map_err(|e| Error::Internal(format!("Failed to begin transaction: {}", e)))?;
 
             // Revoke old token
             sqlx::query("UPDATE refresh_tokens SET is_revoked = true WHERE id = $1")
@@ -468,9 +483,9 @@ pub mod pg_storage {
             .await
             .map_err(|e| Error::Internal(format!("Failed to store new token: {}", e)))?;
 
-            tx.commit().await.map_err(|e| {
-                Error::Internal(format!("Failed to commit transaction: {}", e))
-            })?;
+            tx.commit()
+                .await
+                .map_err(|e| Error::Internal(format!("Failed to commit transaction: {}", e)))?;
 
             Ok(())
         }
@@ -543,27 +558,29 @@ pub mod turso_storage {
                 .await
                 .map_err(|e| Error::Internal(format!("Failed to get refresh token: {}", e)))?;
 
-            if let Some(row) = rows.next().await.map_err(|e| {
-                Error::Internal(format!("Failed to fetch row: {}", e))
-            })? {
-                let id: String = row.get(0).map_err(|e| {
-                    Error::Internal(format!("Failed to get id: {}", e))
-                })?;
-                let user_id: String = row.get(1).map_err(|e| {
-                    Error::Internal(format!("Failed to get user_id: {}", e))
-                })?;
-                let family_id: String = row.get(2).map_err(|e| {
-                    Error::Internal(format!("Failed to get family_id: {}", e))
-                })?;
-                let is_revoked: i64 = row.get(3).map_err(|e| {
-                    Error::Internal(format!("Failed to get is_revoked: {}", e))
-                })?;
-                let expires_at_str: String = row.get(4).map_err(|e| {
-                    Error::Internal(format!("Failed to get expires_at: {}", e))
-                })?;
-                let metadata_str: String = row.get(5).map_err(|e| {
-                    Error::Internal(format!("Failed to get metadata: {}", e))
-                })?;
+            if let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| Error::Internal(format!("Failed to fetch row: {}", e)))?
+            {
+                let id: String = row
+                    .get(0)
+                    .map_err(|e| Error::Internal(format!("Failed to get id: {}", e)))?;
+                let user_id: String = row
+                    .get(1)
+                    .map_err(|e| Error::Internal(format!("Failed to get user_id: {}", e)))?;
+                let family_id: String = row
+                    .get(2)
+                    .map_err(|e| Error::Internal(format!("Failed to get family_id: {}", e)))?;
+                let is_revoked: i64 = row
+                    .get(3)
+                    .map_err(|e| Error::Internal(format!("Failed to get is_revoked: {}", e)))?;
+                let expires_at_str: String = row
+                    .get(4)
+                    .map_err(|e| Error::Internal(format!("Failed to get expires_at: {}", e)))?;
+                let metadata_str: String = row
+                    .get(5)
+                    .map_err(|e| Error::Internal(format!("Failed to get metadata: {}", e)))?;
 
                 let expires_at = DateTime::parse_from_rfc3339(&expires_at_str)
                     .map(|dt| dt.with_timezone(&Utc))
@@ -662,8 +679,8 @@ pub use turso_storage::TursoRefreshStorage;
 #[cfg(feature = "surrealdb")]
 pub mod surrealdb_storage {
     use super::*;
-    use std::sync::Arc;
     use crate::surrealdb_backend::SurrealClient;
+    use std::sync::Arc;
 
     /// SurrealDB-backed refresh token storage
     #[derive(Clone)]
@@ -713,7 +730,8 @@ pub mod surrealdb_storage {
                 .await
                 .map_err(|e| Error::Internal(format!("Failed to get refresh token: {}", e)))?;
 
-            let data: Option<RefreshTokenData> = result.take(0)
+            let data: Option<RefreshTokenData> = result
+                .take(0)
                 .map_err(|e| Error::Internal(format!("Failed to parse refresh token: {}", e)))?;
 
             Ok(data)
@@ -730,7 +748,8 @@ pub mod surrealdb_storage {
         }
 
         async fn revoke_family(&self, family_id: &str) -> Result<u64, Error> {
-            let mut result = self.client
+            let mut result = self
+                .client
                 .query("UPDATE refresh_tokens SET is_revoked = true WHERE family_id = $family_id")
                 .bind(("family_id", family_id.to_string()))
                 .await
@@ -742,7 +761,8 @@ pub mod surrealdb_storage {
         }
 
         async fn revoke_all_for_user(&self, user_id: &str) -> Result<u64, Error> {
-            let mut result = self.client
+            let mut result = self
+                .client
                 .query("UPDATE refresh_tokens SET is_revoked = true WHERE user_id = $user_id")
                 .bind(("user_id", user_id.to_string()))
                 .await
@@ -763,13 +783,15 @@ pub mod surrealdb_storage {
         ) -> Result<(), Error> {
             // Revoke old and create new
             self.revoke(old_token_id).await?;
-            self.store(new_token_id, user_id, family_id, expires_at, metadata).await?;
+            self.store(new_token_id, user_id, family_id, expires_at, metadata)
+                .await?;
 
             Ok(())
         }
 
         async fn cleanup_expired(&self) -> Result<u64, Error> {
-            let mut result = self.client
+            let mut result = self
+                .client
                 .query("DELETE FROM refresh_tokens WHERE expires_at < time::now()")
                 .await
                 .map_err(|e| Error::Internal(format!("Failed to cleanup expired tokens: {}", e)))?;

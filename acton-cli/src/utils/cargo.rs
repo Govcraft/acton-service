@@ -20,10 +20,7 @@ pub fn fmt(path: &Path) -> Result<()> {
 
 /// Check if cargo is available
 pub fn is_available() -> bool {
-    Command::new("cargo")
-        .args(["--version"])
-        .output()
-        .is_ok()
+    Command::new("cargo").args(["--version"]).output().is_ok()
 }
 
 /// Run cargo check to verify the project compiles

@@ -136,7 +136,7 @@ async fn main() -> Result<()> {
                 .route("/users", get(list_users_v3))
                 .route("/users/{id}", get(get_user_v3))
         })
-        .build_routes();  // Returns VersionedRoutes with /health and /ready included!
+        .build_routes(); // Returns VersionedRoutes with /health and /ready included!
 
     // Build and serve - ZERO manual configuration required!
     // ServiceBuilder automatically:
@@ -145,8 +145,8 @@ async fn main() -> Result<()> {
     // - Includes health and readiness endpoints from routes
     // ServiceBuilder only accepts VersionedRoutes - can't bypass versioning!
     ServiceBuilder::new()
-        .with_routes(routes)  // Only accepts VersionedRoutes!
-        .build()  // Auto-loads config and initializes tracing!
+        .with_routes(routes) // Only accepts VersionedRoutes!
+        .build() // Auto-loads config and initializes tracing!
         .serve()
         .await?;
 

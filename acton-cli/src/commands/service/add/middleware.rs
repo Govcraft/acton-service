@@ -21,7 +21,11 @@ pub async fn execute(middleware_type: String, dry_run: bool) -> Result<()> {
         "timeout" => show_timeout_middleware(),
         "all" | "list" => show_all_middleware(),
         _ => {
-            eprintln!("{} Unknown middleware type: {}", "Error:".red().bold(), middleware_type);
+            eprintln!(
+                "{} Unknown middleware type: {}",
+                "Error:".red().bold(),
+                middleware_type
+            );
             eprintln!();
             eprintln!("Available middleware types:");
             eprintln!("  - jwt, auth, authentication");
@@ -46,13 +50,19 @@ fn show_dry_run(middleware_type: &str) {
     println!();
     println!("Middleware: {}", middleware_type.cyan());
     println!();
-    println!("Instructions for adding {} middleware to your service", middleware_type);
+    println!(
+        "Instructions for adding {} middleware to your service",
+        middleware_type
+    );
 }
 
 fn show_all_middleware() {
     println!("{}", "acton-service Available Middleware".bold().cyan());
     println!();
-    println!("{}", "All middleware is configured via config.toml and enabled via Cargo features.".bold());
+    println!(
+        "{}",
+        "All middleware is configured via config.toml and enabled via Cargo features.".bold()
+    );
     println!();
 
     println!("{}", "1. JWT Authentication".green().bold());
@@ -61,7 +71,10 @@ fn show_all_middleware() {
     println!();
 
     println!("{}", "2. Resilience Patterns".green().bold());
-    println!("   {}: resilience, circuit-breaker, retry", "Aliases".yellow());
+    println!(
+        "   {}: resilience, circuit-breaker, retry",
+        "Aliases".yellow()
+    );
     println!("   Circuit breaker, retry, and bulkhead patterns");
     println!("   {}: resilience", "Feature".cyan());
     println!();
@@ -108,7 +121,10 @@ fn show_all_middleware() {
 fn show_jwt_middleware() {
     println!("{}", "Adding JWT Authentication Middleware".bold());
     println!();
-    println!("{}", "JWT authentication is built-in and configured via config.toml.".bold());
+    println!(
+        "{}",
+        "JWT authentication is built-in and configured via config.toml.".bold()
+    );
     println!();
 
     println!("{}", "1. Add to config.toml:".green().bold());
@@ -157,7 +173,10 @@ fn show_jwt_middleware() {
 fn show_resilience_middleware() {
     println!("{}", "Adding Resilience Middleware".bold());
     println!();
-    println!("{}", "Resilience patterns are enabled via the 'resilience' feature.".bold());
+    println!(
+        "{}",
+        "Resilience patterns are enabled via the 'resilience' feature.".bold()
+    );
     println!();
 
     println!("{}", "1. Enable in Cargo.toml:".green().bold());
@@ -197,7 +216,10 @@ fn show_resilience_middleware() {
 fn show_metrics_middleware() {
     println!("{}", "Adding Metrics Middleware (OpenTelemetry)".bold());
     println!();
-    println!("{}", "HTTP metrics are enabled via the 'otel-metrics' feature.".bold());
+    println!(
+        "{}",
+        "HTTP metrics are enabled via the 'otel-metrics' feature.".bold()
+    );
     println!();
 
     println!("{}", "1. Enable in Cargo.toml:".green().bold());
@@ -236,7 +258,10 @@ fn show_metrics_middleware() {
 fn show_governor_middleware() {
     println!("{}", "Adding Rate Limiting Middleware (Governor)".bold());
     println!();
-    println!("{}", "Token bucket rate limiting via the 'governor' feature.".bold());
+    println!(
+        "{}",
+        "Token bucket rate limiting via the 'governor' feature.".bold()
+    );
     println!();
 
     println!("{}", "1. Enable in Cargo.toml:".green().bold());
@@ -266,7 +291,10 @@ fn show_governor_middleware() {
 fn show_cors_middleware() {
     println!("{}", "Adding CORS Middleware".bold());
     println!();
-    println!("{}", "CORS is built-in and configured via config.toml.".bold());
+    println!(
+        "{}",
+        "CORS is built-in and configured via config.toml.".bold()
+    );
     println!();
 
     println!("{}", "Configure in config.toml:".green().bold());
@@ -276,8 +304,14 @@ fn show_cors_middleware() {
     println!();
 
     println!("{}", "CORS modes:".cyan().bold());
-    println!("  - {}: Allow all origins (development)", "permissive".green());
-    println!("  - {}: Strict origin checking (production)", "restrictive".yellow());
+    println!(
+        "  - {}: Allow all origins (development)",
+        "permissive".green()
+    );
+    println!(
+        "  - {}: Strict origin checking (production)",
+        "restrictive".yellow()
+    );
     println!("  - {}: No CORS headers", "disabled".red());
     println!();
 
@@ -288,7 +322,10 @@ fn show_cors_middleware() {
 fn show_compression_middleware() {
     println!("{}", "Adding Compression Middleware".bold());
     println!();
-    println!("{}", "Response compression is built-in and enabled by default.".bold());
+    println!(
+        "{}",
+        "Response compression is built-in and enabled by default.".bold()
+    );
     println!();
 
     println!("{}", "Configure in config.toml:".green().bold());
@@ -305,7 +342,10 @@ fn show_compression_middleware() {
 fn show_panic_middleware() {
     println!("{}", "Adding Panic Recovery Middleware".bold());
     println!();
-    println!("{}", "Panic recovery is built-in and enabled by default.".bold());
+    println!(
+        "{}",
+        "Panic recovery is built-in and enabled by default.".bold()
+    );
     println!();
 
     println!("{}", "Configure in config.toml:".green().bold());
@@ -323,7 +363,10 @@ fn show_panic_middleware() {
 fn show_request_tracking_middleware() {
     println!("{}", "Adding Request Tracking Middleware".bold());
     println!();
-    println!("{}", "Request ID generation and header propagation are built-in.".bold());
+    println!(
+        "{}",
+        "Request ID generation and header propagation are built-in.".bold()
+    );
     println!();
 
     println!("{}", "Configure in config.toml:".green().bold());
@@ -352,7 +395,10 @@ fn show_request_tracking_middleware() {
 fn show_timeout_middleware() {
     println!("{}", "Adding Timeout Middleware".bold());
     println!();
-    println!("{}", "Request timeout is built-in and configured via config.toml.".bold());
+    println!(
+        "{}",
+        "Request timeout is built-in and configured via config.toml.".bold()
+    );
     println!();
 
     println!("{}", "Configure in config.toml:".green().bold());

@@ -694,8 +694,10 @@ mod tests {
 
     #[test]
     fn test_filter_condition_in_strings() {
-        let filter =
-            FilterCondition::in_strings("status", vec!["active".to_string(), "pending".to_string()]);
+        let filter = FilterCondition::in_strings(
+            "status",
+            vec!["active".to_string(), "pending".to_string()],
+        );
         assert_eq!(filter.operator, FilterOperator::In);
         assert_eq!(
             filter.value,

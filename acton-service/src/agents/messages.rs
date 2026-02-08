@@ -20,7 +20,6 @@ pub enum HealthStatus {
     Connecting,
 }
 
-
 /// Response containing aggregated health status from all pools
 #[derive(Clone, Debug, Default)]
 pub struct AggregatedHealthResponse {

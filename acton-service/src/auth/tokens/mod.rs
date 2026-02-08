@@ -200,7 +200,7 @@ impl ClaimsBuilder {
             username: self.username,
             roles: self.roles,
             perms: self.perms,
-            exp: 0, // Set by generator
+            exp: 0,    // Set by generator
             iat: None, // Set by generator
             jti: None, // Set by generator
             iss: self.iss,

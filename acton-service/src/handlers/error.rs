@@ -506,13 +506,11 @@ impl From<RepositoryError> for ApiError {
 
         // User-facing message (don't expose internal details for internal errors)
         let message = match kind {
-            ApiErrorKind::InternalError | ApiErrorKind::ServiceUnavailable => {
-                match kind {
-                    ApiErrorKind::ServiceUnavailable => "Service temporarily unavailable",
-                    _ => "An internal error occurred",
-                }
-                .to_string()
+            ApiErrorKind::InternalError | ApiErrorKind::ServiceUnavailable => match kind {
+                ApiErrorKind::ServiceUnavailable => "Service temporarily unavailable",
+                _ => "An internal error occurred",
             }
+            .to_string(),
             _ => err.message,
         };
 
@@ -539,33 +537,51 @@ mod tests {
         assert_eq!(format!("{}", ApiOperation::Delete), "delete");
         assert_eq!(format!("{}", ApiOperation::SoftDelete), "soft_delete");
         assert_eq!(format!("{}", ApiOperation::Restore), "restore");
-        assert_eq!(format!("{}", ApiOperation::ListWithDeleted), "list_with_deleted");
+        assert_eq!(
+            format!("{}", ApiOperation::ListWithDeleted),
+            "list_with_deleted"
+        );
     }
 
     #[test]
     fn test_api_error_kind_display() {
         assert_eq!(format!("{}", ApiErrorKind::NotFound), "not_found");
         assert_eq!(format!("{}", ApiErrorKind::AlreadyExists), "already_exists");
-        assert_eq!(format!("{}", ApiErrorKind::ValidationFailed), "validation_failed");
+        assert_eq!(
+            format!("{}", ApiErrorKind::ValidationFailed),
+            "validation_failed"
+        );
         assert_eq!(format!("{}", ApiErrorKind::Unauthorized), "unauthorized");
         assert_eq!(format!("{}", ApiErrorKind::Forbidden), "forbidden");
         assert_eq!(format!("{}", ApiErrorKind::BadRequest), "bad_request");
         assert_eq!(format!("{}", ApiErrorKind::Conflict), "conflict");
         assert_eq!(format!("{}", ApiErrorKind::InternalError), "internal_error");
-        assert_eq!(format!("{}", ApiErrorKind::ServiceUnavailable), "service_unavailable");
+        assert_eq!(
+            format!("{}", ApiErrorKind::ServiceUnavailable),
+            "service_unavailable"
+        );
     }
 
     #[test]
     fn test_api_error_kind_status_codes() {
         assert_eq!(ApiErrorKind::NotFound.status_code(), StatusCode::NOT_FOUND);
-        assert_eq!(ApiErrorKind::AlreadyExists.status_code(), StatusCode::CONFLICT);
+        assert_eq!(
+            ApiErrorKind::AlreadyExists.status_code(),
+            StatusCode::CONFLICT
+        );
         assert_eq!(
             ApiErrorKind::ValidationFailed.status_code(),
             StatusCode::UNPROCESSABLE_ENTITY
         );
-        assert_eq!(ApiErrorKind::Unauthorized.status_code(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            ApiErrorKind::Unauthorized.status_code(),
+            StatusCode::UNAUTHORIZED
+        );
         assert_eq!(ApiErrorKind::Forbidden.status_code(), StatusCode::FORBIDDEN);
-        assert_eq!(ApiErrorKind::BadRequest.status_code(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            ApiErrorKind::BadRequest.status_code(),
+            StatusCode::BAD_REQUEST
+        );
         assert_eq!(ApiErrorKind::Conflict.status_code(), StatusCode::CONFLICT);
         assert_eq!(
             ApiErrorKind::InternalError.status_code(),
@@ -581,13 +597,19 @@ mod tests {
     fn test_api_error_kind_error_codes() {
         assert_eq!(ApiErrorKind::NotFound.error_code(), "NOT_FOUND");
         assert_eq!(ApiErrorKind::AlreadyExists.error_code(), "ALREADY_EXISTS");
-        assert_eq!(ApiErrorKind::ValidationFailed.error_code(), "VALIDATION_FAILED");
+        assert_eq!(
+            ApiErrorKind::ValidationFailed.error_code(),
+            "VALIDATION_FAILED"
+        );
         assert_eq!(ApiErrorKind::Unauthorized.error_code(), "UNAUTHORIZED");
         assert_eq!(ApiErrorKind::Forbidden.error_code(), "FORBIDDEN");
         assert_eq!(ApiErrorKind::BadRequest.error_code(), "BAD_REQUEST");
         assert_eq!(ApiErrorKind::Conflict.error_code(), "CONFLICT");
         assert_eq!(ApiErrorKind::InternalError.error_code(), "INTERNAL_ERROR");
-        assert_eq!(ApiErrorKind::ServiceUnavailable.error_code(), "SERVICE_UNAVAILABLE");
+        assert_eq!(
+            ApiErrorKind::ServiceUnavailable.error_code(),
+            "SERVICE_UNAVAILABLE"
+        );
     }
 
     #[test]
@@ -679,8 +701,8 @@ mod tests {
 
     #[test]
     fn test_with_operation() {
-        let error =
-            ApiError::service_unavailable("Connection refused").with_operation(ApiOperation::Create);
+        let error = ApiError::service_unavailable("Connection refused")
+            .with_operation(ApiOperation::Create);
 
         assert_eq!(error.operation, ApiOperation::Create);
     }

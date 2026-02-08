@@ -2,10 +2,10 @@
 //!
 //! Built-in support for Google, GitHub, and custom OIDC providers.
 
-pub mod google;
-pub mod github;
 pub mod custom;
+pub mod github;
+pub mod google;
 
-pub use google::GoogleProvider;
+pub use custom::{CustomOidcConfig, CustomOidcProvider};
 pub use github::GitHubProvider;
-pub use custom::{CustomOidcProvider, CustomOidcConfig};
+pub use google::GoogleProvider;

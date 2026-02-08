@@ -47,7 +47,7 @@ pub(crate) use pool::{RedisPoolAgent, SharedRedisPool};
 pub(crate) use pool::{NatsPoolAgent, SharedNatsClient};
 
 #[cfg(feature = "turso")]
-pub(crate) use pool::{TursoDbAgent, SharedTursoDb};
+pub(crate) use pool::{SharedTursoDb, TursoDbAgent};
 
 #[cfg(feature = "surrealdb")]
-pub(crate) use pool::{SurrealDbAgent, SharedSurrealDb};
+pub(crate) use pool::{SharedSurrealDb, SurrealDbAgent};

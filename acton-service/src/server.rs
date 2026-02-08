@@ -2,6 +2,7 @@
 
 use axum::Router;
 use std::net::SocketAddr;
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::signal;
 use tower_http::{
@@ -12,7 +13,6 @@ use tower_http::{
     timeout::TimeoutLayer,
     trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer},
 };
-use std::time::Duration;
 
 use crate::{
     config::Config,
@@ -35,11 +35,7 @@ impl Server {
     pub async fn serve(self, app: Router) -> Result<()> {
         let addr = SocketAddr::from(([0, 0, 0, 0], self.config.service.port));
 
-        tracing::info!(
-            "Starting {} on {}",
-            self.config.service.name,
-            addr
-        );
+        tracing::info!("Starting {} on {}", self.config.service.name, addr);
 
         // Log middleware configuration
         self.log_middleware_config();
@@ -95,15 +91,24 @@ impl Server {
         tracing::info!("  - Panic recovery: enabled");
         tracing::info!("  - Request ID tracking: enabled");
         tracing::info!("  - Sensitive header masking: enabled");
-        tracing::info!("  - Request body limit: {} MB", self.config.middleware.body_limit_mb);
+        tracing::info!(
+            "  - Request body limit: {} MB",
+            self.config.middleware.body_limit_mb
+        );
         tracing::info!("  - Compression: enabled");
         tracing::info!("  - CORS mode: {}", self.config.middleware.cors_mode);
-        tracing::info!("  - Request timeout: {} seconds", self.config.service.timeout_secs);
+        tracing::info!(
+            "  - Request timeout: {} seconds",
+            self.config.service.timeout_secs
+        );
 
         // Log optional advanced middleware
         if let Some(ref resilience) = self.config.middleware.resilience {
             tracing::info!("  - Resilience configured:");
-            tracing::info!("    - Circuit breaker: {}", resilience.circuit_breaker_enabled);
+            tracing::info!(
+                "    - Circuit breaker: {}",
+                resilience.circuit_breaker_enabled
+            );
             tracing::info!("    - Retry: {}", resilience.retry_enabled);
             tracing::info!("    - Bulkhead: {}", resilience.bulkhead_enabled);
         } else {
@@ -120,7 +125,8 @@ impl Server {
         }
 
         if let Some(ref governor) = self.config.middleware.governor {
-            tracing::info!("  - Local rate limiting: {} req / {} sec (burst: {})",
+            tracing::info!(
+                "  - Local rate limiting: {} req / {} sec (burst: {})",
                 governor.requests_per_period,
                 governor.period_secs,
                 governor.burst_size
@@ -151,7 +157,10 @@ impl Server {
                 CorsLayer::new()
             }
             _ => {
-                tracing::warn!("Unknown CORS mode: {}, defaulting to permissive", self.config.middleware.cors_mode);
+                tracing::warn!(
+                    "Unknown CORS mode: {}, defaulting to permissive",
+                    self.config.middleware.cors_mode
+                );
                 CorsLayer::permissive()
             }
         }

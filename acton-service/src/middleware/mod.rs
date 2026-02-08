@@ -49,17 +49,17 @@ pub use jwt::JwtAuth;
 
 // Other middleware exports
 pub use rate_limit::RateLimit;
-pub use route_matcher::{normalize_path, CompiledRoutePatterns};
 pub use request_tracking::{
-    request_id_layer, request_id_propagation_layer, sensitive_headers_layer,
-    RequestTrackingConfig, PROPAGATE_HEADERS, SENSITIVE_HEADERS,
+    request_id_layer, request_id_propagation_layer, sensitive_headers_layer, RequestTrackingConfig,
+    PROPAGATE_HEADERS, SENSITIVE_HEADERS,
 };
+pub use route_matcher::{normalize_path, CompiledRoutePatterns};
 
 #[cfg(feature = "resilience")]
 pub use resilience::ResilienceConfig;
 
 #[cfg(feature = "otel-metrics")]
-pub use metrics::{MetricsConfig, metric_labels, metric_names};
+pub use metrics::{metric_labels, metric_names, MetricsConfig};
 
 #[cfg(feature = "governor")]
 pub use governor::{GovernorConfig, GovernorRateLimit, RateLimitExceeded};

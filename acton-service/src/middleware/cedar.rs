@@ -287,11 +287,9 @@ impl CedarAuthz {
         let policy_set = authz.policy_set.read().await;
         let entities = build_entities(&claims)?;
 
-        let response = authz.authorizer.is_authorized(
-            &cedar_request,
-            &policy_set,
-            &entities,
-        );
+        let response = authz
+            .authorizer
+            .is_authorized(&cedar_request, &policy_set, &entities);
 
         // Handle decision
         match response.decision() {
@@ -483,10 +481,7 @@ fn build_context_http(headers: &HeaderMap, claims: &Claims) -> Result<Context, E
     }
 
     // Add request ID if present
-    if let Some(request_id) = headers
-        .get("x-request-id")
-        .and_then(|v| v.to_str().ok())
-    {
+    if let Some(request_id) = headers.get("x-request-id").and_then(|v| v.to_str().ok()) {
         context_map.insert("requestId".to_string(), json!(request_id));
     }
 
@@ -505,10 +500,7 @@ fn extract_client_ip(headers: &HeaderMap) -> Option<String> {
     if let Some(xff) = headers.get("x-forwarded-for") {
         if let Ok(xff_str) = xff.to_str() {
             // Take first IP in comma-separated list
-            return xff_str
-                .split(',')
-                .next()
-                .map(|s| s.trim().to_string());
+            return xff_str.split(',').next().map(|s| s.trim().to_string());
         }
     }
 
@@ -655,15 +647,15 @@ impl PolicyCache for RedisPolicyCache {
 // ============================================================================
 
 #[cfg(feature = "grpc")]
-use tonic::{body::Body as TonicBody, Request as TonicRequest, Response as TonicResponse, Status};
-#[cfg(feature = "grpc")]
-use tower::{Layer, Service};
-#[cfg(feature = "grpc")]
-use std::task::{Context as TaskContext, Poll};
+use std::future::Future;
 #[cfg(feature = "grpc")]
 use std::pin::Pin;
 #[cfg(feature = "grpc")]
-use std::future::Future;
+use std::task::{Context as TaskContext, Poll};
+#[cfg(feature = "grpc")]
+use tonic::{body::Body as TonicBody, Request as TonicRequest, Response as TonicResponse, Status};
+#[cfg(feature = "grpc")]
+use tower::{Layer, Service};
 
 /// Tower Layer for Cedar authorization in gRPC services
 #[cfg(feature = "grpc")]
@@ -748,17 +740,14 @@ where
                 .to_string();
 
             // Build Cedar authorization request
-            let principal = build_principal(&claims).map_err(|_| {
-                Status::internal("Failed to build principal")
-            })?;
+            let principal = build_principal(&claims)
+                .map_err(|_| Status::internal("Failed to build principal"))?;
 
-            let action = build_action_grpc(&method_path).map_err(|_| {
-                Status::internal("Failed to build action")
-            })?;
+            let action = build_action_grpc(&method_path)
+                .map_err(|_| Status::internal("Failed to build action"))?;
 
-            let context = build_context_grpc(req.metadata(), &claims).map_err(|_| {
-                Status::internal("Failed to build context")
-            })?;
+            let context = build_context_grpc(req.metadata(), &claims)
+                .map_err(|_| Status::internal("Failed to build context"))?;
 
             // For gRPC, we use default resource
             let resource: EntityUid = r#"Resource::"default""#
@@ -789,15 +778,12 @@ where
 
             // Evaluate policies
             let policy_set = authz.policy_set.read().await;
-            let entities = build_entities(&claims).map_err(|_| {
-                Status::internal("Failed to build entities")
-            })?;
+            let entities = build_entities(&claims)
+                .map_err(|_| Status::internal("Failed to build entities"))?;
 
-            let response = authz.authorizer.is_authorized(
-                &cedar_request,
-                &policy_set,
-                &entities,
-            );
+            let response = authz
+                .authorizer
+                .is_authorized(&cedar_request, &policy_set, &entities);
 
             // Handle decision
             match response.decision() {
@@ -829,7 +815,9 @@ where
                     }
 
                     if authz.config.fail_open {
-                        tracing::warn!("Cedar policy denied but fail_open=true, allowing gRPC request");
+                        tracing::warn!(
+                            "Cedar policy denied but fail_open=true, allowing gRPC request"
+                        );
                         inner.call(req).await
                     } else {
                         Err(Status::permission_denied("Access denied by policy"))

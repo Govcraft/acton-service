@@ -20,8 +20,8 @@
 //!
 //! See `examples/CEDAR_EXAMPLE_README.md` for detailed testing instructions.
 
-use acton_service::prelude::*;
 use acton_service::middleware::cedar::CedarAuthz;
+use acton_service::prelude::*;
 use axum::{extract::Path, Json};
 use serde::{Deserialize, Serialize};
 
@@ -83,7 +83,9 @@ async fn update_document(
     Json(payload)
 }
 
-async fn delete_document(Path((user_id, doc_id)): Path<(String, String)>) -> Json<serde_json::Value> {
+async fn delete_document(
+    Path((user_id, doc_id)): Path<(String, String)>,
+) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "message": format!("Document {} deleted by user {}", doc_id, user_id),
     }))
@@ -114,22 +116,23 @@ fn setup_example_files() -> Result<()> {
 
     // Copy policy file (always overwrite to get latest changes)
     let policy_dest = config_dir.join("policies.cedar");
-    let policy_src = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("examples/authorization/policies.cedar");
+    let policy_src =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/authorization/policies.cedar");
     std::fs::copy(&policy_src, &policy_dest)?;
 
     // Copy JWT public key (idempotent)
     let jwt_dest = config_dir.join("jwt-public.pem");
     if !jwt_dest.exists() {
-        let jwt_src = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("examples/authorization/jwt-public.pem");
+        let jwt_src =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/authorization/jwt-public.pem");
         std::fs::copy(&jwt_src, &jwt_dest)?;
     }
 
     // Create config file with absolute paths (idempotent)
     let config_dest = config_dir.join("config.toml");
     if !config_dest.exists() {
-        let config_content = format!(r#"[service]
+        let config_content = format!(
+            r#"[service]
 name = "cedar-authz-example"
 port = 8080
 host = "127.0.0.1"
@@ -154,7 +157,10 @@ enabled = false
 timeout_secs = 30
 cors_enabled = true
 cors_allowed_origins = ["http://localhost:3000"]
-"#, config_dir.display(), config_dir.display());
+"#,
+            config_dir.display(),
+            config_dir.display()
+        );
 
         std::fs::write(&config_dest, config_content)?;
     }
@@ -168,7 +174,8 @@ cors_allowed_origins = ["http://localhost:3000"]
 // This example uses alphanumeric IDs like "user123" and "doc1",
 // so we provide a custom normalizer to handle them.
 fn normalize_document_paths(path: &str) -> String {
-    let doc_pattern = regex::Regex::new(r"^(/api/v[0-9]+/documents/)([a-zA-Z0-9_-]+)/([a-zA-Z0-9_-]+)$").unwrap();
+    let doc_pattern =
+        regex::Regex::new(r"^(/api/v[0-9]+/documents/)([a-zA-Z0-9_-]+)/([a-zA-Z0-9_-]+)$").unwrap();
 
     if let Some(caps) = doc_pattern.captures(path) {
         return format!("{}{{user_id}}/{{doc_id}}", &caps[1]);

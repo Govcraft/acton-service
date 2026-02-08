@@ -2,12 +2,12 @@
 //!
 //! Provides Tower middleware that can be used with gRPC services.
 
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::Instant;
 use tonic::{Request, Response, Status};
 use tower::{Layer, Service};
-use std::task::{Context, Poll};
-use std::pin::Pin;
-use std::future::Future;
 
 use crate::grpc::interceptors::RequestIdExtension;
 
@@ -31,7 +31,10 @@ pub struct LoggingService<S> {
 
 impl<S, ReqBody> Service<Request<ReqBody>> for LoggingService<S>
 where
-    S: Service<Request<ReqBody>, Response = Response<tonic::body::Body>, Error = Status> + Clone + Send + 'static,
+    S: Service<Request<ReqBody>, Response = Response<tonic::body::Body>, Error = Status>
+        + Clone
+        + Send
+        + 'static,
     S::Future: Send + 'static,
     ReqBody: Send + 'static,
 {
@@ -57,10 +60,7 @@ where
 
             match &result {
                 Ok(_) => {
-                    tracing::info!(
-                        duration_ms = duration.as_millis(),
-                        "gRPC request completed"
-                    );
+                    tracing::info!(duration_ms = duration.as_millis(), "gRPC request completed");
                 }
                 Err(status) => {
                     tracing::warn!(
@@ -98,7 +98,10 @@ pub struct GrpcTracingService<S> {
 
 impl<S, ReqBody> Service<Request<ReqBody>> for GrpcTracingService<S>
 where
-    S: Service<Request<ReqBody>, Response = Response<tonic::body::Body>, Error = Status> + Clone + Send + 'static,
+    S: Service<Request<ReqBody>, Response = Response<tonic::body::Body>, Error = Status>
+        + Clone
+        + Send
+        + 'static,
     S::Future: Send + 'static,
     ReqBody: Send + 'static,
 {
@@ -253,7 +256,10 @@ pub struct GrpcRateLimitService<S> {
 #[cfg(feature = "governor")]
 impl<S, ReqBody> Service<Request<ReqBody>> for GrpcRateLimitService<S>
 where
-    S: Service<Request<ReqBody>, Response = Response<tonic::body::Body>, Error = Status> + Clone + Send + 'static,
+    S: Service<Request<ReqBody>, Response = Response<tonic::body::Body>, Error = Status>
+        + Clone
+        + Send
+        + 'static,
     S::Future: Send + 'static,
     ReqBody: Send + 'static,
 {
@@ -283,8 +289,14 @@ mod tests {
 
     #[test]
     fn test_extract_service_name() {
-        assert_eq!(extract_service_name("/example.v1.Greeter/SayHello"), "Greeter");
-        assert_eq!(extract_service_name("/mypackage.UserService/GetUser"), "UserService");
+        assert_eq!(
+            extract_service_name("/example.v1.Greeter/SayHello"),
+            "Greeter"
+        );
+        assert_eq!(
+            extract_service_name("/mypackage.UserService/GetUser"),
+            "UserService"
+        );
         assert_eq!(extract_service_name("/Service/Method"), "Service");
         // For malformed paths, the function extracts what it can
         assert_eq!(extract_service_name("invalid"), "invalid");
@@ -294,8 +306,14 @@ mod tests {
 
     #[test]
     fn test_extract_method_name() {
-        assert_eq!(extract_method_name("/example.v1.Greeter/SayHello"), "SayHello");
-        assert_eq!(extract_method_name("/mypackage.UserService/GetUser"), "GetUser");
+        assert_eq!(
+            extract_method_name("/example.v1.Greeter/SayHello"),
+            "SayHello"
+        );
+        assert_eq!(
+            extract_method_name("/mypackage.UserService/GetUser"),
+            "GetUser"
+        );
         assert_eq!(extract_method_name("/Service/Method"), "Method");
         assert_eq!(extract_method_name("invalid"), "unknown");
     }

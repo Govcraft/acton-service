@@ -413,7 +413,10 @@ mod tests {
         assert_eq!(format!("{}", RepositoryOperation::Create), "create");
         assert_eq!(format!("{}", RepositoryOperation::Update), "update");
         assert_eq!(format!("{}", RepositoryOperation::Delete), "delete");
-        assert_eq!(format!("{}", RepositoryOperation::SoftDelete), "soft_delete");
+        assert_eq!(
+            format!("{}", RepositoryOperation::SoftDelete),
+            "soft_delete"
+        );
         assert_eq!(format!("{}", RepositoryOperation::Restore), "restore");
         assert_eq!(format!("{}", RepositoryOperation::BatchLoad), "batch_load");
     }
@@ -558,13 +561,16 @@ mod tests {
         assert!(!RepositoryError::already_exists("User", "email").is_retriable());
         assert!(!RepositoryError::validation_failed("invalid").is_retriable());
         assert!(
-            !RepositoryError::constraint_violation(RepositoryOperation::Create, "fk").is_retriable()
+            !RepositoryError::constraint_violation(RepositoryOperation::Create, "fk")
+                .is_retriable()
         );
         assert!(
             !RepositoryError::database_error(RepositoryOperation::Create, "syntax").is_retriable()
         );
-        assert!(!RepositoryError::serialization_error(RepositoryOperation::FindById, "json")
-            .is_retriable());
+        assert!(
+            !RepositoryError::serialization_error(RepositoryOperation::FindById, "json")
+                .is_retriable()
+        );
     }
 
     #[test]
@@ -606,8 +612,7 @@ mod tests {
 
     #[test]
     fn test_error_is_error_trait() {
-        let error: Box<dyn std::error::Error> =
-            Box::new(RepositoryError::not_found("User", "123"));
+        let error: Box<dyn std::error::Error> = Box::new(RepositoryError::not_found("User", "123"));
         assert!(error.to_string().contains("not_found"));
     }
 }

@@ -169,7 +169,9 @@ impl SwaggerUI {
     /// * `path` - The base path for Swagger UI (e.g., "/swagger-ui")
     /// * `openapi` - The OpenAPI specification
     pub fn with_spec(path: &'static str, openapi: utoipa::openapi::OpenApi) -> Router {
-        SwaggerUi::new(path).url("/api-docs/openapi.json", openapi).into()
+        SwaggerUi::new(path)
+            .url("/api-docs/openapi.json", openapi)
+            .into()
     }
 
     /// Create Swagger UI with multiple API versions
@@ -277,7 +279,10 @@ impl ReDoc {
 macro_rules! openapi_response {
     ($name:ident) => {
         impl utoipa::ToSchema for $name {
-            fn schema() -> (&'static str, utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>) {
+            fn schema() -> (
+                &'static str,
+                utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
+            ) {
                 (
                     stringify!($name),
                     utoipa::openapi::ObjectBuilder::new()
@@ -323,7 +328,12 @@ mod tests {
     #[test]
     fn test_openapi_builder() {
         let openapi = utoipa::openapi::OpenApiBuilder::new()
-            .info(utoipa::openapi::InfoBuilder::new().title("Test").version("1.0.0").build())
+            .info(
+                utoipa::openapi::InfoBuilder::new()
+                    .title("Test")
+                    .version("1.0.0")
+                    .build(),
+            )
             .build();
 
         let builder = OpenApiBuilder::new(openapi)
@@ -331,7 +341,10 @@ mod tests {
             .version("2.0.0")
             .description("Test API")
             .contact("Test User", "test@example.com")
-            .license("MIT", Some("https://opensource.org/licenses/MIT".to_string()))
+            .license(
+                "MIT",
+                Some("https://opensource.org/licenses/MIT".to_string()),
+            )
             .server("https://api.example.com", Some("Production".to_string()));
 
         let result = builder.build();

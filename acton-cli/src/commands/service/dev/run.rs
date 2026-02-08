@@ -43,7 +43,10 @@ fn run_with_watch(project_root: &std::path::Path, env_vars: &[(&str, String)]) -
     }
 
     println!("{}", "Running service with hot reload...".bold());
-    println!("  {}", "Watching for changes. Press Ctrl+C to stop.".dimmed());
+    println!(
+        "  {}",
+        "Watching for changes. Press Ctrl+C to stop.".dimmed()
+    );
     println!();
 
     let mut cmd = Command::new("cargo");
@@ -56,12 +59,13 @@ fn run_with_watch(project_root: &std::path::Path, env_vars: &[(&str, String)]) -
         cmd.env(key, value);
     }
 
-    let status = cmd
-        .status()
-        .context("Failed to run cargo watch")?;
+    let status = cmd.status().context("Failed to run cargo watch")?;
 
     if !status.success() {
-        anyhow::bail!("Service exited with error code: {}", status.code().unwrap_or(-1));
+        anyhow::bail!(
+            "Service exited with error code: {}",
+            status.code().unwrap_or(-1)
+        );
     }
 
     Ok(())
@@ -72,8 +76,7 @@ fn run_service(project_root: &std::path::Path, env_vars: &[(&str, String)]) -> R
     println!();
 
     let mut cmd = Command::new("cargo");
-    cmd.arg("run")
-        .current_dir(project_root);
+    cmd.arg("run").current_dir(project_root);
 
     for (key, value) in env_vars {
         cmd.env(key, value);
@@ -84,12 +87,13 @@ fn run_service(project_root: &std::path::Path, env_vars: &[(&str, String)]) -> R
         println!();
     }
 
-    let status = cmd
-        .status()
-        .context("Failed to run cargo")?;
+    let status = cmd.status().context("Failed to run cargo")?;
 
     if !status.success() {
-        anyhow::bail!("Service exited with error code: {}", status.code().unwrap_or(-1));
+        anyhow::bail!(
+            "Service exited with error code: {}",
+            status.code().unwrap_or(-1)
+        );
     }
 
     Ok(())

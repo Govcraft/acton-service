@@ -242,8 +242,7 @@ async fn create_order_handler(
 pub mod orders {
     tonic::include_proto!("orders.v1");
 
-    pub const FILE_DESCRIPTOR_SET: &[u8] =
-        tonic::include_file_descriptor_set!("orders_descriptor");
+    pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("orders_descriptor");
 }
 
 use orders::{
@@ -399,7 +398,9 @@ async fn main() -> Result<()> {
         // Convert routes to axum router and serve
         tracing::info!("✓ gRPC service listening on {}", grpc_addr);
         let grpc_app = routes.into_axum_router();
-        let listener = tokio::net::TcpListener::bind(grpc_addr).await.expect("Failed to bind gRPC listener");
+        let listener = tokio::net::TcpListener::bind(grpc_addr)
+            .await
+            .expect("Failed to bind gRPC listener");
 
         axum::serve(listener, grpc_app)
             .await
@@ -456,9 +457,7 @@ async fn main() -> Result<()> {
     tracing::info!("📝 Try these commands:");
     tracing::info!("");
     tracing::info!("  # Create an order (publishes event, returns immediately):");
-    tracing::info!(
-        r#"  curl -X POST http://localhost:8080/api/v1/orders \"#
-    );
+    tracing::info!(r#"  curl -X POST http://localhost:8080/api/v1/orders \"#);
     tracing::info!(r#"    -H "Content-Type: application/json" \"#);
     tracing::info!(r#"    -d '{{"item":"laptop","quantity":2}}'"#);
     tracing::info!("");
@@ -466,9 +465,7 @@ async fn main() -> Result<()> {
     tracing::info!("  grpcurl -plaintext localhost:9090 grpc.health.v1.Health/Check");
     tracing::info!("");
     tracing::info!("  # Call gRPC directly (inter-service communication):");
-    tracing::info!(
-        r#"  grpcurl -plaintext -d '{{"order_id":"<order-id>"}}' \"#
-    );
+    tracing::info!(r#"  grpcurl -plaintext -d '{{"order_id":"<order-id>"}}' \"#);
     tracing::info!("    localhost:9090 orders.v1.OrderService/GetOrderStatus");
     tracing::info!("");
     tracing::info!("  # List available gRPC services:");

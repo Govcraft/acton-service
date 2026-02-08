@@ -504,7 +504,10 @@ mod tests {
     fn test_item_response_with_meta() {
         let response = ItemResponse::new("data")
             .with_meta(ResponseMeta::default().with_request_id("req_123".to_string()));
-        assert_eq!(response.meta.unwrap().request_id, Some("req_123".to_string()));
+        assert_eq!(
+            response.meta.unwrap().request_id,
+            Some("req_123".to_string())
+        );
     }
 
     #[test]
@@ -520,10 +523,7 @@ mod tests {
             .with_meta(ResponseMeta::default().with_request_id("req_123".to_string()));
         let mapped = response.map(|n| n.to_string());
         assert!(mapped.meta.is_some());
-        assert_eq!(
-            mapped.meta.unwrap().request_id,
-            Some("req_123".to_string())
-        );
+        assert_eq!(mapped.meta.unwrap().request_id, Some("req_123".to_string()));
     }
 
     #[test]

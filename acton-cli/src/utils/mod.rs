@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use colored::Colorize;
-use std::path::{Path, PathBuf};
 use std::fs;
+use std::path::{Path, PathBuf};
 
+pub mod cargo;
 pub mod format;
 pub mod git;
-pub mod cargo;
 
 /// Validate service name is kebab-case
 pub fn validate_service_name(name: &str) -> Result<()> {
@@ -39,7 +39,8 @@ pub fn validate_service_name(name: &str) -> Result<()> {
 
 /// Create directory and all parent directories
 pub fn create_dir_all(path: &Path) -> Result<()> {
-    fs::create_dir_all(path).with_context(|| format!("Failed to create directory: {}", path.display()))
+    fs::create_dir_all(path)
+        .with_context(|| format!("Failed to create directory: {}", path.display()))
 }
 
 /// Write file with content
@@ -69,8 +70,7 @@ pub fn is_dir_empty(path: &Path) -> Result<bool> {
 
 /// Get project root directory (where Cargo.toml is)
 pub fn find_project_root() -> Result<PathBuf> {
-    let current_dir = std::env::current_dir()
-        .context("Failed to get current directory")?;
+    let current_dir = std::env::current_dir().context("Failed to get current directory")?;
 
     let mut dir = current_dir.as_path();
 
@@ -82,7 +82,9 @@ pub fn find_project_root() -> Result<PathBuf> {
 
         match dir.parent() {
             Some(parent) => dir = parent,
-            None => anyhow::bail!("Could not find Cargo.toml in current directory or any parent directory"),
+            None => anyhow::bail!(
+                "Could not find Cargo.toml in current directory or any parent directory"
+            ),
         }
     }
 }

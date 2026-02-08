@@ -21,11 +21,11 @@
 //! - **V7** (time-sortable): Request IDs, Event IDs, Entity IDs - great for observability
 //! - **V4** (random): Security-critical IDs where unpredictability is important
 
+use http::Request;
 use mti::prelude::*;
 use std::fmt;
 use std::str::FromStr;
 use tower_http::request_id::{MakeRequestId, RequestId as TowerRequestId};
-use http::Request;
 
 /// A type-safe request identifier for distributed tracing.
 ///
@@ -247,9 +247,7 @@ mod tests {
     #[test]
     fn test_make_typed_request_id() {
         let mut maker = MakeTypedRequestId;
-        let request = http::Request::builder()
-            .body(())
-            .unwrap();
+        let request = http::Request::builder().body(()).unwrap();
 
         let id = maker.make_request_id(&request);
         assert!(id.is_some());
