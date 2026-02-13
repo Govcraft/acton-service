@@ -636,20 +636,15 @@ impl IntoResponse for Error {
                 retry_after_secs,
             } => {
                 // HTTP 423 Locked with Retry-After header
-                let error_response = ErrorResponse::with_code(
-                    StatusCode::LOCKED,
-                    "ACCOUNT_LOCKED",
-                    message.clone(),
-                );
-                let mut response =
-                    (StatusCode::LOCKED, Json(error_response)).into_response();
-                if let Ok(value) = axum::http::header::HeaderValue::from_str(
-                    &retry_after_secs.to_string(),
-                ) {
-                    response.headers_mut().insert(
-                        axum::http::header::RETRY_AFTER,
-                        value,
-                    );
+                let error_response =
+                    ErrorResponse::with_code(StatusCode::LOCKED, "ACCOUNT_LOCKED", message.clone());
+                let mut response = (StatusCode::LOCKED, Json(error_response)).into_response();
+                if let Ok(value) =
+                    axum::http::header::HeaderValue::from_str(&retry_after_secs.to_string())
+                {
+                    response
+                        .headers_mut()
+                        .insert(axum::http::header::RETRY_AFTER, value);
                 }
                 return response;
             }

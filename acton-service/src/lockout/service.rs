@@ -322,8 +322,7 @@ impl LoginLockout {
         }
 
         let exponent = (attempt_count - 1) as f64;
-        let delay = self.config.base_delay_ms as f64
-            * self.config.delay_multiplier.powf(exponent);
+        let delay = self.config.base_delay_ms as f64 * self.config.delay_multiplier.powf(exponent);
 
         // Cap at max_delay_ms, handling potential infinity/NaN from large exponents
         let capped = if delay.is_finite() {
@@ -336,9 +335,7 @@ impl LoginLockout {
     }
 
     /// Get a Redis connection from the pool
-    async fn get_connection(
-        &self,
-    ) -> Result<deadpool_redis::Connection> {
+    async fn get_connection(&self) -> Result<deadpool_redis::Connection> {
         self.redis_pool.get().await.map_err(|e| {
             let redis_err = redis::RedisError::from((
                 redis::ErrorKind::IoError,
@@ -515,14 +512,8 @@ mod tests {
             redis_pool: create_dummy_pool(),
             notifications: Vec::new(),
         };
-        assert_eq!(
-            lockout.attempts_key("alice"),
-            "myapp:attempts:alice"
-        );
-        assert_eq!(
-            lockout.locked_key("alice"),
-            "myapp:locked:alice"
-        );
+        assert_eq!(lockout.attempts_key("alice"), "myapp:attempts:alice");
+        assert_eq!(lockout.locked_key("alice"), "myapp:locked:alice");
     }
 
     /// Create a dummy Redis pool for unit tests that don't need Redis

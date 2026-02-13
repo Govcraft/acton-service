@@ -42,6 +42,18 @@ pub struct AuditConfig {
     /// Routes to exclude from auditing (default: ["/health", "/ready", "/metrics"])
     #[serde(default = "default_excluded_routes")]
     pub excluded_routes: Vec<String>,
+
+    /// Days to retain audit events (None = infinite)
+    #[serde(default)]
+    pub retention_days: Option<u32>,
+
+    /// Directory path for JSONL archive before purge (None = skip archival)
+    #[serde(default)]
+    pub archive_path: Option<String>,
+
+    /// Hours between cleanup runs (default: 24)
+    #[serde(default = "default_cleanup_interval")]
+    pub cleanup_interval_hours: u32,
 }
 
 impl Default for AuditConfig {
@@ -54,6 +66,9 @@ impl Default for AuditConfig {
             otlp_logs_enabled: false,
             audited_routes: Vec::new(),
             excluded_routes: default_excluded_routes(),
+            retention_days: None,
+            archive_path: None,
+            cleanup_interval_hours: default_cleanup_interval(),
         }
     }
 }
@@ -113,6 +128,10 @@ fn default_syslog_facility() -> u8 {
     13 // log_audit
 }
 
+fn default_cleanup_interval() -> u32 {
+    24
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,6 +148,9 @@ mod tests {
             config.excluded_routes,
             vec!["/health", "/ready", "/metrics"]
         );
+        assert!(config.retention_days.is_none());
+        assert!(config.archive_path.is_none());
+        assert_eq!(config.cleanup_interval_hours, 24);
     }
 
     #[test]
@@ -155,6 +177,9 @@ mod tests {
             otlp_logs_enabled: true,
             audited_routes: vec!["/api/v1/admin/*".to_string()],
             excluded_routes: vec!["/health".to_string()],
+            retention_days: Some(90),
+            archive_path: Some("/var/audit/archive".to_string()),
+            cleanup_interval_hours: 12,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -166,5 +191,21 @@ mod tests {
         assert_eq!(deserialized.syslog.facility, 10);
         assert!(deserialized.otlp_logs_enabled);
         assert_eq!(deserialized.audited_routes, vec!["/api/v1/admin/*"]);
+        assert_eq!(deserialized.retention_days, Some(90));
+        assert_eq!(
+            deserialized.archive_path,
+            Some("/var/audit/archive".to_string())
+        );
+        assert_eq!(deserialized.cleanup_interval_hours, 12);
+    }
+
+    #[test]
+    fn test_retention_fields_default_from_json() {
+        // Fields should default when missing from JSON
+        let json = r#"{"enabled": true}"#;
+        let config: AuditConfig = serde_json::from_str(json).unwrap();
+        assert!(config.retention_days.is_none());
+        assert!(config.archive_path.is_none());
+        assert_eq!(config.cleanup_interval_hours, 24);
     }
 }

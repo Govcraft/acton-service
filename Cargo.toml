@@ -14,7 +14,7 @@ license = "MIT"
 
 [workspace.dependencies]
 # Async runtime
-tokio = { version = "1.48.0", features = ["net", "rt", "rt-multi-thread", "signal", "sync", "time", "macros"] }
+tokio = { version = "1.48.0", features = ["net", "rt", "rt-multi-thread", "signal", "sync", "time", "macros", "fs"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 
 # HTTP framework

@@ -167,6 +167,55 @@ impl AuditStorage for PgAuditStorage {
         Ok(rows.into_iter().map(Into::into).collect())
     }
 
+    async fn query_before(
+        &self,
+        cutoff: DateTime<Utc>,
+        limit: usize,
+    ) -> Result<Vec<AuditEvent>, Error> {
+        let rows = sqlx::query_as::<_, AuditEventRow>(
+            "SELECT * FROM audit_events WHERE timestamp < $1 ORDER BY sequence ASC LIMIT $2",
+        )
+        .bind(cutoff)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| {
+            Error::Internal(format!("Failed to query audit events before cutoff: {}", e))
+        })?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    async fn purge_before(&self, cutoff: DateTime<Utc>) -> Result<u64, Error> {
+        // Temporarily drop the no-delete rule
+        sqlx::query("DROP RULE IF EXISTS audit_no_delete ON audit_events")
+            .execute(&self.pool)
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to drop audit_no_delete rule: {}", e)))?;
+
+        // Perform the delete
+        let result = sqlx::query("DELETE FROM audit_events WHERE timestamp < $1")
+            .bind(cutoff)
+            .execute(&self.pool)
+            .await;
+
+        // Reinstate the rule regardless of delete outcome
+        let reinstate_result = sqlx::query(
+            "CREATE RULE audit_no_delete AS ON DELETE TO audit_events DO INSTEAD NOTHING",
+        )
+        .execute(&self.pool)
+        .await;
+
+        if let Err(e) = reinstate_result {
+            tracing::error!("CRITICAL: Failed to reinstate audit_no_delete rule: {}", e);
+        }
+
+        let rows =
+            result.map_err(|e| Error::Internal(format!("Failed to purge audit events: {}", e)))?;
+
+        Ok(rows.rows_affected())
+    }
+
     async fn verify_chain(&self, from_sequence: u64) -> Result<Option<u64>, Error> {
         let rows = sqlx::query_as::<_, AuditEventRow>(
             "SELECT * FROM audit_events WHERE sequence >= $1 ORDER BY sequence ASC",

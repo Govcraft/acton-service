@@ -18,6 +18,7 @@
 //! - `audit` + `auth`: Automatic auth event emission
 
 pub mod agent;
+pub mod archive;
 pub mod chain;
 pub mod config;
 pub mod event;
@@ -30,6 +31,7 @@ pub mod syslog;
 pub mod otlp;
 
 pub use agent::AuditAgent;
+pub use archive::archive_events;
 pub use chain::{verify_chain, AuditChain, ChainVerificationError};
 pub use config::{AuditConfig, SyslogConfig};
 pub use event::{AuditEvent, AuditEventKind, AuditSeverity, AuditSource};

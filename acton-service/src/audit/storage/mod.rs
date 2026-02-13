@@ -52,4 +52,24 @@ pub trait AuditStorage: Send + Sync {
     /// Returns `Ok(None)` if the chain is intact, or `Ok(Some(sequence))` with
     /// the first broken sequence number.
     async fn verify_chain(&self, from_sequence: u64) -> Result<Option<u64>, Error>;
+
+    /// Query events with timestamps before the given cutoff
+    ///
+    /// Returns up to `limit` events ordered by sequence ASC.
+    /// Used by retention cleanup to fetch events for archival before purge.
+    async fn query_before(
+        &self,
+        _cutoff: DateTime<Utc>,
+        _limit: usize,
+    ) -> Result<Vec<AuditEvent>, Error> {
+        Err(Error::Internal("query_before not implemented".into()))
+    }
+
+    /// Purge events with timestamps before the given cutoff
+    ///
+    /// Temporarily disables immutability protections, performs the delete,
+    /// then reinstates protections. Returns the number of rows deleted.
+    async fn purge_before(&self, _cutoff: DateTime<Utc>) -> Result<u64, Error> {
+        Err(Error::Internal("purge_before not implemented".into()))
+    }
 }

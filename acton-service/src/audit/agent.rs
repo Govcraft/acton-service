@@ -5,6 +5,7 @@
 //! the configured storage backend and dispatches to SIEM exporters.
 
 use acton_reactive::prelude::*;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::chain::AuditChain;
@@ -49,6 +50,13 @@ struct ChainLoaded {
     service_name: String,
 }
 
+/// Internal message: triggers periodic retention cleanup
+#[derive(Clone, Debug)]
+struct CleanupTrigger;
+
+/// Batch size for archival + purge operations
+const CLEANUP_BATCH_SIZE: usize = 10_000;
+
 /// Audit agent that manages the immutable audit trail
 ///
 /// Follows the same actor pattern as `DatabasePoolAgent`, `RedisPoolAgent`, etc.
@@ -80,6 +88,10 @@ impl AuditAgent {
         } else {
             None
         };
+
+        // Save retention config before moving config into agent model
+        let retention_days = config.retention_days;
+        let cleanup_interval_hours = config.cleanup_interval_hours;
 
         agent.model.config = Some(config);
         agent.model.storage = storage;
@@ -144,6 +156,22 @@ impl AuditAgent {
             Reply::ready()
         });
 
+        // Handle retention cleanup triggers
+        agent.mutate_on::<CleanupTrigger>(|agent, _envelope| {
+            let config = agent.model.config.clone();
+            let storage = agent.model.storage.clone();
+
+            tokio::spawn(async move {
+                if let (Some(config), Some(storage)) = (config, storage) {
+                    if let Err(e) = run_cleanup(&config, storage.as_ref()).await {
+                        tracing::error!("Audit retention cleanup failed: {}", e);
+                    }
+                }
+            });
+
+            Reply::ready()
+        });
+
         // Load chain state from storage on startup
         agent.after_start(move |agent| {
             let storage = storage_for_start.clone();
@@ -194,6 +222,78 @@ impl AuditAgent {
         });
 
         let handle = agent.start().await;
+
+        // Start periodic cleanup if retention is configured
+        if retention_days.is_some() {
+            let cleanup_handle = handle.clone();
+            let interval_hours = cleanup_interval_hours;
+            tokio::spawn(async move {
+                let period = std::time::Duration::from_secs(interval_hours as u64 * 3600);
+                let mut interval = tokio::time::interval(period);
+                // Skip the first immediate tick
+                interval.tick().await;
+                loop {
+                    interval.tick().await;
+                    tracing::debug!("Triggering audit retention cleanup");
+                    cleanup_handle.send(CleanupTrigger).await;
+                }
+            });
+        }
+
         Ok(handle)
     }
+}
+
+/// Run a single retention cleanup cycle
+async fn run_cleanup(
+    config: &AuditConfig,
+    storage: &dyn AuditStorage,
+) -> Result<(), crate::error::Error> {
+    let retention_days = match config.retention_days {
+        Some(days) => days,
+        None => return Ok(()),
+    };
+
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(retention_days as i64);
+    let archive_dir = config.archive_path.as_ref().map(PathBuf::from);
+    let mut total_purged: u64 = 0;
+
+    loop {
+        let events = storage.query_before(cutoff, CLEANUP_BATCH_SIZE).await?;
+        if events.is_empty() {
+            break;
+        }
+
+        let batch_count = events.len();
+
+        // Archive if configured — abort this cycle if archival fails
+        if let Some(ref dir) = archive_dir {
+            super::archive::archive_events(&events, dir).await?;
+        }
+
+        // Purge the batch
+        let purged = storage.purge_before(cutoff).await?;
+        total_purged += purged;
+
+        tracing::info!(
+            "Audit cleanup: purged {} events (batch had {})",
+            purged,
+            batch_count
+        );
+
+        // If we got fewer than the batch size, we're done
+        if batch_count < CLEANUP_BATCH_SIZE {
+            break;
+        }
+    }
+
+    if total_purged > 0 {
+        tracing::info!(
+            "Audit retention cleanup complete: purged {} total events older than {} days",
+            total_purged,
+            retention_days
+        );
+    }
+
+    Ok(())
 }

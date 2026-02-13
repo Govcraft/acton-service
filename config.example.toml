@@ -163,6 +163,10 @@ lazy_init = true      # Initialize connection in background
 # audited_routes = ["/api/v1/admin/*"]   # Glob patterns for per-route auditing
 # excluded_routes = ["/health", "/ready", "/metrics"]
 #
+# retention_days = 90               # Days to keep events (omit for infinite)
+# archive_path = "/var/audit/archive"  # JSONL archive dir before purge (omit to skip)
+# cleanup_interval_hours = 24       # Hours between cleanup runs
+#
 # [audit.syslog]
 # transport = "udp"                 # "udp", "tcp", or "none"
 # address = "127.0.0.1:514"

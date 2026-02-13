@@ -241,6 +241,106 @@ impl AuditStorage for SurrealAuditStorage {
         Ok(rows.into_iter().map(Into::into).collect())
     }
 
+    async fn query_before(
+        &self,
+        cutoff: DateTime<Utc>,
+        limit: usize,
+    ) -> Result<Vec<AuditEvent>, Error> {
+        let cutoff_str = cutoff.to_rfc3339();
+
+        let mut result = self
+            .client
+            .query("SELECT * FROM audit_events WHERE timestamp < $cutoff ORDER BY sequence ASC LIMIT $limit")
+            .bind(("cutoff", cutoff_str))
+            .bind(("limit", limit as i64))
+            .await
+            .map_err(|e| {
+                Error::Internal(format!("Failed to query audit events before cutoff: {}", e))
+            })?;
+
+        let rows: Vec<AuditRow> = result
+            .take(0)
+            .map_err(|e| Error::Internal(format!("Failed to deserialize audit events: {}", e)))?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    async fn purge_before(&self, cutoff: DateTime<Utc>) -> Result<u64, Error> {
+        let cutoff_str = cutoff.to_rfc3339();
+
+        // Temporarily allow deletes
+        self.client
+            .query(
+                r#"
+                DEFINE TABLE audit_events SCHEMAFUL
+                    PERMISSIONS
+                        FOR select FULL
+                        FOR create FULL
+                        FOR update NONE
+                        FOR delete FULL
+                "#,
+            )
+            .await
+            .map_err(|e| {
+                Error::Internal(format!(
+                    "Failed to temporarily allow deletes on audit_events: {}",
+                    e
+                ))
+            })?;
+
+        // Count events to delete first (DELETE doesn't return count directly)
+        let mut count_result = self
+            .client
+            .query("SELECT count() AS total FROM audit_events WHERE timestamp < $cutoff GROUP ALL")
+            .bind(("cutoff", cutoff_str.clone()))
+            .await
+            .map_err(|e| {
+                Error::Internal(format!("Failed to count audit events for purge: {}", e))
+            })?;
+
+        #[derive(Deserialize)]
+        struct CountRow {
+            total: i64,
+        }
+
+        let count_rows: Vec<CountRow> = count_result.take(0).unwrap_or_default();
+        let total = count_rows.first().map(|r| r.total).unwrap_or(0);
+
+        // Perform the delete
+        let delete_result = self
+            .client
+            .query("DELETE FROM audit_events WHERE timestamp < $cutoff")
+            .bind(("cutoff", cutoff_str))
+            .await;
+
+        // Reinstate immutability regardless of delete outcome
+        let reinstate_result = self
+            .client
+            .query(
+                r#"
+                DEFINE TABLE audit_events SCHEMAFUL
+                    PERMISSIONS
+                        FOR select FULL
+                        FOR create FULL
+                        FOR update NONE
+                        FOR delete NONE
+                "#,
+            )
+            .await;
+
+        if let Err(e) = reinstate_result {
+            tracing::error!(
+                "CRITICAL: Failed to reinstate audit_events delete protection: {}",
+                e
+            );
+        }
+
+        delete_result
+            .map_err(|e| Error::Internal(format!("Failed to purge audit events: {}", e)))?;
+
+        Ok(total as u64)
+    }
+
     async fn verify_chain(&self, from_sequence: u64) -> Result<Option<u64>, Error> {
         let mut result = self
             .client

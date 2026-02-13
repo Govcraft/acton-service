@@ -198,6 +198,81 @@ impl AuditStorage for TursoAuditStorage {
         Ok(events)
     }
 
+    async fn query_before(
+        &self,
+        cutoff: DateTime<Utc>,
+        limit: usize,
+    ) -> Result<Vec<AuditEvent>, Error> {
+        let conn = self
+            .db
+            .connect()
+            .map_err(|e| Error::Internal(format!("Failed to connect for audit query: {}", e)))?;
+
+        let mut rows = conn
+            .query(
+                "SELECT * FROM audit_events WHERE timestamp < ?1 ORDER BY sequence ASC LIMIT ?2",
+                libsql::params![cutoff.to_rfc3339(), limit as i64],
+            )
+            .await
+            .map_err(|e| {
+                Error::Internal(format!("Failed to query audit events before cutoff: {}", e))
+            })?;
+
+        let mut events = Vec::new();
+        while let Ok(Some(row)) = rows.next().await {
+            events.push(row_to_event(&row)?);
+        }
+        Ok(events)
+    }
+
+    async fn purge_before(&self, cutoff: DateTime<Utc>) -> Result<u64, Error> {
+        let conn = self
+            .db
+            .connect()
+            .map_err(|e| Error::Internal(format!("Failed to connect for audit purge: {}", e)))?;
+
+        // Drop the no-delete trigger
+        conn.execute("DROP TRIGGER IF EXISTS audit_no_delete", ())
+            .await
+            .map_err(|e| {
+                Error::Internal(format!("Failed to drop audit_no_delete trigger: {}", e))
+            })?;
+
+        // Perform the delete
+        let result = conn
+            .execute(
+                "DELETE FROM audit_events WHERE timestamp < ?1",
+                libsql::params![cutoff.to_rfc3339()],
+            )
+            .await;
+
+        // Reinstate the trigger regardless of delete outcome
+        let reinstate_result = conn
+            .execute(
+                r#"
+                CREATE TRIGGER IF NOT EXISTS audit_no_delete
+                BEFORE DELETE ON audit_events
+                BEGIN
+                    SELECT RAISE(ABORT, 'audit events are immutable');
+                END
+                "#,
+                (),
+            )
+            .await;
+
+        if let Err(e) = reinstate_result {
+            tracing::error!(
+                "CRITICAL: Failed to reinstate audit_no_delete trigger: {}",
+                e
+            );
+        }
+
+        let rows =
+            result.map_err(|e| Error::Internal(format!("Failed to purge audit events: {}", e)))?;
+
+        Ok(rows)
+    }
+
     async fn verify_chain(&self, from_sequence: u64) -> Result<Option<u64>, Error> {
         let conn = self
             .db
