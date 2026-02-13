@@ -69,6 +69,37 @@ tasks:
     cmds:
       - git-cliff --unreleased
 
+  audit:
+    desc: Run cargo-audit to check for known vulnerabilities
+    cmds:
+      - cargo audit
+
+  deny:
+    desc: Run cargo-deny checks (advisories, licenses, bans, sources)
+    summary: |
+      Run cargo-deny to check dependency policies.
+
+      Usage:
+        task deny                          # Run all checks
+        task deny -- check advisories      # Run specific check
+
+      Requires:
+      - cargo-deny installed (cargo install cargo-deny)
+    cmds:
+      - cargo deny check {{.CLI_ARGS | default "all"}}
+
+  sbom:
+    desc: Generate CycloneDX SBOM in JSON format
+    cmds:
+      - cargo cyclonedx --manifest-path Cargo.toml --format json --all
+
+  security:
+    desc: Run all security checks (audit, deny, sbom)
+    cmds:
+      - task: audit
+      - task: deny
+      - task: sbom
+
   release-cli:
     desc: Bump CLI version, update changelog, sign, and push to remote (no publish)
     summary: |

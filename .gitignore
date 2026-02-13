@@ -45,6 +45,9 @@ config.toml
 .env.*
 !.env.example
 
+# Generated SBOM artifacts
+**/bom.json
+
 # Logs
 *.log
 
