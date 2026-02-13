@@ -131,6 +131,9 @@ pub mod handlers;
 #[cfg(feature = "audit")]
 pub mod audit;
 
+#[cfg(feature = "login-lockout")]
+pub mod lockout;
+
 /// Internal agent-based components
 ///
 /// Connection pool management is handled internally by agents. Users don't
@@ -408,6 +411,16 @@ pub mod prelude {
         AuditConfig, AuditEvent, AuditEventKind, AuditLogger, AuditRoute, AuditSeverity,
         AuditSource, AuditStorage,
     };
+
+    // Login lockout
+    #[cfg(feature = "login-lockout")]
+    pub use crate::lockout::{
+        LockoutConfig, LockoutEvent, LockoutMiddleware, LockoutNotification, LockoutStatus,
+        LoginLockout, UnlockReason,
+    };
+
+    #[cfg(all(feature = "login-lockout", feature = "audit"))]
+    pub use crate::lockout::AuditLockoutNotification;
 
     pub use axum::{
         extract::{Form, Path, Query, State},

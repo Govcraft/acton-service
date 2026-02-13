@@ -37,6 +37,7 @@ export const navigation = [
       { title: 'OAuth/OIDC', href: '/docs/oauth' },
       { title: 'Cedar Authorization', href: '/docs/cedar-auth' },
       { title: 'Rate Limiting', href: '/docs/rate-limiting' },
+      { title: 'Login Lockout', href: '/docs/login-lockout' },
       { title: 'Resilience Patterns', href: '/docs/resilience' },
       { title: 'Audit Logging', href: '/docs/audit' },
       { title: 'Web App Integration', href: '/docs/web-app-integration' },

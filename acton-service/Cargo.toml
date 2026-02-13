@@ -103,7 +103,7 @@ tokio-util = "0.7.17"
 dashmap = "6.1.0"
 anyhow.workspace = true
 rusty_paseto = "0.9.0"
-argon2 = { version = "0.5.3", optional = true }
+argon2 = { version = "0.5.3", features = ["std"], optional = true }
 rand = { version = "0.9", optional = true }
 oauth2 = { version = "5.0.0", optional = true }
 openidconnect = { version = "4.0.1", optional = true }
@@ -140,11 +140,11 @@ cedar-authz = ["dep:cedar-policy", "cache"]
 jwt = ["dep:jsonwebtoken"]
 
 # Authentication features
-auth = ["dep:argon2"]                                      # Core: password hashing + token generation
+auth = ["dep:argon2", "dep:rand"]                            # Core: password hashing + token generation
 oauth = ["auth", "dep:oauth2", "dep:openidconnect", "dep:base64"]  # OAuth/OIDC providers (requires auth)
-auth-full = ["auth", "oauth", "jwt", "cache", "database"]  # All auth features (excludes turso - mutually exclusive with database)
+auth-full = ["auth", "oauth", "jwt", "cache", "database", "login-lockout"]  # All auth features (excludes turso - mutually exclusive with database)
 
-full = ["http", "grpc", "websocket", "database", "cache", "events", "observability", "resilience", "otel-metrics", "governor", "openapi", "cedar-authz", "jwt", "auth", "session-memory", "session-redis", "htmx", "askama", "sse", "pagination-full", "handlers"]
+full = ["http", "grpc", "websocket", "database", "cache", "events", "observability", "resilience", "otel-metrics", "governor", "openapi", "cedar-authz", "jwt", "auth", "session-memory", "session-redis", "htmx", "askama", "sse", "pagination-full", "handlers", "login-lockout"]
 tonic-health = ["dep:tonic-health"]
 tonic-reflection = ["dep:tonic-reflection"]
 tower-resilience-circuitbreaker = ["dep:tower-resilience-circuitbreaker"]
@@ -183,6 +183,9 @@ handlers = ["repository"]
 
 # Audit logging with BLAKE3 hash chaining
 audit = ["dep:blake3"]
+
+# Login lockout with progressive delay and account lockout
+login-lockout = ["auth", "cache"]
 
 # Basic examples
 [[example]]

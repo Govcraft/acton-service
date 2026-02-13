@@ -108,6 +108,11 @@ where
     #[serde(default)]
     pub audit: Option<crate::audit::AuditConfig>,
 
+    /// Login lockout configuration (optional)
+    #[cfg(feature = "login-lockout")]
+    #[serde(default)]
+    pub lockout: Option<crate::lockout::LockoutConfig>,
+
     /// Custom configuration extensions
     ///
     /// Any fields in config.toml that don't match the above framework fields
@@ -1298,6 +1303,8 @@ where
             session: None,
             #[cfg(feature = "audit")]
             audit: None,
+            #[cfg(feature = "login-lockout")]
+            lockout: None,
             custom: T::default(),
         }
     }
@@ -1383,6 +1390,8 @@ mod tests {
             session: None,
             #[cfg(feature = "audit")]
             audit: None,
+            #[cfg(feature = "login-lockout")]
+            lockout: None,
             custom,
         };
 
@@ -1433,6 +1442,8 @@ mod tests {
             session: None,
             #[cfg(feature = "audit")]
             audit: None,
+            #[cfg(feature = "login-lockout")]
+            lockout: None,
             custom: custom.clone(),
         };
 

@@ -118,6 +118,12 @@ pub enum AuditEventKind {
     AuthOAuthCallback,
     /// Permission denied
     AuthPermissionDenied,
+    /// Account locked due to repeated login failures (requires `login-lockout` feature)
+    #[cfg(feature = "login-lockout")]
+    AuthAccountLocked,
+    /// Account unlocked (requires `login-lockout` feature)
+    #[cfg(feature = "login-lockout")]
+    AuthAccountUnlocked,
     /// HTTP request (from audit middleware)
     HttpRequest,
     /// HTTP request denied (rate limit, auth failure, etc.)
@@ -139,6 +145,10 @@ impl std::fmt::Display for AuditEventKind {
             Self::AuthApiKeyRevoked => write!(f, "auth.apikey.revoked"),
             Self::AuthOAuthCallback => write!(f, "auth.oauth.callback"),
             Self::AuthPermissionDenied => write!(f, "auth.permission.denied"),
+            #[cfg(feature = "login-lockout")]
+            Self::AuthAccountLocked => write!(f, "auth.account.locked"),
+            #[cfg(feature = "login-lockout")]
+            Self::AuthAccountUnlocked => write!(f, "auth.account.unlocked"),
             Self::HttpRequest => write!(f, "http.request"),
             Self::HttpRequestDenied => write!(f, "http.request.denied"),
             Self::Custom(name) => write!(f, "custom.{}", name),
@@ -238,7 +248,10 @@ mod tests {
 
     #[test]
     fn test_audit_event_kind_display() {
-        assert_eq!(AuditEventKind::AuthLoginSuccess.to_string(), "auth.login.success");
+        assert_eq!(
+            AuditEventKind::AuthLoginSuccess.to_string(),
+            "auth.login.success"
+        );
         assert_eq!(AuditEventKind::HttpRequest.to_string(), "http.request");
         assert_eq!(
             AuditEventKind::Custom("user.delete".to_string()).to_string(),

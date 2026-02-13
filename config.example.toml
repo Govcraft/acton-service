@@ -170,6 +170,22 @@ lazy_init = true      # Initialize connection in background
 # # app_name = "my-service"         # Defaults to service.name
 
 # ============================================================================
+# LOGIN LOCKOUT CONFIGURATION (Optional)
+# Requires feature: login-lockout (depends on auth + cache)
+# ============================================================================
+# [lockout]
+# enabled = true
+# max_attempts = 5                  # Lock after 5 failures
+# window_secs = 900                 # 15-minute rolling window
+# lockout_duration_secs = 1800      # Lock for 30 minutes
+# progressive_delay_enabled = true  # Apply exponential backoff delays
+# base_delay_ms = 1000              # 1 second initial delay
+# max_delay_ms = 30000              # 30 second max delay
+# delay_multiplier = 2.0            # Double delay each attempt
+# warning_threshold = 3             # Notify after 3 failures (0 = disabled)
+# key_prefix = "lockout"            # Redis key prefix
+
+# ============================================================================
 # OPENTELEMETRY CONFIGURATION (Optional)
 # ============================================================================
 [otlp]

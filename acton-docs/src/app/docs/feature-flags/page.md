@@ -95,6 +95,7 @@ acton-service uses feature flags to keep compile times fast and binary sizes sma
 └─────────────────────────────────────────┘
         │
         ├─── Fine-grained authorization ──▶ Add "cedar-authz"
+        ├─── Brute force protection ─────▶ Add "login-lockout"
         ├─── Rate limiting ───────────────▶ Add "governor"
         ├─── Resilience ──────────────────▶ Add "resilience"
         ├─── Metrics ─────────────────────▶ Add "otel-metrics"
@@ -540,6 +541,28 @@ JWT token authentication support. PASETO is the default token format and require
 Token authentication via PASETO requires no feature flag and is the recommended default. Only enable `jwt` if you specifically need JWT compatibility. See [Token Authentication](/docs/token-auth) for details.
 {% /callout %}
 
+### `login-lockout`
+
+Progressive delay and account lockout for brute force protection on login endpoints. Depends on `auth` + `cache`.
+
+**When to use**: Protecting login endpoints from credential stuffing and brute force attacks
+
+**Dependencies**: None (uses existing auth + cache infrastructure)
+
+**Provides**:
+- Per-identity failed attempt tracking in Redis
+- Configurable progressive delays (exponential backoff)
+- Automatic account lockout after threshold
+- Notification hooks for lockout lifecycle events
+- Optional auto-enforcement middleware
+- Audit integration (when `audit` feature is active)
+
+```toml
+{% $dep.loginLockout %}
+```
+
+See the [Login Lockout Guide](/docs/login-lockout) for detailed usage.
+
 ---
 
 ## Documentation Features
@@ -715,6 +738,7 @@ Some features work better together:
 | `openapi` | `http` | OpenAPI docs are for HTTP endpoints |
 | `session-redis` | Production deployments | Sessions persist across restarts and work across multiple instances |
 | `session-memory` | `session-redis` | Use memory for dev, Redis for production |
+| `login-lockout` | `audit` | Emit audit events when accounts are locked/unlocked |
 
 ---
 
