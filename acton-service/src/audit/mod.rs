@@ -18,10 +18,13 @@
 //! - `audit` + `auth`: Automatic auth event emission
 
 pub mod agent;
+pub mod alert;
+pub mod alert_webhook;
 pub mod archive;
 pub mod chain;
 pub mod config;
 pub mod event;
+pub(crate) mod failure_tracker;
 pub mod logger;
 pub mod middleware;
 pub mod storage;
@@ -31,9 +34,11 @@ pub mod syslog;
 pub mod otlp;
 
 pub use agent::AuditAgent;
+pub use alert::{AuditAlertEvent, AuditAlertHook};
+pub use alert_webhook::WebhookAlertHook;
 pub use archive::archive_events;
 pub use chain::{verify_chain, AuditChain, ChainVerificationError};
-pub use config::{AuditConfig, SyslogConfig};
+pub use config::{AlertConfig, AuditConfig, SyslogConfig};
 pub use event::{AuditEvent, AuditEventKind, AuditSeverity, AuditSource};
 pub use logger::AuditLogger;
 pub use middleware::{audit_layer, AuditRoute};

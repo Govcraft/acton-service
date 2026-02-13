@@ -408,8 +408,8 @@ pub mod prelude {
     // Audit logging
     #[cfg(feature = "audit")]
     pub use crate::audit::{
-        AuditConfig, AuditEvent, AuditEventKind, AuditLogger, AuditRoute, AuditSeverity,
-        AuditSource, AuditStorage,
+        AlertConfig, AuditAlertEvent, AuditAlertHook, AuditConfig, AuditEvent, AuditEventKind,
+        AuditLogger, AuditRoute, AuditSeverity, AuditSource, AuditStorage,
     };
 
     // Login lockout

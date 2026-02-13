@@ -3,6 +3,7 @@
 //! Loaded from `[audit]` section of config.toml or environment variables.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Audit logging configuration
 ///
@@ -54,6 +55,10 @@ pub struct AuditConfig {
     /// Hours between cleanup runs (default: 24)
     #[serde(default = "default_cleanup_interval")]
     pub cleanup_interval_hours: u32,
+
+    /// Alert hook configuration for storage failure notifications
+    #[serde(default)]
+    pub alerts: Option<AlertConfig>,
 }
 
 impl Default for AuditConfig {
@@ -69,8 +74,63 @@ impl Default for AuditConfig {
             retention_days: None,
             archive_path: None,
             cleanup_interval_hours: default_cleanup_interval(),
+            alerts: None,
         }
     }
+}
+
+/// Alert hook configuration for audit storage failures
+///
+/// When enabled, dispatches notifications when persistent storage is
+/// unreachable beyond a configurable threshold, and when it recovers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlertConfig {
+    /// Enable storage failure alerts (default: false)
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Seconds of continuous failure before triggering an alert (default: 30)
+    #[serde(default = "default_threshold_secs")]
+    pub threshold_secs: u64,
+
+    /// Minimum seconds between repeated alerts (default: 300)
+    #[serde(default = "default_cooldown_secs")]
+    pub cooldown_secs: u64,
+
+    /// Send a recovery notification when storage comes back online (default: true)
+    #[serde(default = "default_true")]
+    pub notify_recovery: bool,
+
+    /// Webhook endpoints to notify
+    #[serde(default)]
+    pub webhooks: Vec<WebhookAlertConfig>,
+}
+
+impl Default for AlertConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            threshold_secs: default_threshold_secs(),
+            cooldown_secs: default_cooldown_secs(),
+            notify_recovery: true,
+            webhooks: Vec::new(),
+        }
+    }
+}
+
+/// Configuration for a single webhook alert endpoint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookAlertConfig {
+    /// Destination URL for POST requests
+    pub url: String,
+
+    /// HTTP request timeout in seconds (default: 10)
+    #[serde(default = "default_webhook_timeout_secs")]
+    pub timeout_secs: u64,
+
+    /// Additional HTTP headers (e.g., `{"Authorization": "Bearer token"}`)
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
 }
 
 /// Syslog export configuration (RFC 5424)
@@ -132,6 +192,18 @@ fn default_cleanup_interval() -> u32 {
     24
 }
 
+fn default_threshold_secs() -> u64 {
+    30
+}
+
+fn default_cooldown_secs() -> u64 {
+    300
+}
+
+fn default_webhook_timeout_secs() -> u64 {
+    10
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,6 +223,7 @@ mod tests {
         assert!(config.retention_days.is_none());
         assert!(config.archive_path.is_none());
         assert_eq!(config.cleanup_interval_hours, 24);
+        assert!(config.alerts.is_none());
     }
 
     #[test]
@@ -180,6 +253,7 @@ mod tests {
             retention_days: Some(90),
             archive_path: Some("/var/audit/archive".to_string()),
             cleanup_interval_hours: 12,
+            alerts: None,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -207,5 +281,91 @@ mod tests {
         assert!(config.retention_days.is_none());
         assert!(config.archive_path.is_none());
         assert_eq!(config.cleanup_interval_hours, 24);
+    }
+
+    #[test]
+    fn test_alert_config_defaults() {
+        let config = AlertConfig::default();
+        assert!(!config.enabled);
+        assert_eq!(config.threshold_secs, 30);
+        assert_eq!(config.cooldown_secs, 300);
+        assert!(config.notify_recovery);
+        assert!(config.webhooks.is_empty());
+    }
+
+    #[test]
+    fn test_alert_config_serde_roundtrip() {
+        let mut headers = HashMap::new();
+        headers.insert("Authorization".to_string(), "Bearer test-token".to_string());
+
+        let config = AlertConfig {
+            enabled: true,
+            threshold_secs: 15,
+            cooldown_secs: 120,
+            notify_recovery: false,
+            webhooks: vec![WebhookAlertConfig {
+                url: "https://hooks.slack.com/test".to_string(),
+                timeout_secs: 5,
+                headers: headers.clone(),
+            }],
+        };
+
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: AlertConfig = serde_json::from_str(&json).unwrap();
+
+        assert!(deserialized.enabled);
+        assert_eq!(deserialized.threshold_secs, 15);
+        assert_eq!(deserialized.cooldown_secs, 120);
+        assert!(!deserialized.notify_recovery);
+        assert_eq!(deserialized.webhooks.len(), 1);
+        assert_eq!(deserialized.webhooks[0].url, "https://hooks.slack.com/test");
+        assert_eq!(deserialized.webhooks[0].timeout_secs, 5);
+        assert_eq!(
+            deserialized.webhooks[0]
+                .headers
+                .get("Authorization")
+                .unwrap(),
+            "Bearer test-token"
+        );
+    }
+
+    #[test]
+    fn test_audit_config_with_alerts_json() {
+        let json_str = r#"{
+            "enabled": true,
+            "audit_all_requests": false,
+            "audit_auth_events": true,
+            "otlp_logs_enabled": false,
+            "syslog": {
+                "transport": "udp",
+                "address": "127.0.0.1:514",
+                "facility": 13
+            },
+            "alerts": {
+                "enabled": true,
+                "threshold_secs": 30,
+                "cooldown_secs": 300,
+                "notify_recovery": true,
+                "webhooks": [
+                    {
+                        "url": "https://hooks.slack.com/services/T00/B00/xxx",
+                        "timeout_secs": 10
+                    }
+                ]
+            }
+        }"#;
+
+        let config: AuditConfig = serde_json::from_str(json_str).unwrap();
+        assert!(config.enabled);
+        let alerts = config.alerts.unwrap();
+        assert!(alerts.enabled);
+        assert_eq!(alerts.threshold_secs, 30);
+        assert_eq!(alerts.cooldown_secs, 300);
+        assert!(alerts.notify_recovery);
+        assert_eq!(alerts.webhooks.len(), 1);
+        assert_eq!(
+            alerts.webhooks[0].url,
+            "https://hooks.slack.com/services/T00/B00/xxx"
+        );
     }
 }

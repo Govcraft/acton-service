@@ -8,9 +8,12 @@ use acton_reactive::prelude::*;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use super::alert::AuditAlertHook;
+use super::alert_webhook::WebhookAlertHook;
 use super::chain::AuditChain;
 use super::config::AuditConfig;
 use super::event::AuditEvent;
+use super::failure_tracker::FailureTracker;
 use super::storage::AuditStorage;
 use super::syslog::SyslogSender;
 
@@ -25,6 +28,8 @@ pub struct AuditAgentState {
     pub syslog: Option<SyslogSender>,
     /// Audit configuration
     pub config: Option<AuditConfig>,
+    /// Storage failure tracker (if alerts are configured)
+    pub(crate) failure_tracker: Option<Arc<FailureTracker>>,
 }
 
 // Manual Debug impl since AuditChain and dyn AuditStorage don't impl Debug
@@ -35,6 +40,7 @@ impl std::fmt::Debug for AuditAgentState {
             .field("storage", &self.storage.is_some())
             .field("syslog", &self.syslog.is_some())
             .field("config", &self.config.is_some())
+            .field("failure_tracker", &self.failure_tracker.is_some())
             .finish()
     }
 }
@@ -93,9 +99,35 @@ impl AuditAgent {
         let retention_days = config.retention_days;
         let cleanup_interval_hours = config.cleanup_interval_hours;
 
+        // Set up failure tracker if alert hooks are configured
+        let failure_tracker = if let Some(ref alert_config) = config.alerts {
+            if alert_config.enabled {
+                let mut hooks: Vec<Arc<dyn AuditAlertHook>> = Vec::new();
+                for wh in &alert_config.webhooks {
+                    hooks.push(Arc::new(WebhookAlertHook::new(
+                        wh.url.clone(),
+                        std::time::Duration::from_secs(wh.timeout_secs),
+                        wh.headers.clone(),
+                    )));
+                }
+                Some(Arc::new(FailureTracker::new(
+                    hooks,
+                    alert_config.threshold_secs,
+                    alert_config.cooldown_secs,
+                    alert_config.notify_recovery,
+                    service_name.clone(),
+                )))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         agent.model.config = Some(config);
         agent.model.storage = storage;
         agent.model.syslog = syslog;
+        agent.model.failure_tracker = failure_tracker;
 
         // Clone values needed for after_start closure
         let storage_for_start = agent.model.storage.clone();
@@ -129,13 +161,24 @@ impl AuditAgent {
             // Clone what we need for the async work
             let storage = agent.model.storage.clone();
             let syslog = agent.model.syslog.clone();
+            let tracker = agent.model.failure_tracker.clone();
 
             // Spawn async persistence/export work (not Sync-required)
             tokio::spawn(async move {
                 // Persist to storage
                 if let Some(ref store) = storage {
-                    if let Err(e) = store.append(&sealed_event).await {
-                        tracing::error!("Failed to persist audit event: {}", e);
+                    match store.append(&sealed_event).await {
+                        Ok(()) => {
+                            if let Some(ref t) = tracker {
+                                t.record_success();
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to persist audit event: {}", e);
+                            if let Some(ref t) = tracker {
+                                t.record_failure(&e.to_string());
+                            }
+                        }
                     }
                 }
 

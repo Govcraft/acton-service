@@ -172,6 +172,17 @@ lazy_init = true      # Initialize connection in background
 # address = "127.0.0.1:514"
 # facility = 13                     # 13 = audit (RFC 5424)
 # # app_name = "my-service"         # Defaults to service.name
+#
+# [audit.alerts]
+# enabled = true
+# threshold_secs = 30
+# cooldown_secs = 300
+# notify_recovery = true
+#
+# [[audit.alerts.webhooks]]
+# url = "https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+# timeout_secs = 10
+# # headers = { "Authorization" = "Bearer your-token" }
 
 # ============================================================================
 # LOGIN LOCKOUT CONFIGURATION (Optional)
