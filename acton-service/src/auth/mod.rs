@@ -41,6 +41,9 @@ pub mod tokens;
 // API key management
 pub mod api_keys;
 
+// Key rotation (NIST SC-12)
+pub mod key_rotation;
+
 // OAuth/OIDC providers (requires oauth feature)
 #[cfg(feature = "oauth")]
 pub mod oauth;
@@ -98,3 +101,18 @@ pub use oauth::{
 
 #[cfg(all(feature = "oauth", feature = "cache"))]
 pub use oauth::RedisOAuthStateManager;
+
+// Key rotation exports
+pub use key_rotation::{
+    CachedKey, KeyFormat, KeyManager, KeyRotationConfig, KeyRotationStorage, KeyStatus,
+    SigningKeyMetadata,
+};
+
+#[cfg(feature = "database")]
+pub use key_rotation::PgKeyRotationStorage;
+
+#[cfg(feature = "turso")]
+pub use key_rotation::TursoKeyRotationStorage;
+
+#[cfg(feature = "surrealdb")]
+pub use key_rotation::SurrealKeyRotationStorage;

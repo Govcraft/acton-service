@@ -12,6 +12,7 @@ use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
 
 use crate::auth::config::{JwtGenerationConfig, TokenGenerationConfig};
+use crate::auth::key_rotation::manager::KeyManager;
 use crate::error::Error;
 use crate::middleware::Claims;
 
@@ -40,6 +41,11 @@ struct JwtClaims {
 }
 
 /// JWT token generator
+///
+/// When a [`KeyManager`] is configured via [`with_key_manager`](Self::with_key_manager),
+/// the active signing key from the key rotation system is used and the JWT header's
+/// `kid` field is set to the key identifier. When no `KeyManager` is set, the static
+/// key from configuration is used (backward compatible).
 #[derive(Clone)]
 pub struct JwtGenerator {
     encoding_key: Arc<EncodingKey>,
@@ -47,6 +53,7 @@ pub struct JwtGenerator {
     config: TokenGenerationConfig,
     issuer: Option<String>,
     audience: Option<String>,
+    key_manager: Option<Arc<KeyManager>>,
 }
 
 impl JwtGenerator {
@@ -81,6 +88,7 @@ impl JwtGenerator {
             config: token_config.clone(),
             issuer,
             audience,
+            key_manager: None,
         })
     }
 
@@ -93,6 +101,17 @@ impl JwtGenerator {
     /// Set the audience claim
     pub fn with_audience(mut self, audience: impl Into<String>) -> Self {
         self.audience = Some(audience.into());
+        self
+    }
+
+    /// Set the key manager for key rotation support
+    ///
+    /// When a key manager is configured, `generate_token` will use the active
+    /// signing key from the rotation system and set the JWT header's `kid`
+    /// field. When not set, the static key from configuration is used
+    /// (backward compatible).
+    pub fn with_key_manager(mut self, key_manager: Arc<KeyManager>) -> Self {
+        self.key_manager = Some(key_manager);
         self
     }
 
@@ -118,6 +137,25 @@ impl JwtGenerator {
             roles: claims.roles.clone(),
             perms: claims.perms.clone(),
         };
+
+        // If a key manager is configured, use the active signing key from rotation
+        if let Some(ref km) = self.key_manager {
+            let cached_key = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(km.get_signing_key())
+            })?;
+
+            if let Some(cached) = cached_key {
+                let mut header = Header::new(self.algorithm);
+                header.kid = Some(cached.kid.clone());
+                let encoding_key = create_encoding_key(&cached.key_material, self.algorithm)?;
+                return encode(&header, &jwt_claims, &encoding_key)
+                    .map_err(|e| Error::Jwt(Box::new(e)));
+            }
+            // No active key in rotation system; fall through to static key
+            tracing::warn!(
+                "key rotation enabled but no active signing key found, using static key"
+            );
+        }
 
         let header = Header::new(self.algorithm);
         encode(&header, &jwt_claims, &self.encoding_key).map_err(|e| Error::Jwt(Box::new(e)))

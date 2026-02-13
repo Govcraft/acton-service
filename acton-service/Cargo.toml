@@ -142,7 +142,7 @@ cedar-authz = ["dep:cedar-policy", "cache"]
 jwt = ["dep:jsonwebtoken"]
 
 # Authentication features
-auth = ["dep:argon2", "dep:rand"]                            # Core: password hashing + token generation
+auth = ["dep:argon2", "dep:rand", "dep:blake3", "dep:base64"] # Core: password hashing + token generation + key rotation
 oauth = ["auth", "dep:oauth2", "dep:openidconnect", "dep:base64"]  # OAuth/OIDC providers (requires auth)
 auth-full = ["auth", "oauth", "jwt", "cache", "database", "login-lockout", "accounts"]  # All auth features (excludes turso - mutually exclusive with database)
 

@@ -12,6 +12,7 @@ use rusty_paseto::prelude::*;
 use serde_json::json;
 
 use crate::auth::config::{PasetoGenerationConfig, TokenGenerationConfig};
+use crate::auth::key_rotation::manager::KeyManager;
 use crate::error::Error;
 use crate::middleware::Claims;
 
@@ -29,12 +30,19 @@ enum PasetoGeneratorKey {
 ///
 /// Generates PASETO V4 tokens using either symmetric (local) or
 /// asymmetric (public) cryptography.
+///
+/// When a [`KeyManager`] is configured via [`with_key_manager`](Self::with_key_manager),
+/// the active signing key from the key rotation system is used instead of the
+/// static key. The `kid` is embedded in the PASETO footer as JSON `{"kid":"<kid>"}`.
+/// When no `KeyManager` is set, the static key from configuration is used (backward
+/// compatible).
 #[derive(Clone)]
 pub struct PasetoGenerator {
     key: Arc<PasetoGeneratorKey>,
     config: TokenGenerationConfig,
     issuer: Option<String>,
     audience: Option<String>,
+    key_manager: Option<Arc<KeyManager>>,
 }
 
 impl PasetoGenerator {
@@ -116,6 +124,7 @@ impl PasetoGenerator {
             config: token_config.clone(),
             issuer,
             audience,
+            key_manager: None,
         })
     }
 
@@ -131,6 +140,7 @@ impl PasetoGenerator {
             config,
             issuer: None,
             audience: None,
+            key_manager: None,
         }
     }
 
@@ -148,6 +158,7 @@ impl PasetoGenerator {
             config,
             issuer: None,
             audience: None,
+            key_manager: None,
         }
     }
 
@@ -160,6 +171,17 @@ impl PasetoGenerator {
     /// Set the audience claim
     pub fn with_audience(mut self, audience: impl Into<String>) -> Self {
         self.audience = Some(audience.into());
+        self
+    }
+
+    /// Set the key manager for key rotation support
+    ///
+    /// When a key manager is configured, `generate_token` will use the active
+    /// signing key from the rotation system and embed the `kid` in the PASETO
+    /// footer as `{"kid":"<kid>"}`. When not set, the static key from
+    /// configuration is used (backward compatible).
+    pub fn with_key_manager(mut self, key_manager: Arc<KeyManager>) -> Self {
+        self.key_manager = Some(key_manager);
         self
     }
 
@@ -210,7 +232,36 @@ impl PasetoGenerator {
             payload["aud"] = json!(aud);
         }
 
-        // Generate the token based on key type
+        // If a key manager is configured, use the active signing key from rotation
+        if let Some(ref km) = self.key_manager {
+            let cached_key = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(km.get_signing_key())
+            })?;
+
+            if let Some(cached) = cached_key {
+                let footer_json = json!({"kid": cached.kid}).to_string();
+                return match self.key.as_ref() {
+                    PasetoGeneratorKey::V4Local { .. } => {
+                        self.generate_v4_local_with_footer(
+                            &to_32_byte_array(&cached.key_material)?,
+                            &payload,
+                            &footer_json,
+                        )
+                    }
+                    PasetoGeneratorKey::V4Public { .. } => {
+                        self.generate_v4_public_with_footer(
+                            &to_64_byte_array(&cached.key_material)?,
+                            &payload,
+                            &footer_json,
+                        )
+                    }
+                };
+            }
+            // No active key in rotation system; fall through to static key
+            tracing::warn!("key rotation enabled but no active signing key found, using static key");
+        }
+
+        // Generate the token based on static key type
         match self.key.as_ref() {
             PasetoGeneratorKey::V4Local { key_bytes } => {
                 self.generate_v4_local(key_bytes, &payload)
@@ -226,55 +277,22 @@ impl PasetoGenerator {
         key_bytes: &[u8; 32],
         payload: &serde_json::Value,
     ) -> Result<String, Error> {
+        self.generate_v4_local_with_footer(key_bytes, payload, "")
+    }
+
+    fn generate_v4_local_with_footer(
+        &self,
+        key_bytes: &[u8; 32],
+        payload: &serde_json::Value,
+        footer: &str,
+    ) -> Result<String, Error> {
         let key = PasetoSymmetricKey::<V4, Local>::from(Key::from(key_bytes));
 
-        // Build claims from payload using mutable reference pattern
         let mut builder = PasetoBuilder::<V4, Local>::default();
+        Self::populate_builder_claims(&mut builder, payload)?;
 
-        // Add standard claims
-        if let Some(sub) = payload.get("sub").and_then(|v| v.as_str()) {
-            builder.set_claim(SubjectClaim::from(sub));
-        }
-        if let Some(exp) = payload.get("exp").and_then(|v| v.as_str()) {
-            let claim = ExpirationClaim::try_from(exp)
-                .map_err(|e| Error::Paseto(format!("Invalid expiration: {}", e)))?;
-            builder.set_claim(claim);
-        }
-        if let Some(iat) = payload.get("iat").and_then(|v| v.as_str()) {
-            let claim = IssuedAtClaim::try_from(iat)
-                .map_err(|e| Error::Paseto(format!("Invalid issued at: {}", e)))?;
-            builder.set_claim(claim);
-        }
-        if let Some(jti) = payload.get("jti").and_then(|v| v.as_str()) {
-            builder.set_claim(TokenIdentifierClaim::from(jti));
-        }
-        if let Some(iss) = payload.get("iss").and_then(|v| v.as_str()) {
-            builder.set_claim(IssuerClaim::from(iss));
-        }
-        if let Some(aud) = payload.get("aud").and_then(|v| v.as_str()) {
-            builder.set_claim(AudienceClaim::from(aud));
-        }
-
-        // Add custom claims
-        if let Some(email) = payload.get("email").and_then(|v| v.as_str()) {
-            let claim = CustomClaim::try_from(("email", email))
-                .map_err(|e| Error::Paseto(format!("Invalid email claim: {}", e)))?;
-            builder.set_claim(claim);
-        }
-        if let Some(username) = payload.get("username").and_then(|v| v.as_str()) {
-            let claim = CustomClaim::try_from(("username", username))
-                .map_err(|e| Error::Paseto(format!("Invalid username claim: {}", e)))?;
-            builder.set_claim(claim);
-        }
-        if let Some(roles) = payload.get("roles") {
-            let claim = CustomClaim::try_from(("roles", roles.clone()))
-                .map_err(|e| Error::Paseto(format!("Invalid roles claim: {}", e)))?;
-            builder.set_claim(claim);
-        }
-        if let Some(perms) = payload.get("perms") {
-            let claim = CustomClaim::try_from(("perms", perms.clone()))
-                .map_err(|e| Error::Paseto(format!("Invalid perms claim: {}", e)))?;
-            builder.set_claim(claim);
+        if !footer.is_empty() {
+            builder.set_footer(Footer::from(footer));
         }
 
         builder
@@ -287,11 +305,41 @@ impl PasetoGenerator {
         private_key_bytes: &[u8; 64],
         payload: &serde_json::Value,
     ) -> Result<String, Error> {
+        self.generate_v4_public_with_footer(private_key_bytes, payload, "")
+    }
+
+    fn generate_v4_public_with_footer(
+        &self,
+        private_key_bytes: &[u8; 64],
+        payload: &serde_json::Value,
+        footer: &str,
+    ) -> Result<String, Error> {
         let key = PasetoAsymmetricPrivateKey::<V4, Public>::from(private_key_bytes.as_slice());
 
-        // Build claims from payload using mutable reference pattern
         let mut builder = PasetoBuilder::<V4, Public>::default();
+        Self::populate_builder_claims(&mut builder, payload)?;
 
+        if !footer.is_empty() {
+            builder.set_footer(Footer::from(footer));
+        }
+
+        builder
+            .build(&key)
+            .map_err(|e| Error::Paseto(format!("Failed to build PASETO token: {}", e)))
+    }
+
+    /// Populate standard and custom claims on a PASETO builder
+    ///
+    /// Shared between V4 Local and V4 Public builders to avoid
+    /// duplicating claim-setting logic.
+    fn populate_builder_claims<'a, Version, Purpose>(
+        builder: &mut PasetoBuilder<'a, Version, Purpose>,
+        payload: &'a serde_json::Value,
+    ) -> Result<(), Error>
+    where
+        Version: rusty_paseto::core::VersionTrait,
+        Purpose: rusty_paseto::core::PurposeTrait,
+    {
         // Add standard claims
         if let Some(sub) = payload.get("sub").and_then(|v| v.as_str()) {
             builder.set_claim(SubjectClaim::from(sub));
@@ -338,10 +386,28 @@ impl PasetoGenerator {
             builder.set_claim(claim);
         }
 
-        builder
-            .build(&key)
-            .map_err(|e| Error::Paseto(format!("Failed to build PASETO token: {}", e)))
+        Ok(())
     }
+}
+
+/// Convert a byte slice to a 32-byte array, returning an error if the length is wrong
+fn to_32_byte_array(bytes: &[u8]) -> Result<[u8; 32], Error> {
+    bytes.try_into().map_err(|_| {
+        Error::Internal(format!(
+            "key material must be exactly 32 bytes, got {}",
+            bytes.len()
+        ))
+    })
+}
+
+/// Convert a byte slice to a 64-byte array, returning an error if the length is wrong
+fn to_64_byte_array(bytes: &[u8]) -> Result<[u8; 64], Error> {
+    bytes.try_into().map_err(|_| {
+        Error::Internal(format!(
+            "key material must be exactly 64 bytes, got {}",
+            bytes.len()
+        ))
+    })
 }
 
 impl TokenGenerator for PasetoGenerator {

@@ -249,10 +249,17 @@ pub mod prelude {
     // Auth module exports
     #[cfg(feature = "auth")]
     pub use crate::auth::{
-        ApiKey, ApiKeyGenerator, AuthConfig, PasetoGenerationConfig, PasetoGenerator,
-        PasswordConfig, PasswordHasher, RefreshTokenConfig, TokenGenerationConfig, TokenGenerator,
-        TokenPair,
+        ApiKey, ApiKeyGenerator, AuthConfig, CachedKey, KeyFormat, KeyManager, KeyRotationConfig,
+        KeyStatus, PasetoGenerationConfig, PasetoGenerator, PasswordConfig, PasswordHasher,
+        RefreshTokenConfig, SigningKeyMetadata, TokenGenerationConfig, TokenGenerator, TokenPair,
     };
+
+    // Key rotation storage trait (requires auth + a database backend)
+    #[cfg(all(
+        feature = "auth",
+        any(feature = "database", feature = "turso", feature = "surrealdb")
+    ))]
+    pub use crate::auth::KeyRotationStorage;
 
     #[cfg(all(feature = "auth", feature = "jwt"))]
     pub use crate::auth::JwtGenerator;

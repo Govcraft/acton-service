@@ -210,6 +210,19 @@ lazy_init = true      # Initialize connection in background
 # # headers = { "Authorization" = "Bearer your-token" }
 
 # ============================================================================
+# KEY ROTATION CONFIGURATION (Optional)
+# Requires feature: auth + a database backend (database, turso, or surrealdb)
+# NIST SP 800-53 SC-12 compliant automated signing key lifecycle management
+# ============================================================================
+# [auth.key_rotation]
+# enabled = true
+# rotation_period_secs = 86400       # Rotate keys every 24 hours
+# drain_grace_period_secs = 300      # 5 min grace after rotation for in-flight tokens
+# check_interval_secs = 60           # Agent checks rotation status every 60 seconds
+# retention_days = 90                # Keep retired key metadata for 90 days
+# # bootstrap_key_path = "./keys/initial.key"  # Optional initial key for first startup
+
+# ============================================================================
 # LOGIN LOCKOUT CONFIGURATION (Optional)
 # Requires feature: login-lockout (depends on auth + cache)
 # ============================================================================

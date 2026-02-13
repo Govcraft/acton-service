@@ -108,6 +108,11 @@ where
     #[serde(default)]
     pub audit: Option<crate::audit::AuditConfig>,
 
+    /// Authentication configuration (optional, requires `auth` feature)
+    #[cfg(feature = "auth")]
+    #[serde(default)]
+    pub auth: Option<crate::auth::AuthConfig>,
+
     /// Login lockout configuration (optional)
     #[cfg(feature = "login-lockout")]
     #[serde(default)]
@@ -1413,6 +1418,8 @@ where
             session: None,
             #[cfg(feature = "audit")]
             audit: None,
+            #[cfg(feature = "auth")]
+            auth: None,
             #[cfg(feature = "login-lockout")]
             lockout: None,
             #[cfg(feature = "tls")]
@@ -1504,6 +1511,8 @@ mod tests {
             session: None,
             #[cfg(feature = "audit")]
             audit: None,
+            #[cfg(feature = "auth")]
+            auth: None,
             #[cfg(feature = "login-lockout")]
             lockout: None,
             #[cfg(feature = "tls")]
@@ -1560,6 +1569,8 @@ mod tests {
             session: None,
             #[cfg(feature = "audit")]
             audit: None,
+            #[cfg(feature = "auth")]
+            auth: None,
             #[cfg(feature = "login-lockout")]
             lockout: None,
             #[cfg(feature = "tls")]

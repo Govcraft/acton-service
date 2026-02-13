@@ -7,6 +7,9 @@ use axum::{
     response::Response,
 };
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+
+#[cfg(feature = "auth")]
+use jsonwebtoken::decode_header;
 use std::{fs, sync::Arc};
 
 #[cfg(feature = "cache")]
@@ -15,13 +18,24 @@ use super::token::TokenRevocation;
 use super::token::{extract_token, Claims, TokenValidator};
 use crate::{config::JwtConfig, error::Error};
 
+#[cfg(feature = "auth")]
+use crate::auth::key_rotation::manager::KeyManager;
+
 /// JWT authentication middleware state
+///
+/// When a [`KeyManager`] is configured via [`with_key_manager`](Self::with_key_manager),
+/// validation extracts the `kid` from the JWT header and looks up the corresponding
+/// key in the rotation system. If the `kid` is not found or absent, it falls back to
+/// trying all verification keys or the static key. This ensures backward compatibility
+/// with tokens issued before key rotation was enabled.
 #[derive(Clone)]
 pub struct JwtAuth {
     decoding_key: Arc<DecodingKey>,
     validation: Validation,
     #[cfg(feature = "cache")]
     revocation: Option<Arc<dyn TokenRevocation>>,
+    #[cfg(feature = "auth")]
+    key_manager: Option<Arc<KeyManager>>,
 }
 
 impl JwtAuth {
@@ -92,6 +106,8 @@ impl JwtAuth {
             validation,
             #[cfg(feature = "cache")]
             revocation: None,
+            #[cfg(feature = "auth")]
+            key_manager: None,
         })
     }
 
@@ -102,6 +118,20 @@ impl JwtAuth {
     #[cfg(feature = "cache")]
     pub fn with_revocation<R: TokenRevocation + 'static>(mut self, revocation: R) -> Self {
         self.revocation = Some(Arc::new(revocation));
+        self
+    }
+
+    /// Set the key manager for key rotation support
+    ///
+    /// When a key manager is configured, token validation will first attempt to
+    /// extract the `kid` from the JWT header and look up the corresponding key.
+    /// If the `kid` is not found in the rotation system or is absent from the
+    /// header, it falls back to trying all verification keys, then the static
+    /// key. This ensures backward compatibility with tokens issued before key
+    /// rotation was enabled.
+    #[cfg(feature = "auth")]
+    pub fn with_key_manager(mut self, key_manager: Arc<KeyManager>) -> Self {
+        self.key_manager = Some(key_manager);
         self
     }
 
@@ -241,8 +271,81 @@ impl JwtAuth {
 
 impl TokenValidator for JwtAuth {
     fn validate_token(&self, token: &str) -> Result<Claims, Error> {
+        // If key_manager is configured, try to use rotated keys first
+        #[cfg(feature = "auth")]
+        if let Some(ref km) = self.key_manager {
+            // Extract kid from JWT header (this does not verify the token)
+            if let Ok(header) = decode_header(token) {
+                if let Some(ref kid) = header.kid {
+                    // Look up the specific key by kid
+                    let cached_key = tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current()
+                            .block_on(km.get_verification_key(kid))
+                    })?;
+
+                    if let Some(cached) = cached_key {
+                        let decoding_key =
+                            create_decoding_key(&cached.key_material, &self.validation)?;
+                        let token_data =
+                            decode::<Claims>(token, &decoding_key, &self.validation)?;
+                        return Ok(token_data.claims);
+                    }
+
+                    // kid not found in rotation system -- try all verification keys
+                    let all_keys = tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current()
+                            .block_on(km.get_all_verification_keys())
+                    })?;
+
+                    for cached in &all_keys {
+                        if let Ok(dk) =
+                            create_decoding_key(&cached.key_material, &self.validation)
+                        {
+                            if let Ok(token_data) =
+                                decode::<Claims>(token, &dk, &self.validation)
+                            {
+                                return Ok(token_data.claims);
+                            }
+                        }
+                    }
+                }
+                // No kid in header -- fall through to static key
+            }
+        }
+
+        // Default: validate with the static key
         let token_data = decode::<Claims>(token, &self.decoding_key, &self.validation)?;
         Ok(token_data.claims)
+    }
+}
+
+/// Create a [`DecodingKey`] from raw key bytes based on the validation's algorithm
+#[cfg(feature = "auth")]
+fn create_decoding_key(
+    key_bytes: &[u8],
+    validation: &Validation,
+) -> Result<DecodingKey, Error> {
+    // The Validation struct stores the allowed algorithms; use the first one
+    let algorithm = validation
+        .algorithms
+        .first()
+        .copied()
+        .unwrap_or(Algorithm::HS256);
+
+    match algorithm {
+        Algorithm::RS256 | Algorithm::RS384 | Algorithm::RS512 => {
+            DecodingKey::from_rsa_pem(key_bytes).map_err(|e| Error::Jwt(Box::new(e)))
+        }
+        Algorithm::ES256 | Algorithm::ES384 => {
+            DecodingKey::from_ec_pem(key_bytes).map_err(|e| Error::Jwt(Box::new(e)))
+        }
+        Algorithm::HS256 | Algorithm::HS384 | Algorithm::HS512 => {
+            Ok(DecodingKey::from_secret(key_bytes))
+        }
+        _ => Err(Error::Internal(format!(
+            "unsupported algorithm for key rotation: {:?}",
+            algorithm
+        ))),
     }
 }
 

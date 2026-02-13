@@ -7,7 +7,7 @@ default-members = ["acton-service", "acton-cli"]
 resolver = "2"
 
 [workspace.package]
-version = "0.16.0"
+version = "0.17.0"
 edition = "2021"
 authors = ["roland@govcraft.ai"]
 license = "MIT"
@@ -89,7 +89,7 @@ anyhow = "1.0.100"
 chrono = { version = "0.4.42", features = ["clock", "std", "serde"], default-features = false }
 
 # UUID
-uuid = { version = "1.18.1", features = ["v4", "serde"] }
+uuid = { version = "1.18.1", features = ["v4", "v7", "serde"] }
 
 # HTTP client
 reqwest = { version = "0.12.24", features = ["json"] }

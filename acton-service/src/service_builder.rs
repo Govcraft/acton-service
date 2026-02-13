@@ -657,6 +657,33 @@ where
             }
         };
 
+        // Spawn key rotation agent if configured (requires auth + a DB backend)
+        #[cfg(feature = "auth")]
+        let key_manager: Option<std::sync::Arc<crate::auth::key_rotation::KeyManager>> = {
+            let kr_enabled = config
+                .auth
+                .as_ref()
+                .and_then(|a| a.key_rotation.as_ref())
+                .is_some_and(|kr| kr.enabled);
+
+            if kr_enabled {
+                Self::init_key_rotation(
+                    &mut self,
+                    &config,
+                    #[cfg(feature = "database")]
+                    &shared_db_pool,
+                    #[cfg(feature = "turso")]
+                    &shared_turso_db,
+                    #[cfg(feature = "surrealdb")]
+                    &shared_surrealdb_client,
+                    #[cfg(feature = "audit")]
+                    &audit_logger,
+                )
+            } else {
+                None
+            }
+        };
+
         let routes = self.routes.unwrap_or_default();
 
         // Build AppState with agent-managed pools
@@ -699,6 +726,11 @@ where
             #[cfg(feature = "audit")]
             if let Some(ref logger) = audit_logger {
                 state.set_audit_logger(logger.clone());
+            }
+
+            #[cfg(feature = "auth")]
+            if let Some(ref km) = key_manager {
+                state.set_key_manager(km.clone());
             }
 
             state
@@ -876,6 +908,12 @@ where
                 crate::config::TokenConfig::Paseto(paseto_config) => {
                     match crate::middleware::paseto::PasetoAuth::new(paseto_config) {
                         Ok(paseto_auth) => {
+                            #[cfg(feature = "auth")]
+                            let paseto_auth = if let Some(ref km) = key_manager {
+                                paseto_auth.with_key_manager(km.clone())
+                            } else {
+                                paseto_auth
+                            };
                             tracing::debug!("Auto-applying PASETO authentication middleware");
                             app = app.layer(axum::middleware::from_fn_with_state(
                                 paseto_auth,
@@ -891,6 +929,12 @@ where
                 crate::config::TokenConfig::Jwt(jwt_config) => {
                     match crate::middleware::jwt::JwtAuth::new(jwt_config) {
                         Ok(jwt_auth) => {
+                            #[cfg(feature = "auth")]
+                            let jwt_auth = if let Some(ref km) = key_manager {
+                                jwt_auth.with_key_manager(km.clone())
+                            } else {
+                                jwt_auth
+                            };
                             tracing::debug!("Auto-applying JWT authentication middleware");
                             app = app.layer(axum::middleware::from_fn_with_state(
                                 jwt_auth,
@@ -955,6 +999,171 @@ where
             tls_config,
             agent_runtime: self.agent_runtime,
         }
+    }
+
+    /// Initialize key rotation subsystem if enabled and a DB backend is available
+    ///
+    /// Creates the appropriate storage backend, initializes the KeyManager,
+    /// runs storage initialization (table creation), refreshes the key cache,
+    /// and spawns the KeyRotationAgent for periodic rotation checks.
+    ///
+    /// Returns `Some(Arc<KeyManager>)` on success, `None` if no DB backend is
+    /// available or initialization fails.
+    #[cfg(feature = "auth")]
+    #[allow(unused_variables)]
+    fn init_key_rotation(
+        builder: &mut Self,
+        config: &Config<T>,
+        #[cfg(feature = "database")] shared_db_pool: &Option<crate::agents::SharedDbPool>,
+        #[cfg(feature = "turso")] shared_turso_db: &Option<crate::agents::SharedTursoDb>,
+        #[cfg(feature = "surrealdb")] shared_surrealdb_client: &Option<
+            crate::agents::SharedSurrealDb,
+        >,
+        #[cfg(feature = "audit")] audit_logger: &Option<crate::audit::AuditLogger>,
+    ) -> Option<std::sync::Arc<crate::auth::key_rotation::KeyManager>> {
+        let kr_config = config
+            .auth
+            .as_ref()
+            .and_then(|a| a.key_rotation.as_ref())
+            .cloned()?;
+
+        let service_name = config.service.name.clone();
+
+        // Try to create a storage backend from available DB pools.
+        // The pool may not be connected yet (agents connect asynchronously),
+        // so we attempt to read the shared lock. If the pool is not available
+        // yet we log a warning and skip key rotation initialization -- the
+        // KeyRotationAgent's periodic tick will retry once pools are ready.
+        let storage: Option<std::sync::Arc<dyn crate::auth::key_rotation::KeyRotationStorage>> = {
+            #[allow(unused_mut)]
+            let mut s: Option<
+                std::sync::Arc<dyn crate::auth::key_rotation::KeyRotationStorage>,
+            > = None;
+
+            #[cfg(feature = "database")]
+            if s.is_none() {
+                if let Some(ref pool_lock) = shared_db_pool {
+                    if let Ok(guard) = pool_lock.try_read() {
+                        if let Some(ref pool) = *guard {
+                            s = Some(std::sync::Arc::new(
+                                crate::auth::key_rotation::PgKeyRotationStorage::new(pool.clone()),
+                            ));
+                            tracing::debug!("Key rotation using PostgreSQL storage");
+                        }
+                    }
+                }
+            }
+
+            #[cfg(feature = "turso")]
+            if s.is_none() {
+                if let Some(ref db_lock) = shared_turso_db {
+                    if let Ok(guard) = db_lock.try_read() {
+                        if let Some(ref db) = *guard {
+                            s = Some(std::sync::Arc::new(
+                                crate::auth::key_rotation::TursoKeyRotationStorage::new(
+                                    db.clone(),
+                                ),
+                            ));
+                            tracing::debug!("Key rotation using Turso storage");
+                        }
+                    }
+                }
+            }
+
+            #[cfg(feature = "surrealdb")]
+            if s.is_none() {
+                if let Some(ref client_lock) = shared_surrealdb_client {
+                    if let Ok(guard) = client_lock.try_read() {
+                        if let Some(ref client) = *guard {
+                            s = Some(std::sync::Arc::new(
+                                crate::auth::key_rotation::SurrealKeyRotationStorage::new(
+                                    client.clone(),
+                                ),
+                            ));
+                            tracing::debug!("Key rotation using SurrealDB storage");
+                        }
+                    }
+                }
+            }
+
+            s
+        };
+
+        let storage = match storage {
+            Some(s) => s,
+            None => {
+                tracing::warn!(
+                    "Key rotation enabled but no database pool is available yet. \
+                     Key rotation will not start until a database backend connects."
+                );
+                return None;
+            }
+        };
+
+        // Create key manager and initialize storage + cache
+        let key_manager = crate::auth::key_rotation::KeyManager::new(
+            storage,
+            service_name.clone(),
+            kr_config.clone(),
+        );
+
+        if let Ok(_handle) = tokio::runtime::Handle::try_current() {
+            let init_result = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    // Initialize storage (create tables/indexes)
+                    key_manager.storage().initialize().await?;
+
+                    // Populate the in-memory cache from storage
+                    key_manager.refresh_cache().await?;
+
+                    Ok::<(), crate::error::Error>(())
+                })
+            });
+
+            if let Err(e) = init_result {
+                tracing::error!("Failed to initialize key rotation storage: {}", e);
+                return None;
+            }
+        } else {
+            tracing::warn!("No tokio runtime available for key rotation initialization");
+            return None;
+        }
+
+        let km_arc = std::sync::Arc::new(key_manager.clone());
+
+        // Spawn the KeyRotationAgent
+        if let Ok(_handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    // Initialize agent runtime if not already done
+                    if builder.agent_runtime.is_none() {
+                        builder.agent_runtime =
+                            Some(acton_reactive::prelude::ActonApp::launch_async().await);
+                    }
+
+                    if let Some(ref mut runtime) = builder.agent_runtime {
+                        match crate::auth::key_rotation::KeyRotationAgent::spawn(
+                            runtime,
+                            key_manager,
+                            kr_config,
+                            #[cfg(feature = "audit")]
+                            audit_logger.clone(),
+                        )
+                        .await
+                        {
+                            Ok(_handle) => {
+                                tracing::info!("Key rotation agent spawned");
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to spawn key rotation agent: {}", e);
+                            }
+                        }
+                    }
+                });
+            });
+        }
+
+        Some(km_arc)
     }
 
     /// Apply middleware stack based on configuration

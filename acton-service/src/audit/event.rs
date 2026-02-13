@@ -148,6 +148,12 @@ pub enum AuditEventKind {
     /// Account updated (profile, email verified, password changed, roles) (requires `accounts` feature)
     #[cfg(feature = "accounts")]
     AccountUpdated,
+    /// Signing key was rotated (new key activated, old key moved to draining)
+    AuthKeyRotated,
+    /// Signing key was retired (drain period expired)
+    AuthKeyRetired,
+    /// Key rotation failed
+    AuthKeyRotationFailed,
     /// HTTP request (from audit middleware)
     HttpRequest,
     /// HTTP request denied (rate limit, auth failure, etc.)
@@ -189,6 +195,9 @@ impl std::fmt::Display for AuditEventKind {
             Self::AccountDeleted => write!(f, "account.deleted"),
             #[cfg(feature = "accounts")]
             Self::AccountUpdated => write!(f, "account.updated"),
+            Self::AuthKeyRotated => write!(f, "auth.key.rotated"),
+            Self::AuthKeyRetired => write!(f, "auth.key.retired"),
+            Self::AuthKeyRotationFailed => write!(f, "auth.key.rotation_failed"),
             Self::HttpRequest => write!(f, "http.request"),
             Self::HttpRequestDenied => write!(f, "http.request.denied"),
             Self::Custom(name) => write!(f, "custom.{}", name),
