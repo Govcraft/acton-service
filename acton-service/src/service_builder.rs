@@ -918,12 +918,41 @@ where
 
         let listener_addr = std::net::SocketAddr::from(([0, 0, 0, 0], config.service.port));
 
+        // Load TLS config once at build time (fail fast on bad certs)
+        #[cfg(feature = "tls")]
+        let tls_config = {
+            if let Some(ref tls_cfg) = config.tls {
+                if tls_cfg.enabled {
+                    match crate::tls::load_server_config(tls_cfg) {
+                        Ok(sc) => {
+                            tracing::info!(
+                                "TLS configured (cert: {}, key: {})",
+                                tls_cfg.cert_path.display(),
+                                tls_cfg.key_path.display()
+                            );
+                            Some(sc)
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to load TLS configuration: {}", e);
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
         ActonService {
             config,
             listener_addr,
             app,
             #[cfg(feature = "grpc")]
             grpc_routes: self.grpc_services,
+            #[cfg(feature = "tls")]
+            tls_config,
             agent_runtime: self.agent_runtime,
         }
     }
@@ -950,6 +979,20 @@ where
             }
         };
         app = app.layer(cors_layer);
+
+        // Security headers (after CORS, before compression)
+        {
+            #[cfg(feature = "tls")]
+            let tls_enabled = config.tls.as_ref().map(|t| t.enabled).unwrap_or(false);
+            #[cfg(not(feature = "tls"))]
+            let tls_enabled = false;
+
+            app = crate::middleware::security_headers::apply_security_headers(
+                app,
+                &config.middleware.security_headers,
+                tls_enabled,
+            );
+        }
 
         // Compression - configurable
         if config.middleware.compression {
@@ -1019,6 +1062,8 @@ where
     app: Router,
     #[cfg(feature = "grpc")]
     grpc_routes: Option<tonic::service::Routes>,
+    #[cfg(feature = "tls")]
+    tls_config: Option<std::sync::Arc<tokio_rustls::rustls::ServerConfig>>,
     agent_runtime: Option<acton_reactive::prelude::ActorRuntime>,
 }
 
@@ -1096,14 +1141,53 @@ where
                         // Convert Routes to axum router for the gRPC listener
                         let grpc_app = grpc_routes.into_axum_router();
 
-                        // Spawn gRPC server on separate task
+                        // Spawn gRPC server on separate task (with optional TLS)
+                        #[cfg(feature = "tls")]
+                        let grpc_tls_config = self.tls_config.clone();
+
                         let grpc_handle = tokio::spawn(async move {
+                            #[cfg(feature = "tls")]
+                            if let Some(ref server_config) = grpc_tls_config {
+                                let tls_listener = crate::tls::TlsListener::new(
+                                    grpc_listener,
+                                    server_config.clone(),
+                                );
+                                return axum::serve(tls_listener, grpc_app)
+                                    .with_graceful_shutdown(shutdown_signal())
+                                    .await;
+                            }
+
                             axum::serve(grpc_listener, grpc_app)
                                 .with_graceful_shutdown(shutdown_signal())
                                 .await
                         });
 
-                        // Run HTTP server
+                        // Run HTTP server (with optional TLS)
+                        #[cfg(feature = "tls")]
+                        if let Some(ref server_config) = self.tls_config {
+                            let tls_listener = crate::tls::TlsListener::new(
+                                http_listener,
+                                server_config.clone(),
+                            );
+                            tracing::info!("TLS enabled (HTTPS) for both HTTP and gRPC");
+                            let http_result = axum::serve(tls_listener, self.app)
+                                .with_graceful_shutdown(shutdown_signal())
+                                .await;
+                            let _ = grpc_handle.await;
+                            http_result?;
+
+                            tracing::info!("Server shutdown complete");
+                            if let Some(mut runtime) = self.agent_runtime {
+                                tracing::info!("Shutting down agent runtime...");
+                                if let Err(e) = runtime.shutdown_all().await {
+                                    tracing::error!("Agent runtime shutdown error: {}", e);
+                                }
+                                tracing::info!("Agent runtime shutdown complete");
+                            }
+                            return Ok(());
+                        }
+
+                        // Run HTTP server (plain TCP)
                         let http_result = axum::serve(http_listener, self.app)
                             .with_graceful_shutdown(shutdown_signal())
                             .await;
@@ -1121,11 +1205,28 @@ where
 
                         let listener = TcpListener::bind(&self.listener_addr).await?;
 
-                        // Merge HTTP and gRPC services using Routes.into_axum_router()
-                        // The Routes type automatically handles protocol detection based on content-type
-                        // gRPC requests (content-type: application/grpc) are routed to gRPC services
-                        // All other requests are handled by the HTTP router
+                        // Merge HTTP and gRPC services
                         let hybrid_service = grpc_routes.into_axum_router().merge(self.app);
+
+                        #[cfg(feature = "tls")]
+                        if let Some(ref server_config) = self.tls_config {
+                            let tls_listener =
+                                crate::tls::TlsListener::new(listener, server_config.clone());
+                            tracing::info!("TLS enabled (HTTPS) for hybrid HTTP+gRPC");
+                            axum::serve(tls_listener, hybrid_service)
+                                .with_graceful_shutdown(shutdown_signal())
+                                .await?;
+
+                            tracing::info!("Server shutdown complete");
+                            if let Some(mut runtime) = self.agent_runtime {
+                                tracing::info!("Shutting down agent runtime...");
+                                if let Err(e) = runtime.shutdown_all().await {
+                                    tracing::error!("Agent runtime shutdown error: {}", e);
+                                }
+                                tracing::info!("Agent runtime shutdown complete");
+                            }
+                            return Ok(());
+                        }
 
                         axum::serve(listener, hybrid_service)
                             .with_graceful_shutdown(shutdown_signal())
@@ -1152,6 +1253,28 @@ where
         tracing::info!("Starting HTTP service on {}", self.listener_addr);
 
         let listener = TcpListener::bind(&self.listener_addr).await?;
+
+        #[cfg(feature = "tls")]
+        if let Some(ref server_config) = self.tls_config {
+            let tls_listener =
+                crate::tls::TlsListener::new(listener, server_config.clone());
+            tracing::info!("TLS enabled (HTTPS)");
+            axum::serve(tls_listener, self.app)
+                .with_graceful_shutdown(shutdown_signal())
+                .await?;
+
+            tracing::info!("Server shutdown complete");
+
+            if let Some(mut runtime) = self.agent_runtime {
+                tracing::info!("Shutting down agent runtime...");
+                if let Err(e) = runtime.shutdown_all().await {
+                    tracing::error!("Agent runtime shutdown error: {}", e);
+                }
+                tracing::info!("Agent runtime shutdown complete");
+            }
+
+            return Ok(());
+        }
 
         axum::serve(listener, self.app)
             .with_graceful_shutdown(shutdown_signal())

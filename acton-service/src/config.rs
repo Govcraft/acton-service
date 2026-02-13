@@ -113,6 +113,11 @@ where
     #[serde(default)]
     pub lockout: Option<crate::lockout::LockoutConfig>,
 
+    /// TLS configuration (optional, requires `tls` feature)
+    #[cfg(feature = "tls")]
+    #[serde(default)]
+    pub tls: Option<TlsConfig>,
+
     /// Custom configuration extensions
     ///
     /// Any fields in config.toml that don't match the above framework fields
@@ -676,6 +681,88 @@ impl CedarConfig {
     }
 }
 
+/// TLS configuration (requires `tls` feature)
+///
+/// When enabled, the server listens for HTTPS connections using rustls.
+/// Certificates are loaded at startup from PEM files.
+#[cfg(feature = "tls")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TlsConfig {
+    /// Enable TLS (default: true when section is present)
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Path to PEM-encoded certificate chain
+    pub cert_path: PathBuf,
+
+    /// Path to PEM-encoded private key
+    pub key_path: PathBuf,
+}
+
+/// Security headers configuration
+///
+/// Controls HTTP security headers (HSTS, X-Content-Type-Options, etc.).
+/// No feature gate required -- uses existing `tower-http` `set-header`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecurityHeadersConfig {
+    /// Enable security headers middleware (default: true)
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Send Strict-Transport-Security header (only when TLS is active)
+    #[serde(default = "default_true")]
+    pub hsts: bool,
+
+    /// HSTS max-age in seconds (default: 63072000 = 2 years, OWASP recommendation)
+    #[serde(default = "default_hsts_max_age")]
+    pub hsts_max_age_secs: u64,
+
+    /// Include subdomains in HSTS
+    #[serde(default = "default_false")]
+    pub hsts_include_subdomains: bool,
+
+    /// Add HSTS preload flag
+    #[serde(default = "default_false")]
+    pub hsts_preload: bool,
+
+    /// Send X-Content-Type-Options: nosniff
+    #[serde(default = "default_true")]
+    pub x_content_type_options: bool,
+
+    /// X-Frame-Options value (default: "DENY")
+    #[serde(default = "default_x_frame_options")]
+    pub x_frame_options: String,
+
+    /// Send X-XSS-Protection: 0 (modern recommendation: disable browser XSS filter)
+    #[serde(default = "default_true")]
+    pub x_xss_protection: bool,
+
+    /// Referrer-Policy value (default: "strict-origin-when-cross-origin")
+    #[serde(default = "default_referrer_policy")]
+    pub referrer_policy: String,
+
+    /// Permissions-Policy header value (optional, user-configured)
+    #[serde(default)]
+    pub permissions_policy: Option<String>,
+}
+
+impl Default for SecurityHeadersConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            hsts: true,
+            hsts_max_age_secs: default_hsts_max_age(),
+            hsts_include_subdomains: false,
+            hsts_preload: false,
+            x_content_type_options: true,
+            x_frame_options: default_x_frame_options(),
+            x_xss_protection: true,
+            referrer_policy: default_referrer_policy(),
+            permissions_policy: None,
+        }
+    }
+}
+
 /// Middleware configuration (all optional, feature-gated)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MiddlewareConfig {
@@ -710,6 +797,10 @@ pub struct MiddlewareConfig {
     /// CORS configuration
     #[serde(default = "default_cors_mode")]
     pub cors_mode: String,
+
+    /// Security headers configuration (HSTS, X-Content-Type-Options, etc.)
+    #[serde(default)]
+    pub security_headers: SecurityHeadersConfig,
 }
 
 impl Default for MiddlewareConfig {
@@ -723,6 +814,7 @@ impl Default for MiddlewareConfig {
             catch_panic: true,
             compression: true,
             cors_mode: default_cors_mode(),
+            security_headers: SecurityHeadersConfig::default(),
         }
     }
 }
@@ -966,6 +1058,19 @@ fn default_surrealdb_namespace() -> String {
 #[cfg(feature = "surrealdb")]
 fn default_surrealdb_database() -> String {
     "default".to_string()
+}
+
+// Security headers default functions
+fn default_hsts_max_age() -> u64 {
+    63_072_000 // 2 years (OWASP recommendation)
+}
+
+fn default_x_frame_options() -> String {
+    "DENY".to_string()
+}
+
+fn default_referrer_policy() -> String {
+    "strict-origin-when-cross-origin".to_string()
 }
 
 // Middleware default functions
@@ -1305,6 +1410,8 @@ where
             audit: None,
             #[cfg(feature = "login-lockout")]
             lockout: None,
+            #[cfg(feature = "tls")]
+            tls: None,
             custom: T::default(),
         }
     }
@@ -1392,6 +1499,8 @@ mod tests {
             audit: None,
             #[cfg(feature = "login-lockout")]
             lockout: None,
+            #[cfg(feature = "tls")]
+            tls: None,
             custom,
         };
 
@@ -1444,6 +1553,8 @@ mod tests {
             audit: None,
             #[cfg(feature = "login-lockout")]
             lockout: None,
+            #[cfg(feature = "tls")]
+            tls: None,
             custom: custom.clone(),
         };
 

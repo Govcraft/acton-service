@@ -40,6 +40,17 @@ impl Server {
         // Log middleware configuration
         self.log_middleware_config();
 
+        // Determine TLS status for security headers
+        #[cfg(feature = "tls")]
+        let tls_enabled = self
+            .config
+            .tls
+            .as_ref()
+            .map(|t| t.enabled)
+            .unwrap_or(false);
+        #[cfg(not(feature = "tls"))]
+        let tls_enabled = false;
+
         // Build middleware stack using ServiceBuilder for optimal composition
         // Note: Layers are applied in reverse order (bottom layer is innermost/first)
         let body_limit = self.config.middleware.body_limit_mb * 1024 * 1024;
@@ -47,7 +58,16 @@ impl Server {
 
         let app = app
             // CORS (outermost layer) - configurable
-            .layer(cors_layer)
+            .layer(cors_layer);
+
+        // Security headers (after CORS, before compression)
+        let app = crate::middleware::security_headers::apply_security_headers(
+            app,
+            &self.config.middleware.security_headers,
+            tls_enabled,
+        );
+
+        let app = app
             // Compression - always enabled (minimal overhead)
             .layer(CompressionLayer::new())
             // Request timeout
@@ -75,7 +95,21 @@ impl Server {
 
         tracing::info!("Server listening on {}", addr);
 
-        // Serve with graceful shutdown
+        // Serve with graceful shutdown -- TLS or plain TCP
+        #[cfg(feature = "tls")]
+        if let Some(ref tls_config) = self.config.tls {
+            if tls_config.enabled {
+                let server_config = crate::tls::load_server_config(tls_config)?;
+                let tls_listener = crate::tls::TlsListener::new(listener, server_config);
+                tracing::info!("TLS enabled (HTTPS)");
+                axum::serve(tls_listener, app)
+                    .with_graceful_shutdown(shutdown_signal())
+                    .await?;
+                tracing::info!("Server shutdown complete");
+                return Ok(());
+            }
+        }
+
         axum::serve(listener, app)
             .with_graceful_shutdown(shutdown_signal())
             .await?;
@@ -133,6 +167,28 @@ impl Server {
             );
         } else {
             tracing::info!("  - Local rate limiting: not configured");
+        }
+
+        // TLS status
+        #[cfg(feature = "tls")]
+        if let Some(ref tls_config) = self.config.tls {
+            if tls_config.enabled {
+                tracing::info!("  - TLS: enabled (cert: {})", tls_config.cert_path.display());
+            } else {
+                tracing::info!("  - TLS: disabled");
+            }
+        } else {
+            tracing::info!("  - TLS: not configured");
+        }
+        #[cfg(not(feature = "tls"))]
+        tracing::info!("  - TLS: feature not enabled");
+
+        // Security headers
+        let sh = &self.config.middleware.security_headers;
+        if sh.enabled {
+            tracing::info!("  - Security headers: enabled");
+        } else {
+            tracing::info!("  - Security headers: disabled");
         }
     }
 

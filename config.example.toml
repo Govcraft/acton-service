@@ -99,6 +99,31 @@ requests_per_period = 100    # Max requests per period
 period_secs = 60             # Time period in seconds (60 = per minute)
 burst_size = 10              # Allow temporary bursts
 
+# ----------------------------------------------------------------------------
+# Security Headers
+# No feature gate required -- uses existing tower-http set-header
+# ----------------------------------------------------------------------------
+[middleware.security_headers]
+enabled = true
+hsts = true                              # Strict-Transport-Security (only sent when TLS active)
+hsts_max_age_secs = 63072000             # 2 years (OWASP recommendation)
+hsts_include_subdomains = false
+hsts_preload = false
+x_content_type_options = true            # X-Content-Type-Options: nosniff
+x_frame_options = "DENY"                 # X-Frame-Options value
+x_xss_protection = true                  # X-XSS-Protection: 0 (modern rec: disable browser filter)
+referrer_policy = "strict-origin-when-cross-origin"
+# permissions_policy = "camera=(), microphone=(), geolocation=()"  # Optional
+
+# ============================================================================
+# TLS CONFIGURATION (Optional)
+# Requires feature: tls
+# ============================================================================
+# [tls]
+# enabled = true
+# cert_path = "./certs/server.pem"       # PEM-encoded certificate chain
+# key_path = "./certs/server-key.pem"    # PEM-encoded private key
+
 # ============================================================================
 # DATABASE CONFIGURATION (Optional)
 # ============================================================================

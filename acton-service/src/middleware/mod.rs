@@ -27,6 +27,8 @@ pub mod metrics;
 #[cfg(feature = "governor")]
 pub mod governor;
 
+pub mod security_headers;
+
 #[cfg(feature = "cedar-authz")]
 pub mod cedar;
 
