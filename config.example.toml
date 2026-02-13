@@ -226,6 +226,17 @@ lazy_init = true      # Initialize connection in background
 # key_prefix = "lockout"            # Redis key prefix
 
 # ============================================================================
+# ACCOUNT MANAGEMENT CONFIGURATION (Optional)
+# Requires feature: accounts (depends on auth)
+# ============================================================================
+# [accounts]
+# default_status = "pending_verification"  # Initial status for new accounts
+# require_email_verification = true        # Require email verification before activation
+# inactivity_expiry_days = 0               # Days of inactivity before expiry (0 = disabled)
+# unique_usernames = false                 # Enforce unique usernames
+# audit_events = true                      # Emit audit events for account lifecycle
+
+# ============================================================================
 # OPENTELEMETRY CONFIGURATION (Optional)
 # ============================================================================
 [otlp]

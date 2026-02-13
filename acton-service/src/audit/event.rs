@@ -124,6 +124,30 @@ pub enum AuditEventKind {
     /// Account unlocked (requires `login-lockout` feature)
     #[cfg(feature = "login-lockout")]
     AuthAccountUnlocked,
+    /// Account created (requires `accounts` feature)
+    #[cfg(feature = "accounts")]
+    AccountCreated,
+    /// Account disabled by administrator (requires `accounts` feature)
+    #[cfg(feature = "accounts")]
+    AccountDisabled,
+    /// Account enabled/re-activated (requires `accounts` feature)
+    #[cfg(feature = "accounts")]
+    AccountEnabled,
+    /// Account locked due to security event (requires `accounts` feature)
+    #[cfg(feature = "accounts")]
+    AccountLocked,
+    /// Account unlocked (requires `accounts` feature)
+    #[cfg(feature = "accounts")]
+    AccountUnlocked,
+    /// Account expired (requires `accounts` feature)
+    #[cfg(feature = "accounts")]
+    AccountExpired,
+    /// Account deleted (requires `accounts` feature)
+    #[cfg(feature = "accounts")]
+    AccountDeleted,
+    /// Account updated (profile, email verified, password changed, roles) (requires `accounts` feature)
+    #[cfg(feature = "accounts")]
+    AccountUpdated,
     /// HTTP request (from audit middleware)
     HttpRequest,
     /// HTTP request denied (rate limit, auth failure, etc.)
@@ -149,6 +173,22 @@ impl std::fmt::Display for AuditEventKind {
             Self::AuthAccountLocked => write!(f, "auth.account.locked"),
             #[cfg(feature = "login-lockout")]
             Self::AuthAccountUnlocked => write!(f, "auth.account.unlocked"),
+            #[cfg(feature = "accounts")]
+            Self::AccountCreated => write!(f, "account.created"),
+            #[cfg(feature = "accounts")]
+            Self::AccountDisabled => write!(f, "account.disabled"),
+            #[cfg(feature = "accounts")]
+            Self::AccountEnabled => write!(f, "account.enabled"),
+            #[cfg(feature = "accounts")]
+            Self::AccountLocked => write!(f, "account.locked"),
+            #[cfg(feature = "accounts")]
+            Self::AccountUnlocked => write!(f, "account.unlocked"),
+            #[cfg(feature = "accounts")]
+            Self::AccountExpired => write!(f, "account.expired"),
+            #[cfg(feature = "accounts")]
+            Self::AccountDeleted => write!(f, "account.deleted"),
+            #[cfg(feature = "accounts")]
+            Self::AccountUpdated => write!(f, "account.updated"),
             Self::HttpRequest => write!(f, "http.request"),
             Self::HttpRequestDenied => write!(f, "http.request.denied"),
             Self::Custom(name) => write!(f, "custom.{}", name),

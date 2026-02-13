@@ -118,6 +118,11 @@ where
     #[serde(default)]
     pub tls: Option<TlsConfig>,
 
+    /// Account management configuration (optional)
+    #[cfg(feature = "accounts")]
+    #[serde(default)]
+    pub accounts: Option<crate::accounts::AccountsConfig>,
+
     /// Custom configuration extensions
     ///
     /// Any fields in config.toml that don't match the above framework fields
@@ -1412,6 +1417,8 @@ where
             lockout: None,
             #[cfg(feature = "tls")]
             tls: None,
+            #[cfg(feature = "accounts")]
+            accounts: None,
             custom: T::default(),
         }
     }
@@ -1501,6 +1508,8 @@ mod tests {
             lockout: None,
             #[cfg(feature = "tls")]
             tls: None,
+            #[cfg(feature = "accounts")]
+            accounts: None,
             custom,
         };
 
@@ -1555,6 +1564,8 @@ mod tests {
             lockout: None,
             #[cfg(feature = "tls")]
             tls: None,
+            #[cfg(feature = "accounts")]
+            accounts: None,
             custom: custom.clone(),
         };
 

@@ -137,6 +137,9 @@ pub mod tls;
 #[cfg(feature = "login-lockout")]
 pub mod lockout;
 
+#[cfg(feature = "accounts")]
+pub mod accounts;
+
 /// Internal agent-based components
 ///
 /// Connection pool management is handled internally by agents. Users don't
@@ -424,6 +427,19 @@ pub mod prelude {
 
     #[cfg(all(feature = "login-lockout", feature = "audit"))]
     pub use crate::lockout::AuditLockoutNotification;
+
+    // Account management
+    #[cfg(feature = "accounts")]
+    pub use crate::accounts::{
+        Account, AccountError, AccountEvent, AccountId, AccountNotification, AccountService,
+        AccountStatus, AccountStorage, AccountsConfig, CreateAccount, UpdateAccount,
+    };
+
+    #[cfg(all(feature = "accounts", feature = "audit"))]
+    pub use crate::accounts::AuditAccountNotification;
+
+    #[cfg(feature = "account-handlers")]
+    pub use crate::accounts::handlers::account_routes;
 
     pub use axum::{
         extract::{Form, Path, Query, State},

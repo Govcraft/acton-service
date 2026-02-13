@@ -89,6 +89,10 @@ where
     #[cfg(feature = "audit")]
     audit_logger: Option<crate::audit::AuditLogger>,
 
+    /// Account management service
+    #[cfg(feature = "accounts")]
+    account_service: Option<crate::accounts::AccountService>,
+
     /// Agent broker handle for type-safe event broadcasting
     broker: Option<ActorHandle>,
 }
@@ -112,6 +116,8 @@ where
             surrealdb_client: Arc::new(RwLock::new(None)),
             #[cfg(feature = "audit")]
             audit_logger: None,
+            #[cfg(feature = "accounts")]
+            account_service: None,
             broker: None,
         }
     }
@@ -140,6 +146,8 @@ where
             surrealdb_client: Arc::new(RwLock::new(None)),
             #[cfg(feature = "audit")]
             audit_logger: None,
+            #[cfg(feature = "accounts")]
+            account_service: None,
             broker: None,
         }
     }
@@ -353,6 +361,21 @@ where
     #[cfg(feature = "audit")]
     pub(crate) fn set_audit_logger(&mut self, logger: crate::audit::AuditLogger) {
         self.audit_logger = Some(logger);
+    }
+
+    /// Get the account service for account lifecycle management
+    ///
+    /// Returns the account service if the `accounts` feature is enabled and
+    /// account management was configured.
+    #[cfg(feature = "accounts")]
+    pub fn account_service(&self) -> Option<&crate::accounts::AccountService> {
+        self.account_service.as_ref()
+    }
+
+    /// Set the account service (internal use by ServiceBuilder)
+    #[cfg(feature = "accounts")]
+    pub(crate) fn set_account_service(&mut self, service: crate::accounts::AccountService) {
+        self.account_service = Some(service);
     }
 
     /// Get pool health metrics for all configured pools
@@ -689,6 +712,8 @@ where
             nats_client,
             #[cfg(feature = "audit")]
             audit_logger: None,
+            #[cfg(feature = "accounts")]
+            account_service: None,
             broker: None,
         })
     }

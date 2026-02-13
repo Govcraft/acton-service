@@ -144,9 +144,9 @@ jwt = ["dep:jsonwebtoken"]
 # Authentication features
 auth = ["dep:argon2", "dep:rand"]                            # Core: password hashing + token generation
 oauth = ["auth", "dep:oauth2", "dep:openidconnect", "dep:base64"]  # OAuth/OIDC providers (requires auth)
-auth-full = ["auth", "oauth", "jwt", "cache", "database", "login-lockout"]  # All auth features (excludes turso - mutually exclusive with database)
+auth-full = ["auth", "oauth", "jwt", "cache", "database", "login-lockout", "accounts"]  # All auth features (excludes turso - mutually exclusive with database)
 
-full = ["http", "grpc", "websocket", "database", "cache", "events", "observability", "resilience", "otel-metrics", "governor", "openapi", "cedar-authz", "jwt", "auth", "session-memory", "session-redis", "htmx", "askama", "sse", "pagination-full", "handlers", "login-lockout", "tls"]
+full = ["http", "grpc", "websocket", "database", "cache", "events", "observability", "resilience", "otel-metrics", "governor", "openapi", "cedar-authz", "jwt", "auth", "session-memory", "session-redis", "htmx", "askama", "sse", "pagination-full", "handlers", "login-lockout", "tls", "accounts", "account-handlers"]
 tonic-health = ["dep:tonic-health"]
 tonic-reflection = ["dep:tonic-reflection"]
 tower-resilience-circuitbreaker = ["dep:tower-resilience-circuitbreaker"]
@@ -191,6 +191,12 @@ audit = ["dep:blake3"]
 
 # Login lockout with progressive delay and account lockout
 login-lockout = ["auth", "cache"]
+
+# Account lifecycle management (NIST AC-2)
+accounts = ["auth"]
+
+# Pre-built REST handlers for account management
+account-handlers = ["accounts"]
 
 # Basic examples
 [[example]]
