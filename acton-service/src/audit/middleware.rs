@@ -204,10 +204,7 @@ mod tests {
 
     #[test]
     fn test_path_matches_trailing_wildcard() {
-        assert!(path_matches_glob(
-            "/api/v1/admin/users",
-            "/api/v1/admin/*"
-        ));
+        assert!(path_matches_glob("/api/v1/admin/users", "/api/v1/admin/*"));
         assert!(path_matches_glob(
             "/api/v1/admin/settings",
             "/api/v1/admin/*"
@@ -232,10 +229,7 @@ mod tests {
         ];
 
         assert!(path_matches_patterns("/api/v1/admin/settings", &patterns));
-        assert!(path_matches_patterns(
-            "/api/v1/users/123/delete",
-            &patterns
-        ));
+        assert!(path_matches_patterns("/api/v1/users/123/delete", &patterns));
         assert!(!path_matches_patterns("/api/v1/posts", &patterns));
     }
 }

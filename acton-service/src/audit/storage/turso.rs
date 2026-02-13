@@ -210,7 +210,9 @@ impl AuditStorage for TursoAuditStorage {
                 libsql::params![from_sequence as i64],
             )
             .await
-            .map_err(|e| Error::Internal(format!("Failed to fetch events for verification: {}", e)))?;
+            .map_err(|e| {
+                Error::Internal(format!("Failed to fetch events for verification: {}", e))
+            })?;
 
         let mut events = Vec::new();
         while let Ok(Some(row)) = rows.next().await {

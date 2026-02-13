@@ -17,22 +17,22 @@
 //! - `audit` + `observability`: OTLP log export
 //! - `audit` + `auth`: Automatic auth event emission
 
+pub mod agent;
+pub mod chain;
 pub mod config;
 pub mod event;
-pub mod chain;
-pub mod storage;
-pub mod agent;
 pub mod logger;
 pub mod middleware;
+pub mod storage;
 pub mod syslog;
 
 #[cfg(feature = "observability")]
 pub mod otlp;
 
+pub use agent::AuditAgent;
+pub use chain::{verify_chain, AuditChain, ChainVerificationError};
 pub use config::{AuditConfig, SyslogConfig};
 pub use event::{AuditEvent, AuditEventKind, AuditSeverity, AuditSource};
-pub use chain::{AuditChain, ChainVerificationError, verify_chain};
-pub use storage::AuditStorage;
-pub use agent::AuditAgent;
 pub use logger::AuditLogger;
 pub use middleware::{audit_layer, AuditRoute};
+pub use storage::AuditStorage;

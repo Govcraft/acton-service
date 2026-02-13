@@ -92,7 +92,9 @@ impl PgAuditStorage {
         )
         .execute(&self.pool)
         .await
-        .map_err(|e| Error::Internal(format!("Failed to create audit immutability rules: {}", e)))?;
+        .map_err(|e| {
+            Error::Internal(format!("Failed to create audit immutability rules: {}", e))
+        })?;
 
         Ok(())
     }
@@ -172,7 +174,12 @@ impl AuditStorage for PgAuditStorage {
         .bind(from_sequence as i64)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| Error::Internal(format!("Failed to fetch audit events for verification: {}", e)))?;
+        .map_err(|e| {
+            Error::Internal(format!(
+                "Failed to fetch audit events for verification: {}",
+                e
+            ))
+        })?;
 
         let events: Vec<AuditEvent> = rows.into_iter().map(Into::into).collect();
 

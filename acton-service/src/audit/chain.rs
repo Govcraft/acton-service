@@ -207,7 +207,11 @@ mod tests {
     use crate::audit::event::{AuditEventKind, AuditSeverity};
 
     fn make_event(kind: AuditEventKind) -> AuditEvent {
-        AuditEvent::new(kind, AuditSeverity::Informational, "test-service".to_string())
+        AuditEvent::new(
+            kind,
+            AuditSeverity::Informational,
+            "test-service".to_string(),
+        )
     }
 
     #[test]

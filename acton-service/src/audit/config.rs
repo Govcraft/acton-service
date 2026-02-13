@@ -125,7 +125,10 @@ mod tests {
         assert!(config.audit_auth_events);
         assert!(!config.otlp_logs_enabled);
         assert!(config.audited_routes.is_empty());
-        assert_eq!(config.excluded_routes, vec!["/health", "/ready", "/metrics"]);
+        assert_eq!(
+            config.excluded_routes,
+            vec!["/health", "/ready", "/metrics"]
+        );
     }
 
     #[test]

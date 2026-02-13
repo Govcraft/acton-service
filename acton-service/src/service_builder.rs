@@ -630,7 +630,11 @@ where
                                 {
                                     Ok(handle) => {
                                         tracing::info!("Audit agent spawned");
-                                        Some(crate::audit::AuditLogger::new(handle, service_name, logger_config))
+                                        Some(crate::audit::AuditLogger::new(
+                                            handle,
+                                            service_name,
+                                            logger_config,
+                                        ))
                                     }
                                     Err(e) => {
                                         tracing::error!("Failed to spawn audit agent: {}", e);

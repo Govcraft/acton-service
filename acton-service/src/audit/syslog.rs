@@ -38,7 +38,10 @@ impl SyslogSender {
             _ => SyslogTransport::Udp,
         };
 
-        let app_name = config.app_name.clone().unwrap_or_else(|| "acton".to_string());
+        let app_name = config
+            .app_name
+            .clone()
+            .unwrap_or_else(|| "acton".to_string());
 
         Ok(Self {
             address,

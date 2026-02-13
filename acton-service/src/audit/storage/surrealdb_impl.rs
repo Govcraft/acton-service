@@ -121,9 +121,9 @@ impl From<AuditRow> for AuditEvent {
                 obj.get("id")
                     .and_then(|v| match v {
                         serde_json::Value::String(s) => Some(s.clone()),
-                        serde_json::Value::Object(inner) => {
-                            inner.get("String").and_then(|s| s.as_str().map(String::from))
-                        }
+                        serde_json::Value::Object(inner) => inner
+                            .get("String")
+                            .and_then(|s| s.as_str().map(String::from)),
                         _ => None,
                     })
                     .unwrap_or_default()
@@ -247,7 +247,9 @@ impl AuditStorage for SurrealAuditStorage {
             .query("SELECT * FROM audit_events WHERE sequence >= $seq ORDER BY sequence ASC")
             .bind(("seq", from_sequence as i64))
             .await
-            .map_err(|e| Error::Internal(format!("Failed to fetch events for verification: {}", e)))?;
+            .map_err(|e| {
+                Error::Internal(format!("Failed to fetch events for verification: {}", e))
+            })?;
 
         let rows: Vec<AuditRow> = result
             .take(0)
