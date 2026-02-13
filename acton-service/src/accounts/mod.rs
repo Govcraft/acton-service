@@ -219,10 +219,7 @@ impl AccountService {
     }
 
     /// Get an account by email (for login flow)
-    pub async fn get_account_by_email(
-        &self,
-        email: &str,
-    ) -> Result<Option<Account>, AccountError> {
+    pub async fn get_account_by_email(&self, email: &str) -> Result<Option<Account>, AccountError> {
         self.storage
             .get_by_email(email)
             .await
@@ -482,10 +479,7 @@ impl AccountService {
     }
 
     /// Count accounts with optional status filter
-    pub async fn count_accounts(
-        &self,
-        status: Option<AccountStatus>,
-    ) -> Result<u64, AccountError> {
+    pub async fn count_accounts(&self, status: Option<AccountStatus>) -> Result<u64, AccountError> {
         self.storage
             .count(status)
             .await
@@ -499,11 +493,7 @@ impl AccountService {
     /// 2. Account is Active
     /// 3. Password matches
     /// 4. Updates `last_login_at`
-    pub async fn authenticate(
-        &self,
-        email: &str,
-        password: &str,
-    ) -> Result<Account, AccountError> {
+    pub async fn authenticate(&self, email: &str, password: &str) -> Result<Account, AccountError> {
         let email = email.trim().to_lowercase();
 
         let account = self
@@ -751,12 +741,9 @@ mod audit_integration {
                 ),
             };
 
-            let audit_event = AuditEvent::new(
-                kind,
-                severity,
-                self.audit_logger.service_name().to_string(),
-            )
-            .with_metadata(metadata);
+            let audit_event =
+                AuditEvent::new(kind, severity, self.audit_logger.service_name().to_string())
+                    .with_metadata(metadata);
 
             self.audit_logger.log(audit_event).await;
         }

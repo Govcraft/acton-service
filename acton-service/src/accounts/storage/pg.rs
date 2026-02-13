@@ -101,10 +101,7 @@ struct AccountRow {
 
 impl From<AccountRow> for Account {
     fn from(row: AccountRow) -> Self {
-        let id = row
-            .id
-            .parse()
-            .unwrap_or_else(|_| AccountId::new());
+        let id = row.id.parse().unwrap_or_else(|_| AccountId::new());
 
         let status = row
             .status
@@ -295,15 +292,13 @@ impl AccountStorage for PgAccountStorage {
                 .map_err(|e| Error::Internal(format!("Failed to update status: {}", e)))?;
             }
             _ => {
-                sqlx::query(
-                    "UPDATE accounts SET status = $2, updated_at = $3 WHERE id = $1",
-                )
-                .bind(id)
-                .bind(&status_str)
-                .bind(now)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| Error::Internal(format!("Failed to update status: {}", e)))?;
+                sqlx::query("UPDATE accounts SET status = $2, updated_at = $3 WHERE id = $1")
+                    .bind(id)
+                    .bind(&status_str)
+                    .bind(now)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| Error::Internal(format!("Failed to update status: {}", e)))?;
             }
         }
 

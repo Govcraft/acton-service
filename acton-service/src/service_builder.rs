@@ -1374,10 +1374,8 @@ where
                         // Run HTTP server (with optional TLS)
                         #[cfg(feature = "tls")]
                         if let Some(ref server_config) = self.tls_config {
-                            let tls_listener = crate::tls::TlsListener::new(
-                                http_listener,
-                                server_config.clone(),
-                            );
+                            let tls_listener =
+                                crate::tls::TlsListener::new(http_listener, server_config.clone());
                             tracing::info!("TLS enabled (HTTPS) for both HTTP and gRPC");
                             let http_result = axum::serve(tls_listener, self.app)
                                 .with_graceful_shutdown(shutdown_signal())
@@ -1465,8 +1463,7 @@ where
 
         #[cfg(feature = "tls")]
         if let Some(ref server_config) = self.tls_config {
-            let tls_listener =
-                crate::tls::TlsListener::new(listener, server_config.clone());
+            let tls_listener = crate::tls::TlsListener::new(listener, server_config.clone());
             tracing::info!("TLS enabled (HTTPS)");
             axum::serve(tls_listener, self.app)
                 .with_graceful_shutdown(shutdown_signal())

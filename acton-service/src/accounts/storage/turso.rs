@@ -111,8 +111,7 @@ fn row_to_account(row: &libsql::Row) -> Result<Account, Error> {
     let locked_at: Option<String> = row.get(9).map_err(|e| map_err("locked_at", e))?;
     let locked_reason: Option<String> = row.get(10).map_err(|e| map_err("locked_reason", e))?;
     let disabled_at: Option<String> = row.get(11).map_err(|e| map_err("disabled_at", e))?;
-    let disabled_reason: Option<String> =
-        row.get(12).map_err(|e| map_err("disabled_reason", e))?;
+    let disabled_reason: Option<String> = row.get(12).map_err(|e| map_err("disabled_reason", e))?;
     let expires_at: Option<String> = row.get(13).map_err(|e| map_err("expires_at", e))?;
     let password_changed_at: Option<String> =
         row.get(14).map_err(|e| map_err("password_changed_at", e))?;
@@ -394,10 +393,7 @@ impl AccountStorage for TursoAccountStorage {
     async fn delete(&self, id: &str) -> Result<bool, Error> {
         let conn = self.conn()?;
         let affected = conn
-            .execute(
-                "DELETE FROM accounts WHERE id = ?1",
-                libsql::params![id],
-            )
+            .execute("DELETE FROM accounts WHERE id = ?1", libsql::params![id])
             .await
             .map_err(|e| Error::Internal(format!("Failed to delete account: {}", e)))?;
 

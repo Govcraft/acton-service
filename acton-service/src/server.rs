@@ -42,12 +42,7 @@ impl Server {
 
         // Determine TLS status for security headers
         #[cfg(feature = "tls")]
-        let tls_enabled = self
-            .config
-            .tls
-            .as_ref()
-            .map(|t| t.enabled)
-            .unwrap_or(false);
+        let tls_enabled = self.config.tls.as_ref().map(|t| t.enabled).unwrap_or(false);
         #[cfg(not(feature = "tls"))]
         let tls_enabled = false;
 
@@ -173,7 +168,10 @@ impl Server {
         #[cfg(feature = "tls")]
         if let Some(ref tls_config) = self.config.tls {
             if tls_config.enabled {
-                tracing::info!("  - TLS: enabled (cert: {})", tls_config.cert_path.display());
+                tracing::info!(
+                    "  - TLS: enabled (cert: {})",
+                    tls_config.cert_path.display()
+                );
             } else {
                 tracing::info!("  - TLS: disabled");
             }

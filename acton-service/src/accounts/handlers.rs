@@ -14,9 +14,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use super::{
-    AccountError, AccountService, AccountStatus, CreateAccount, UpdateAccount,
-};
+use super::{AccountError, AccountService, AccountStatus, CreateAccount, UpdateAccount};
 
 /// Build the account management routes
 ///
@@ -40,10 +38,7 @@ pub fn account_routes() -> Router {
         .route("/accounts/{id}/lock", post(lock_account))
         .route("/accounts/{id}/unlock", post(unlock_account))
         .route("/accounts/{id}/verify-email", post(verify_email))
-        .route(
-            "/accounts/{id}/change-password",
-            post(change_password),
-        )
+        .route("/accounts/{id}/change-password", post(change_password))
 }
 
 // ============================================================================
