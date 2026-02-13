@@ -17,6 +17,9 @@ use super::token::TokenRevocation;
 use super::token::{extract_token, Claims, TokenValidator};
 use crate::{config::PasetoConfig, error::Error};
 
+#[cfg(feature = "auth")]
+use crate::auth::key_rotation::manager::KeyManager;
+
 /// Internal key storage for PASETO authentication
 enum PasetoKey {
     /// V4 Local (symmetric encryption)
@@ -34,11 +37,19 @@ enum PasetoKey {
 }
 
 /// PASETO authentication middleware state
+///
+/// When a [`KeyManager`] is configured via [`with_key_manager`](Self::with_key_manager),
+/// validation will first try the static key, and on failure will try each
+/// verification key from the key rotation system. This ensures both pre-rotation
+/// tokens (signed with the static key) and post-rotation tokens (signed with
+/// rotated keys) validate correctly.
 #[derive(Clone)]
 pub struct PasetoAuth {
     inner: Arc<PasetoKey>,
     #[cfg(feature = "cache")]
     revocation: Option<Arc<dyn TokenRevocation>>,
+    #[cfg(feature = "auth")]
+    key_manager: Option<Arc<KeyManager>>,
 }
 
 impl PasetoAuth {
@@ -109,6 +120,8 @@ impl PasetoAuth {
             inner: Arc::new(inner),
             #[cfg(feature = "cache")]
             revocation: None,
+            #[cfg(feature = "auth")]
+            key_manager: None,
         })
     }
 
@@ -118,6 +131,19 @@ impl PasetoAuth {
     #[cfg(feature = "cache")]
     pub fn with_revocation<R: TokenRevocation + 'static>(mut self, revocation: R) -> Self {
         self.revocation = Some(Arc::new(revocation));
+        self
+    }
+
+    /// Set the key manager for key rotation support
+    ///
+    /// When a key manager is configured, token validation will first try the
+    /// static key. If that fails, it will try each verification key (Active +
+    /// Draining) from the key rotation system. This ensures backward compatibility:
+    /// tokens issued before rotation was enabled validate with the static key,
+    /// while rotated tokens validate with the appropriate rotated key.
+    #[cfg(feature = "auth")]
+    pub fn with_key_manager(mut self, key_manager: Arc<KeyManager>) -> Self {
+        self.key_manager = Some(key_manager);
         self
     }
 
@@ -313,6 +339,44 @@ impl PasetoAuth {
 
 impl TokenValidator for PasetoAuth {
     fn validate_token(&self, token: &str) -> Result<Claims, Error> {
+        // First, try with the static key (backward compatible)
+        let static_result = self.validate_with_static_key(token);
+
+        // If static key succeeds, return immediately
+        if static_result.is_ok() {
+            return static_result;
+        }
+
+        // If key_manager is configured, try each verification key from the
+        // rotation system (Active + Draining keys). PASETO v4.local tokens do
+        // not carry a `kid` in their header, so we must try each key.
+        #[cfg(feature = "auth")]
+        if let Some(ref km) = self.key_manager {
+            let verification_keys = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current()
+                    .block_on(km.get_all_verification_keys())
+            })?;
+
+            for cached_key in &verification_keys {
+                if let Ok(claims) = self.validate_with_key_bytes(token, &cached_key.key_material) {
+                    return Ok(claims);
+                }
+            }
+        }
+
+        // Return the original static key error
+        static_result
+    }
+}
+
+impl PasetoAuth {
+    /// Validate a token using the static key
+    fn validate_with_static_key(&self, token: &str) -> Result<Claims, Error> {
+        // Extract footer once (owned String) so it outlives the parser borrow
+        let footer_owned = Footer::try_from_token(token)
+            .ok()
+            .flatten();
+
         let json_value = match self.inner.as_ref() {
             PasetoKey::V4Local {
                 key_bytes,
@@ -327,6 +391,9 @@ impl TokenValidator for PasetoAuth {
                 }
                 if let Some(aud) = audience {
                     parser.check_claim(AudienceClaim::from(aud.as_str()));
+                }
+                if let Some(ref f) = footer_owned {
+                    parser.set_footer(Footer::from(f.as_str()));
                 }
 
                 parser
@@ -347,6 +414,75 @@ impl TokenValidator for PasetoAuth {
                 }
                 if let Some(aud) = audience {
                     parser.check_claim(AudienceClaim::from(aud.as_str()));
+                }
+                if let Some(ref f) = footer_owned {
+                    parser.set_footer(Footer::from(f.as_str()));
+                }
+
+                parser
+                    .parse(token, &key)
+                    .map_err(|e| Error::Paseto(format!("Invalid PASETO token: {}", e)))?
+            }
+        };
+
+        Self::json_to_claims(json_value)
+    }
+
+    /// Validate a token using raw key bytes from the key rotation system
+    #[cfg(feature = "auth")]
+    fn validate_with_key_bytes(&self, token: &str, key_bytes: &[u8]) -> Result<Claims, Error> {
+        let footer_owned = Footer::try_from_token(token)
+            .ok()
+            .flatten();
+
+        let json_value = match self.inner.as_ref() {
+            PasetoKey::V4Local {
+                issuer, audience, ..
+            } => {
+                let key_arr: [u8; 32] = key_bytes.try_into().map_err(|_| {
+                    Error::Internal(format!(
+                        "rotated key material must be 32 bytes, got {}",
+                        key_bytes.len()
+                    ))
+                })?;
+                let key = PasetoSymmetricKey::<V4, Local>::from(Key::from(&key_arr));
+                let mut parser = PasetoParser::<V4, Local>::default();
+
+                if let Some(iss) = issuer {
+                    parser.check_claim(IssuerClaim::from(iss.as_str()));
+                }
+                if let Some(aud) = audience {
+                    parser.check_claim(AudienceClaim::from(aud.as_str()));
+                }
+                if let Some(ref f) = footer_owned {
+                    parser.set_footer(Footer::from(f.as_str()));
+                }
+
+                parser
+                    .parse(token, &key)
+                    .map_err(|e| Error::Paseto(format!("Invalid PASETO token: {}", e)))?
+            }
+            PasetoKey::V4Public {
+                issuer, audience, ..
+            } => {
+                let key_arr: [u8; 32] = key_bytes.try_into().map_err(|_| {
+                    Error::Internal(format!(
+                        "rotated key material must be 32 bytes, got {}",
+                        key_bytes.len()
+                    ))
+                })?;
+                let raw_key = Key::from(&key_arr);
+                let key = PasetoAsymmetricPublicKey::<V4, Public>::from(&raw_key);
+                let mut parser = PasetoParser::<V4, Public>::default();
+
+                if let Some(iss) = issuer {
+                    parser.check_claim(IssuerClaim::from(iss.as_str()));
+                }
+                if let Some(aud) = audience {
+                    parser.check_claim(AudienceClaim::from(aud.as_str()));
+                }
+                if let Some(ref f) = footer_owned {
+                    parser.set_footer(Footer::from(f.as_str()));
                 }
 
                 parser

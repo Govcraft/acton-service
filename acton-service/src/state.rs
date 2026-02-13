@@ -89,6 +89,10 @@ where
     #[cfg(feature = "audit")]
     audit_logger: Option<crate::audit::AuditLogger>,
 
+    /// Key manager for signing key rotation (NIST SC-12)
+    #[cfg(feature = "auth")]
+    key_manager: Option<Arc<crate::auth::key_rotation::KeyManager>>,
+
     /// Agent broker handle for type-safe event broadcasting
     broker: Option<ActorHandle>,
 }
@@ -112,6 +116,8 @@ where
             surrealdb_client: Arc::new(RwLock::new(None)),
             #[cfg(feature = "audit")]
             audit_logger: None,
+            #[cfg(feature = "auth")]
+            key_manager: None,
             broker: None,
         }
     }
@@ -140,6 +146,8 @@ where
             surrealdb_client: Arc::new(RwLock::new(None)),
             #[cfg(feature = "audit")]
             audit_logger: None,
+            #[cfg(feature = "auth")]
+            key_manager: None,
             broker: None,
         }
     }
@@ -353,6 +361,24 @@ where
     #[cfg(feature = "audit")]
     pub(crate) fn set_audit_logger(&mut self, logger: crate::audit::AuditLogger) {
         self.audit_logger = Some(logger);
+    }
+
+    /// Get the key manager for signing key rotation
+    ///
+    /// Returns the key manager if key rotation is enabled and was successfully
+    /// initialized during service startup.
+    #[cfg(feature = "auth")]
+    pub fn key_manager(&self) -> Option<&Arc<crate::auth::key_rotation::KeyManager>> {
+        self.key_manager.as_ref()
+    }
+
+    /// Set the key manager (internal use by ServiceBuilder)
+    #[cfg(feature = "auth")]
+    pub(crate) fn set_key_manager(
+        &mut self,
+        km: Arc<crate::auth::key_rotation::KeyManager>,
+    ) {
+        self.key_manager = Some(km);
     }
 
     /// Get pool health metrics for all configured pools
@@ -689,6 +715,8 @@ where
             nats_client,
             #[cfg(feature = "audit")]
             audit_logger: None,
+            #[cfg(feature = "auth")]
+            key_manager: None,
             broker: None,
         })
     }

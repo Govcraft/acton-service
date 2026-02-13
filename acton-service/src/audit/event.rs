@@ -124,6 +124,12 @@ pub enum AuditEventKind {
     /// Account unlocked (requires `login-lockout` feature)
     #[cfg(feature = "login-lockout")]
     AuthAccountUnlocked,
+    /// Signing key was rotated (new key activated, old key moved to draining)
+    AuthKeyRotated,
+    /// Signing key was retired (drain period expired)
+    AuthKeyRetired,
+    /// Key rotation failed
+    AuthKeyRotationFailed,
     /// HTTP request (from audit middleware)
     HttpRequest,
     /// HTTP request denied (rate limit, auth failure, etc.)
@@ -149,6 +155,9 @@ impl std::fmt::Display for AuditEventKind {
             Self::AuthAccountLocked => write!(f, "auth.account.locked"),
             #[cfg(feature = "login-lockout")]
             Self::AuthAccountUnlocked => write!(f, "auth.account.unlocked"),
+            Self::AuthKeyRotated => write!(f, "auth.key.rotated"),
+            Self::AuthKeyRetired => write!(f, "auth.key.retired"),
+            Self::AuthKeyRotationFailed => write!(f, "auth.key.rotation_failed"),
             Self::HttpRequest => write!(f, "http.request"),
             Self::HttpRequestDenied => write!(f, "http.request.denied"),
             Self::Custom(name) => write!(f, "custom.{}", name),

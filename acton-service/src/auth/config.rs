@@ -8,6 +8,8 @@ use std::path::PathBuf;
 #[cfg(feature = "oauth")]
 use std::collections::HashMap;
 
+use super::key_rotation::KeyRotationConfig;
+
 /// Main authentication configuration
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AuthConfig {
@@ -40,6 +42,10 @@ pub struct AuthConfig {
     #[cfg(feature = "oauth")]
     #[serde(default)]
     pub oauth: Option<OAuthConfig>,
+
+    /// Key rotation configuration (NIST SC-12)
+    #[serde(default)]
+    pub key_rotation: Option<KeyRotationConfig>,
 }
 
 /// Password hashing configuration following OWASP guidelines

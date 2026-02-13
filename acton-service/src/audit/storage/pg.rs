@@ -276,6 +276,9 @@ impl From<AuditEventRow> for AuditEvent {
             "auth.apikey.revoked" => AuditEventKind::AuthApiKeyRevoked,
             "auth.oauth.callback" => AuditEventKind::AuthOAuthCallback,
             "auth.permission.denied" => AuditEventKind::AuthPermissionDenied,
+            "auth.key.rotated" => AuditEventKind::AuthKeyRotated,
+            "auth.key.retired" => AuditEventKind::AuthKeyRetired,
+            "auth.key.rotation_failed" => AuditEventKind::AuthKeyRotationFailed,
             "http.request" => AuditEventKind::HttpRequest,
             "http.request.denied" => AuditEventKind::HttpRequestDenied,
             other => {
