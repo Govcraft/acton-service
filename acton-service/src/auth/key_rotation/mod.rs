@@ -30,11 +30,11 @@ pub mod key_metadata;
 pub mod manager;
 pub mod storage;
 
+pub use agent::{CheckRotation, ForceRotation, KeyRotationAgent};
 pub use config::KeyRotationConfig;
 pub use key_metadata::{
     KeyFormat, KeyStatus, ParseKeyFormatError, ParseKeyStatusError, SigningKeyMetadata,
 };
-pub use agent::{CheckRotation, ForceRotation, KeyRotationAgent};
 pub use manager::{CachedKey, KeyManager};
 pub use storage::KeyRotationStorage;
 

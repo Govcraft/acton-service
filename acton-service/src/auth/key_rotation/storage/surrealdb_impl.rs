@@ -102,9 +102,7 @@ impl TryFrom<SigningKeyRow> for SigningKeyMetadata {
 }
 
 /// Parse an optional RFC 3339 timestamp string
-fn parse_optional_rfc3339(
-    value: &Option<String>,
-) -> Result<Option<DateTime<Utc>>, Error> {
+fn parse_optional_rfc3339(value: &Option<String>) -> Result<Option<DateTime<Utc>>, Error> {
     match value {
         Some(s) if !s.is_empty() => {
             let dt = DateTime::parse_from_rfc3339(s)
@@ -209,10 +207,7 @@ impl KeyRotationStorage for SurrealKeyRotationStorage {
             .take(0)
             .map_err(|e| Error::Internal(format!("Failed to deserialize signing key: {}", e)))?;
 
-        rows.into_iter()
-            .next()
-            .map(TryInto::try_into)
-            .transpose()
+        rows.into_iter().next().map(TryInto::try_into).transpose()
     }
 
     async fn get_key_by_kid(&self, kid: &str) -> Result<Option<SigningKeyMetadata>, Error> {
@@ -223,18 +218,13 @@ impl KeyRotationStorage for SurrealKeyRotationStorage {
             .query("SELECT * FROM signing_keys WHERE kid = $kid")
             .bind(("kid", kid_owned))
             .await
-            .map_err(|e| {
-                Error::Internal(format!("Failed to get signing key by kid: {}", e))
-            })?;
+            .map_err(|e| Error::Internal(format!("Failed to get signing key by kid: {}", e)))?;
 
         let rows: Vec<SigningKeyRow> = result
             .take(0)
             .map_err(|e| Error::Internal(format!("Failed to deserialize signing key: {}", e)))?;
 
-        rows.into_iter()
-            .next()
-            .map(TryInto::try_into)
-            .transpose()
+        rows.into_iter().next().map(TryInto::try_into).transpose()
     }
 
     async fn get_verification_keys(
@@ -254,11 +244,9 @@ impl KeyRotationStorage for SurrealKeyRotationStorage {
             .await
             .map_err(|e| Error::Internal(format!("Failed to get verification keys: {}", e)))?;
 
-        let rows: Vec<SigningKeyRow> = result
-            .take(0)
-            .map_err(|e| {
-                Error::Internal(format!("Failed to deserialize verification keys: {}", e))
-            })?;
+        let rows: Vec<SigningKeyRow> = result.take(0).map_err(|e| {
+            Error::Internal(format!("Failed to deserialize verification keys: {}", e))
+        })?;
 
         rows.into_iter().map(TryInto::try_into).collect()
     }
@@ -295,9 +283,7 @@ impl KeyRotationStorage for SurrealKeyRotationStorage {
             .bind(("kid", kid_owned))
             .bind(("ts", ts))
             .await
-            .map_err(|e| {
-                Error::Internal(format!("Failed to update signing key status: {}", e))
-            })?;
+            .map_err(|e| Error::Internal(format!("Failed to update signing key status: {}", e)))?;
 
         let rows: Vec<SigningKeyRow> = result.take(0).unwrap_or_default();
 
@@ -324,10 +310,7 @@ impl KeyRotationStorage for SurrealKeyRotationStorage {
             .bind(("now", now_str.clone()))
             .await
             .map_err(|e| {
-                Error::Internal(format!(
-                    "Failed to count expired draining keys: {}",
-                    e
-                ))
+                Error::Internal(format!("Failed to count expired draining keys: {}", e))
             })?;
 
         #[derive(Deserialize)]
@@ -347,10 +330,7 @@ impl KeyRotationStorage for SurrealKeyRotationStorage {
             .bind(("now", now_str))
             .await
             .map_err(|e| {
-                Error::Internal(format!(
-                    "Failed to retire expired draining keys: {}",
-                    e
-                ))
+                Error::Internal(format!("Failed to retire expired draining keys: {}", e))
             })?;
 
         Ok(total as u64)

@@ -657,6 +657,56 @@ where
             }
         };
 
+        // Config fingerprinting and ConfigLoaded audit event (NIST CM-3)
+        #[cfg(feature = "audit")]
+        let config_fingerprint: Option<String> = {
+            if let Some(ref logger) = audit_logger {
+                let audit_cfg = logger.config();
+                if audit_cfg.audit_config_events {
+                    match serde_json::to_value(&config) {
+                        Ok(config_value) => {
+                            let redacted =
+                                crate::audit::config_audit::redact_config(&config_value);
+                            let fingerprint =
+                                crate::audit::config_audit::compute_config_fingerprint(&redacted);
+
+                            let event =
+                                crate::audit::config_audit::build_config_loaded_event(
+                                    &config.service.name,
+                                    &fingerprint,
+                                    &redacted,
+                                    &config.service.environment,
+                                );
+
+                            let logger_clone = logger.clone();
+                            tokio::task::block_in_place(|| {
+                                tokio::runtime::Handle::current()
+                                    .block_on(async { logger_clone.log(event).await })
+                            });
+
+                            tracing::info!(
+                                config_hash = %fingerprint,
+                                "ConfigLoaded audit event emitted (CM-3)"
+                            );
+
+                            Some(fingerprint)
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to serialize config for audit fingerprint: {}",
+                                e
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
         // Spawn key rotation agent if configured (requires auth + a DB backend)
         #[cfg(feature = "auth")]
         let key_manager: Option<std::sync::Arc<crate::auth::key_rotation::KeyManager>> = {
@@ -728,6 +778,11 @@ where
                 state.set_audit_logger(logger.clone());
             }
 
+            #[cfg(feature = "audit")]
+            if let Some(ref fp) = config_fingerprint {
+                state.set_config_fingerprint(fp.clone());
+            }
+
             #[cfg(feature = "auth")]
             if let Some(ref km) = key_manager {
                 state.set_key_manager(km.clone());
@@ -740,6 +795,11 @@ where
         let app = match routes {
             VersionedRoutes::WithState(router) => {
                 // Health routes already added, just attach state
+                #[cfg(feature = "audit")]
+                let router = router.route(
+                    "/admin/config/drift",
+                    axum::routing::get(crate::audit::config_audit::drift_check_handler::<T>),
+                );
                 router.with_state(state)
             }
             VersionedRoutes::WithoutState(router) => {
@@ -748,6 +808,12 @@ where
                 let health_router: Router<AppState<T>> = Router::new()
                     .route("/health", get(crate::health::health))
                     .route("/ready", get(crate::health::readiness));
+
+                #[cfg(feature = "audit")]
+                let health_router = health_router.route(
+                    "/admin/config/drift",
+                    get(crate::audit::config_audit::drift_check_handler::<T>),
+                );
 
                 // Use fallback_service to include the versioned routes
                 let router_with_health = health_router.fallback_service(router);
@@ -1060,9 +1126,7 @@ where
                     if let Ok(guard) = db_lock.try_read() {
                         if let Some(ref db) = *guard {
                             s = Some(std::sync::Arc::new(
-                                crate::auth::key_rotation::TursoKeyRotationStorage::new(
-                                    db.clone(),
-                                ),
+                                crate::auth::key_rotation::TursoKeyRotationStorage::new(db.clone()),
                             ));
                             tracing::debug!("Key rotation using Turso storage");
                         }

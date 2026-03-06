@@ -49,14 +49,12 @@ impl KeyRotationStorage for PgKeyRotationStorage {
         .await
         .map_err(|e| Error::Internal(format!("Failed to create signing_keys table: {}", e)))?;
 
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_signing_keys_status ON signing_keys (status)",
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(|e| {
-            Error::Internal(format!("Failed to create signing_keys status index: {}", e))
-        })?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_signing_keys_status ON signing_keys (status)")
+            .execute(&self.pool)
+            .await
+            .map_err(|e| {
+                Error::Internal(format!("Failed to create signing_keys status index: {}", e))
+            })?;
 
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_signing_keys_service \
@@ -118,13 +116,11 @@ impl KeyRotationStorage for PgKeyRotationStorage {
     }
 
     async fn get_key_by_kid(&self, kid: &str) -> Result<Option<SigningKeyMetadata>, Error> {
-        let row = sqlx::query_as::<_, SigningKeyRow>(
-            "SELECT * FROM signing_keys WHERE kid = $1",
-        )
-        .bind(kid)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| Error::Internal(format!("Failed to get signing key by kid: {}", e)))?;
+        let row = sqlx::query_as::<_, SigningKeyRow>("SELECT * FROM signing_keys WHERE kid = $1")
+            .bind(kid)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to get signing key by kid: {}", e)))?;
 
         row.map(TryInto::try_into).transpose()
     }
@@ -152,38 +148,37 @@ impl KeyRotationStorage for PgKeyRotationStorage {
         new_status: KeyStatus,
         timestamp: DateTime<Utc>,
     ) -> Result<(), Error> {
-        let result = match new_status {
-            KeyStatus::Active => {
-                sqlx::query(
+        let result =
+            match new_status {
+                KeyStatus::Active => sqlx::query(
                     "UPDATE signing_keys SET status = 'active', activated_at = $1 WHERE kid = $2",
                 )
                 .bind(timestamp)
                 .bind(kid)
                 .execute(&self.pool)
-                .await
-            }
-            KeyStatus::Draining => {
-                sqlx::query(
-                    "UPDATE signing_keys SET status = 'draining', draining_since = $1 \
+                .await,
+                KeyStatus::Draining => {
+                    sqlx::query(
+                        "UPDATE signing_keys SET status = 'draining', draining_since = $1 \
                      WHERE kid = $2 AND status = 'active'",
-                )
-                .bind(timestamp)
-                .bind(kid)
-                .execute(&self.pool)
-                .await
-            }
-            KeyStatus::Retired => {
-                sqlx::query(
-                    "UPDATE signing_keys SET status = 'retired', retired_at = $1 \
+                    )
+                    .bind(timestamp)
+                    .bind(kid)
+                    .execute(&self.pool)
+                    .await
+                }
+                KeyStatus::Retired => {
+                    sqlx::query(
+                        "UPDATE signing_keys SET status = 'retired', retired_at = $1 \
                      WHERE kid = $2 AND status = 'draining'",
-                )
-                .bind(timestamp)
-                .bind(kid)
-                .execute(&self.pool)
-                .await
+                    )
+                    .bind(timestamp)
+                    .bind(kid)
+                    .execute(&self.pool)
+                    .await
+                }
             }
-        }
-        .map_err(|e| Error::Internal(format!("Failed to update signing key status: {}", e)))?;
+            .map_err(|e| Error::Internal(format!("Failed to update signing key status: {}", e)))?;
 
         if result.rows_affected() == 0 {
             return Err(Error::Conflict(format!(
@@ -203,12 +198,7 @@ impl KeyRotationStorage for PgKeyRotationStorage {
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| {
-            Error::Internal(format!(
-                "Failed to retire expired draining keys: {}",
-                e
-            ))
-        })?;
+        .map_err(|e| Error::Internal(format!("Failed to retire expired draining keys: {}", e)))?;
 
         Ok(result.rows_affected())
     }
@@ -234,19 +224,17 @@ impl TryFrom<SigningKeyRow> for SigningKeyMetadata {
     type Error = Error;
 
     fn try_from(row: SigningKeyRow) -> Result<Self, Self::Error> {
-        let format: KeyFormat = row
-            .format
-            .parse()
-            .map_err(|e: crate::auth::key_rotation::key_metadata::ParseKeyFormatError| {
+        let format: KeyFormat = row.format.parse().map_err(
+            |e: crate::auth::key_rotation::key_metadata::ParseKeyFormatError| {
                 Error::Internal(format!("Invalid key format in database: {}", e))
-            })?;
+            },
+        )?;
 
-        let status: KeyStatus = row
-            .status
-            .parse()
-            .map_err(|e: crate::auth::key_rotation::key_metadata::ParseKeyStatusError| {
+        let status: KeyStatus = row.status.parse().map_err(
+            |e: crate::auth::key_rotation::key_metadata::ParseKeyStatusError| {
                 Error::Internal(format!("Invalid key status in database: {}", e))
-            })?;
+            },
+        )?;
 
         Ok(SigningKeyMetadata {
             kid: row.kid,

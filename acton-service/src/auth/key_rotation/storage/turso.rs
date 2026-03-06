@@ -242,10 +242,7 @@ impl KeyRotationStorage for TursoKeyRotationStorage {
             )
             .await
             .map_err(|e| {
-                Error::Internal(format!(
-                    "Failed to retire expired draining keys: {}",
-                    e
-                ))
+                Error::Internal(format!("Failed to retire expired draining keys: {}", e))
             })?;
 
         Ok(affected)
@@ -312,10 +309,7 @@ fn row_to_metadata(row: &libsql::Row) -> Result<SigningKeyMetadata, Error> {
 }
 
 /// Parse an optional RFC 3339 timestamp from a libsql row column
-fn parse_optional_timestamp(
-    row: &libsql::Row,
-    index: i32,
-) -> Result<Option<DateTime<Utc>>, Error> {
+fn parse_optional_timestamp(row: &libsql::Row, index: i32) -> Result<Option<DateTime<Utc>>, Error> {
     match row.get::<String>(index) {
         Ok(s) if !s.is_empty() => {
             let dt = DateTime::parse_from_rfc3339(&s)

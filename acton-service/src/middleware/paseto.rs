@@ -353,8 +353,7 @@ impl TokenValidator for PasetoAuth {
         #[cfg(feature = "auth")]
         if let Some(ref km) = self.key_manager {
             let verification_keys = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current()
-                    .block_on(km.get_all_verification_keys())
+                tokio::runtime::Handle::current().block_on(km.get_all_verification_keys())
             })?;
 
             for cached_key in &verification_keys {
@@ -373,9 +372,7 @@ impl PasetoAuth {
     /// Validate a token using the static key
     fn validate_with_static_key(&self, token: &str) -> Result<Claims, Error> {
         // Extract footer once (owned String) so it outlives the parser borrow
-        let footer_owned = Footer::try_from_token(token)
-            .ok()
-            .flatten();
+        let footer_owned = Footer::try_from_token(token).ok().flatten();
 
         let json_value = match self.inner.as_ref() {
             PasetoKey::V4Local {
@@ -431,9 +428,7 @@ impl PasetoAuth {
     /// Validate a token using raw key bytes from the key rotation system
     #[cfg(feature = "auth")]
     fn validate_with_key_bytes(&self, token: &str, key_bytes: &[u8]) -> Result<Claims, Error> {
-        let footer_owned = Footer::try_from_token(token)
-            .ok()
-            .flatten();
+        let footer_owned = Footer::try_from_token(token).ok().flatten();
 
         let json_value = match self.inner.as_ref() {
             PasetoKey::V4Local {

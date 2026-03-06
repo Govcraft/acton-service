@@ -135,10 +135,7 @@ impl KeyManager {
             .get_verification_keys(&self.service_name)
             .await?;
 
-        let active_cached = active_meta
-            .as_ref()
-            .map(decode_key_metadata)
-            .transpose()?;
+        let active_cached = active_meta.as_ref().map(decode_key_metadata).transpose()?;
 
         let mut verification_keys = HashMap::with_capacity(verification_metas.len());
         for meta in &verification_metas {
@@ -257,8 +254,7 @@ impl KeyManager {
         if let Some(ref old) = old_active {
             let drain_duration_secs =
                 self.config.rotation_period_secs + self.config.drain_grace_period_secs;
-            let drain_expires_at =
-                now + chrono::Duration::seconds(drain_duration_secs as i64);
+            let drain_expires_at = now + chrono::Duration::seconds(drain_duration_secs as i64);
 
             self.storage
                 .update_key_status(&old.kid, KeyStatus::Draining, now)
@@ -621,8 +617,7 @@ mod tests {
     #[tokio::test]
     async fn test_refresh_cache_with_active_key() {
         let key = sample_metadata("kid-active", KeyStatus::Active, "svc");
-        let storage: Arc<dyn KeyRotationStorage> =
-            Arc::new(MockStorage::with_keys(vec![key]));
+        let storage: Arc<dyn KeyRotationStorage> = Arc::new(MockStorage::with_keys(vec![key]));
         let mgr = KeyManager::new(storage, "svc", test_config());
 
         mgr.refresh_cache().await.expect("refresh should succeed");
@@ -654,8 +649,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_signing_key_returns_active() {
         let key = sample_metadata("kid-sign", KeyStatus::Active, "svc");
-        let storage: Arc<dyn KeyRotationStorage> =
-            Arc::new(MockStorage::with_keys(vec![key]));
+        let storage: Arc<dyn KeyRotationStorage> = Arc::new(MockStorage::with_keys(vec![key]));
         // Use a very long check interval so the cache stays fresh after refresh
         let mut config = test_config();
         config.check_interval_secs = 9999;
@@ -684,8 +678,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_verification_key_from_cache() {
         let key = sample_metadata("kid-verify", KeyStatus::Active, "svc");
-        let storage: Arc<dyn KeyRotationStorage> =
-            Arc::new(MockStorage::with_keys(vec![key]));
+        let storage: Arc<dyn KeyRotationStorage> = Arc::new(MockStorage::with_keys(vec![key]));
         let mgr = KeyManager::new(storage, "svc", test_config());
         mgr.refresh_cache().await.unwrap();
 
@@ -697,8 +690,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_verification_key_cache_miss_falls_back_to_storage() {
         let key = sample_metadata("kid-miss", KeyStatus::Active, "svc");
-        let storage: Arc<dyn KeyRotationStorage> =
-            Arc::new(MockStorage::with_keys(vec![key]));
+        let storage: Arc<dyn KeyRotationStorage> = Arc::new(MockStorage::with_keys(vec![key]));
         let mgr = KeyManager::new(storage, "svc", test_config());
         // Don't refresh cache -- simulate cache miss
 
@@ -714,8 +706,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_verification_key_retired_returns_none() {
         let key = sample_metadata("kid-retired", KeyStatus::Retired, "svc");
-        let storage: Arc<dyn KeyRotationStorage> =
-            Arc::new(MockStorage::with_keys(vec![key]));
+        let storage: Arc<dyn KeyRotationStorage> = Arc::new(MockStorage::with_keys(vec![key]));
         let mgr = KeyManager::new(storage, "svc", test_config());
 
         let result = mgr.get_verification_key("kid-retired").await.unwrap();
@@ -830,8 +821,7 @@ mod tests {
     async fn test_retire_expired_refreshes_cache_when_keys_retired() {
         // Create a draining key that has already expired
         let mut draining = sample_metadata("kid-expired", KeyStatus::Draining, "svc");
-        draining.drain_expires_at =
-            Some(Utc::now() - chrono::Duration::seconds(100));
+        draining.drain_expires_at = Some(Utc::now() - chrono::Duration::seconds(100));
         let storage = Arc::new(MockStorage::with_keys(vec![draining]));
         let mut config = test_config();
         config.check_interval_secs = 9999;

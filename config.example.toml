@@ -184,6 +184,7 @@ lazy_init = true      # Initialize connection in background
 # enabled = true
 # audit_all_requests = false        # Audit every HTTP request (noisy)
 # audit_auth_events = true          # Auto-audit auth events (login, logout, etc.)
+# audit_config_events = true        # Emit config audit events (CM-3 compliance)
 # otlp_logs_enabled = false         # Export audit logs via OTLP (requires observability)
 # audited_routes = ["/api/v1/admin/*"]   # Glob patterns for per-route auditing
 # excluded_routes = ["/health", "/ready", "/metrics"]

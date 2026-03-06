@@ -89,6 +89,10 @@ where
     #[cfg(feature = "audit")]
     audit_logger: Option<crate::audit::AuditLogger>,
 
+    /// BLAKE3 fingerprint of the active (redacted) configuration (NIST CM-3)
+    #[cfg(feature = "audit")]
+    config_fingerprint: Option<String>,
+
     /// Account management service
     #[cfg(feature = "accounts")]
     account_service: Option<crate::accounts::AccountService>,
@@ -120,6 +124,8 @@ where
             surrealdb_client: Arc::new(RwLock::new(None)),
             #[cfg(feature = "audit")]
             audit_logger: None,
+            #[cfg(feature = "audit")]
+            config_fingerprint: None,
             #[cfg(feature = "accounts")]
             account_service: None,
             #[cfg(feature = "auth")]
@@ -152,6 +158,8 @@ where
             surrealdb_client: Arc::new(RwLock::new(None)),
             #[cfg(feature = "audit")]
             audit_logger: None,
+            #[cfg(feature = "audit")]
+            config_fingerprint: None,
             #[cfg(feature = "accounts")]
             account_service: None,
             #[cfg(feature = "auth")]
@@ -371,6 +379,18 @@ where
         self.audit_logger = Some(logger);
     }
 
+    /// Get the BLAKE3 fingerprint of the active config (NIST CM-3)
+    #[cfg(feature = "audit")]
+    pub fn config_fingerprint(&self) -> Option<&str> {
+        self.config_fingerprint.as_deref()
+    }
+
+    /// Set the config fingerprint (internal use by ServiceBuilder)
+    #[cfg(feature = "audit")]
+    pub(crate) fn set_config_fingerprint(&mut self, fingerprint: String) {
+        self.config_fingerprint = Some(fingerprint);
+    }
+
     /// Get the account service for account lifecycle management
     ///
     /// Returns the account service if the `accounts` feature is enabled and
@@ -397,10 +417,7 @@ where
 
     /// Set the key manager (internal use by ServiceBuilder)
     #[cfg(feature = "auth")]
-    pub(crate) fn set_key_manager(
-        &mut self,
-        km: Arc<crate::auth::key_rotation::KeyManager>,
-    ) {
+    pub(crate) fn set_key_manager(&mut self, km: Arc<crate::auth::key_rotation::KeyManager>) {
         self.key_manager = Some(km);
     }
 
@@ -738,6 +755,8 @@ where
             nats_client,
             #[cfg(feature = "audit")]
             audit_logger: None,
+            #[cfg(feature = "audit")]
+            config_fingerprint: None,
             #[cfg(feature = "accounts")]
             account_service: None,
             #[cfg(feature = "auth")]

@@ -154,6 +154,10 @@ pub enum AuditEventKind {
     AuthKeyRetired,
     /// Key rotation failed
     AuthKeyRotationFailed,
+    /// Configuration loaded at startup (NIST CM-3)
+    ConfigLoaded,
+    /// Active configuration differs from on-disk sources (NIST CM-3)
+    ConfigDriftDetected,
     /// HTTP request (from audit middleware)
     HttpRequest,
     /// HTTP request denied (rate limit, auth failure, etc.)
@@ -198,6 +202,8 @@ impl std::fmt::Display for AuditEventKind {
             Self::AuthKeyRotated => write!(f, "auth.key.rotated"),
             Self::AuthKeyRetired => write!(f, "auth.key.retired"),
             Self::AuthKeyRotationFailed => write!(f, "auth.key.rotation_failed"),
+            Self::ConfigLoaded => write!(f, "config.loaded"),
+            Self::ConfigDriftDetected => write!(f, "config.drift_detected"),
             Self::HttpRequest => write!(f, "http.request"),
             Self::HttpRequestDenied => write!(f, "http.request.denied"),
             Self::Custom(name) => write!(f, "custom.{}", name),

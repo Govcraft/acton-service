@@ -41,10 +41,8 @@ pub trait KeyRotationStorage: Send + Sync {
     /// Get the currently active signing key for a service
     ///
     /// Returns `None` if no active key exists (e.g., first startup before bootstrapping).
-    async fn get_active_key(
-        &self,
-        service_name: &str,
-    ) -> Result<Option<SigningKeyMetadata>, Error>;
+    async fn get_active_key(&self, service_name: &str)
+        -> Result<Option<SigningKeyMetadata>, Error>;
 
     /// Look up a key by its `kid` (key identifier)
     ///

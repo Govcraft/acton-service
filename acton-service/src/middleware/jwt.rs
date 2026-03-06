@@ -279,31 +279,25 @@ impl TokenValidator for JwtAuth {
                 if let Some(ref kid) = header.kid {
                     // Look up the specific key by kid
                     let cached_key = tokio::task::block_in_place(|| {
-                        tokio::runtime::Handle::current()
-                            .block_on(km.get_verification_key(kid))
+                        tokio::runtime::Handle::current().block_on(km.get_verification_key(kid))
                     })?;
 
                     if let Some(cached) = cached_key {
                         let decoding_key =
                             create_decoding_key(&cached.key_material, &self.validation)?;
-                        let token_data =
-                            decode::<Claims>(token, &decoding_key, &self.validation)?;
+                        let token_data = decode::<Claims>(token, &decoding_key, &self.validation)?;
                         return Ok(token_data.claims);
                     }
 
                     // kid not found in rotation system -- try all verification keys
                     let all_keys = tokio::task::block_in_place(|| {
-                        tokio::runtime::Handle::current()
-                            .block_on(km.get_all_verification_keys())
+                        tokio::runtime::Handle::current().block_on(km.get_all_verification_keys())
                     })?;
 
                     for cached in &all_keys {
-                        if let Ok(dk) =
-                            create_decoding_key(&cached.key_material, &self.validation)
+                        if let Ok(dk) = create_decoding_key(&cached.key_material, &self.validation)
                         {
-                            if let Ok(token_data) =
-                                decode::<Claims>(token, &dk, &self.validation)
-                            {
+                            if let Ok(token_data) = decode::<Claims>(token, &dk, &self.validation) {
                                 return Ok(token_data.claims);
                             }
                         }
@@ -321,10 +315,7 @@ impl TokenValidator for JwtAuth {
 
 /// Create a [`DecodingKey`] from raw key bytes based on the validation's algorithm
 #[cfg(feature = "auth")]
-fn create_decoding_key(
-    key_bytes: &[u8],
-    validation: &Validation,
-) -> Result<DecodingKey, Error> {
+fn create_decoding_key(key_bytes: &[u8], validation: &Validation) -> Result<DecodingKey, Error> {
     // The Validation struct stores the allowed algorithms; use the first one
     let algorithm = validation
         .algorithms

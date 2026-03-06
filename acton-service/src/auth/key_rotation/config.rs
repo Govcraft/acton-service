@@ -119,8 +119,7 @@ mod tests {
         };
 
         let json = serde_json::to_string(&config).expect("serialize");
-        let deserialized: KeyRotationConfig =
-            serde_json::from_str(&json).expect("deserialize");
+        let deserialized: KeyRotationConfig = serde_json::from_str(&json).expect("deserialize");
 
         assert!(deserialized.enabled);
         assert_eq!(deserialized.rotation_period_secs, 3600);

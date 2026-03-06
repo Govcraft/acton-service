@@ -26,6 +26,13 @@ pub struct AuditConfig {
     #[serde(default = "default_true")]
     pub audit_auth_events: bool,
 
+    /// Emit audit events for configuration lifecycle (CM-3) (default: true)
+    ///
+    /// When enabled, emits `ConfigLoaded` at startup and `ConfigDriftDetected`
+    /// when the drift detection endpoint finds changes on disk.
+    #[serde(default = "default_true")]
+    pub audit_config_events: bool,
+
     /// Syslog export configuration
     #[serde(default)]
     pub syslog: SyslogConfig,
@@ -67,6 +74,7 @@ impl Default for AuditConfig {
             enabled: true,
             audit_all_requests: false,
             audit_auth_events: true,
+            audit_config_events: true,
             syslog: SyslogConfig::default(),
             otlp_logs_enabled: false,
             audited_routes: Vec::new(),
@@ -241,6 +249,7 @@ mod tests {
             enabled: true,
             audit_all_requests: true,
             audit_auth_events: false,
+            audit_config_events: true,
             syslog: SyslogConfig {
                 transport: "tcp".to_string(),
                 address: "syslog.example.com:514".to_string(),

@@ -241,24 +241,22 @@ impl PasetoGenerator {
             if let Some(cached) = cached_key {
                 let footer_json = json!({"kid": cached.kid}).to_string();
                 return match self.key.as_ref() {
-                    PasetoGeneratorKey::V4Local { .. } => {
-                        self.generate_v4_local_with_footer(
-                            &to_32_byte_array(&cached.key_material)?,
-                            &payload,
-                            &footer_json,
-                        )
-                    }
-                    PasetoGeneratorKey::V4Public { .. } => {
-                        self.generate_v4_public_with_footer(
-                            &to_64_byte_array(&cached.key_material)?,
-                            &payload,
-                            &footer_json,
-                        )
-                    }
+                    PasetoGeneratorKey::V4Local { .. } => self.generate_v4_local_with_footer(
+                        &to_32_byte_array(&cached.key_material)?,
+                        &payload,
+                        &footer_json,
+                    ),
+                    PasetoGeneratorKey::V4Public { .. } => self.generate_v4_public_with_footer(
+                        &to_64_byte_array(&cached.key_material)?,
+                        &payload,
+                        &footer_json,
+                    ),
                 };
             }
             // No active key in rotation system; fall through to static key
-            tracing::warn!("key rotation enabled but no active signing key found, using static key");
+            tracing::warn!(
+                "key rotation enabled but no active signing key found, using static key"
+            );
         }
 
         // Generate the token based on static key type

@@ -345,8 +345,7 @@ mod tests {
     fn test_signing_key_metadata_serde_roundtrip() {
         let key = sample_key();
         let json = serde_json::to_string(&key).expect("serialize");
-        let deserialized: SigningKeyMetadata =
-            serde_json::from_str(&json).expect("deserialize");
+        let deserialized: SigningKeyMetadata = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(key.kid, deserialized.kid);
         assert_eq!(key.format, deserialized.format);
         assert_eq!(key.status, deserialized.status);
