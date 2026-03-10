@@ -48,6 +48,7 @@ pub static METER_PROVIDER: once_cell::sync::OnceCell<SdkMeterProvider> =
 /// - OpenTelemetry OTLP exporter (if configured)
 /// - Structured JSON logging with tracing
 /// - Trace context propagation (W3C Trace Context)
+/// - Native journald output (if `journald` feature is enabled and configured)
 /// - Graceful fallback to JSON-only logging if OTLP fails
 ///
 /// # Arguments
@@ -69,63 +70,77 @@ where
     let log_level = config.service.log_level.clone();
     let service_name = config.service.name.clone();
     let otlp_config = config.otlp.clone();
+    #[cfg(feature = "journald")]
+    let journald_config = config.journald.clone();
 
     // Use shared Once to ensure single initialization across all code paths
     TRACING_INIT.call_once(|| {
         // Set global trace context propagator for distributed tracing
         global::set_text_map_propagator(TraceContextPropagator::new());
 
-        // Build subscriber with JSON formatting
-        // Respect RUST_LOG environment variable if set, otherwise use config
-        let fmt_layer = tracing_subscriber::fmt::layer().json().with_filter(
-            EnvFilter::try_from_default_env()
-                .or_else(|_| EnvFilter::try_new(&log_level))
-                .unwrap_or_else(|_| EnvFilter::new("info")),
-        );
+        // Determine whether to suppress the fmt layer
+        #[cfg(feature = "journald")]
+        let suppress_fmt = journald_config
+            .as_ref()
+            .is_some_and(|j| j.enabled && j.disable_fmt_layer);
+        #[cfg(not(feature = "journald"))]
+        let suppress_fmt = false;
 
-        // Try to initialize OpenTelemetry if configured
-        if let Some(otlp_config) = &otlp_config {
-            if otlp_config.enabled {
-                match init_otlp_tracer(otlp_config, &service_name) {
-                    Ok(tracer_provider) => {
-                        // Create tracer directly from provider for type compatibility
-                        let tracer = tracer_provider.tracer(service_name.clone());
-                        let telemetry_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+        // Build fmt layer as Option (suppressed when journald replaces stdout logging)
+        let fmt_layer = if suppress_fmt {
+            None
+        } else {
+            Some(tracing_subscriber::fmt::layer().json().with_filter(
+                EnvFilter::try_from_default_env()
+                    .or_else(|_| EnvFilter::try_new(&log_level))
+                    .unwrap_or_else(|_| EnvFilter::new("info")),
+            ))
+        };
 
-                        tracing_subscriber::registry()
-                            .with(fmt_layer)
-                            .with(telemetry_layer)
-                            .init();
-
-                        // Store provider for shutdown and set global
-                        let _ = TRACER_PROVIDER.set(tracer_provider.clone());
-                        global::set_tracer_provider(tracer_provider);
-
-                        tracing::info!(
-                            service = %service_name,
-                            otlp_endpoint = %otlp_config.endpoint,
-                            "OpenTelemetry tracing initialized with OTLP export"
-                        );
-
-                        return;
-                    }
-                    Err(e) => {
-                        // Log error but continue with JSON-only logging
-                        eprintln!(
-                            "Failed to initialize OTLP exporter (falling back to JSON logging): {}",
-                            e
-                        );
-                    }
+        // Build telemetry layer as Option (OTLP)
+        let mut tracer_provider_to_set: Option<SdkTracerProvider> = None;
+        let telemetry_layer = otlp_config
+            .as_ref()
+            .filter(|c| c.enabled)
+            .and_then(|otlp| match init_otlp_tracer(otlp, &service_name) {
+                Ok(provider) => {
+                    let tracer = provider.tracer(service_name.clone());
+                    tracer_provider_to_set = Some(provider);
+                    Some(tracing_opentelemetry::layer().with_tracer(tracer))
                 }
-            }
-        }
+                Err(e) => {
+                    eprintln!(
+                        "Failed to initialize OTLP exporter (falling back to JSON logging): {}",
+                        e
+                    );
+                    None
+                }
+            });
 
-        // Fallback: JSON logging only (no OTLP)
-        tracing_subscriber::registry().with(fmt_layer).init();
+        // Build journald layer as Option (feature-gated)
+        #[cfg(feature = "journald")]
+        let journald_layer = journald_config
+            .as_ref()
+            .filter(|j| j.enabled)
+            .and_then(|j| init_journald_layer(j, &service_name));
+
+        // Single init call site with Option-wrapped layers
+        let registry = tracing_subscriber::registry()
+            .with(fmt_layer)
+            .with(telemetry_layer);
+        #[cfg(feature = "journald")]
+        let registry = registry.with(journald_layer);
+        registry.init();
+
+        // Set global tracer provider after subscriber is initialized
+        if let Some(provider) = tracer_provider_to_set {
+            let _ = TRACER_PROVIDER.set(provider.clone());
+            global::set_tracer_provider(provider);
+        }
 
         tracing::info!(
             service = %service_name,
-            "Tracing initialized with JSON logging (OTLP not configured)"
+            "Tracing initialized"
         );
     });
 
@@ -215,6 +230,41 @@ pub(crate) fn init_otlp_meter(
     Ok(provider)
 }
 
+/// Initialize journald tracing layer for native systemd journal integration
+///
+/// Returns `None` if the journald socket is unavailable (e.g., on non-systemd platforms).
+/// Uses `eprintln!` for warnings because tracing isn't initialized yet when this is called.
+#[cfg(feature = "journald")]
+fn init_journald_layer(
+    config: &crate::config::JournaldConfig,
+    service_name: &str,
+) -> Option<tracing_journald::Layer> {
+    match tracing_journald::Layer::new() {
+        Ok(layer) => {
+            let identifier = config
+                .syslog_identifier
+                .as_deref()
+                .unwrap_or(service_name);
+            let mut layer = layer.with_syslog_identifier(identifier.to_string());
+            if let Some(ref prefix) = config.field_prefix {
+                layer = layer.with_field_prefix(if prefix.is_empty() {
+                    None
+                } else {
+                    Some(prefix.clone())
+                });
+            }
+            Some(layer)
+        }
+        Err(e) => {
+            eprintln!(
+                "Warning: journald socket unavailable ({}), continuing without journald",
+                e
+            );
+            None
+        }
+    }
+}
+
 /// Get the global meter for metrics collection
 ///
 /// This function returns a meter from the global meter provider if metrics are enabled.
@@ -277,7 +327,7 @@ pub fn init_tracing<T>(config: &Config<T>) -> Result<()>
 where
     T: serde::Serialize + serde::de::DeserializeOwned + Clone + Default + Send + Sync + 'static,
 {
-    use tracing_subscriber::EnvFilter;
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 
     // Check if already initialized by another path (e.g., AppState::Builder)
     if TRACING_INIT.is_completed() {
@@ -289,12 +339,37 @@ where
 
     // Use shared Once to ensure single initialization across all code paths
     TRACING_INIT.call_once(|| {
-        tracing_subscriber::fmt()
-            .json()
-            .with_env_filter(
+        // Determine whether to suppress the fmt layer
+        #[cfg(feature = "journald")]
+        let suppress_fmt = config
+            .journald
+            .as_ref()
+            .is_some_and(|j| j.enabled && j.disable_fmt_layer);
+        #[cfg(not(feature = "journald"))]
+        let suppress_fmt = false;
+
+        // Build fmt layer as Option (suppressed when journald replaces stdout logging)
+        let fmt_layer = if suppress_fmt {
+            None
+        } else {
+            Some(tracing_subscriber::fmt::layer().json().with_filter(
                 EnvFilter::try_new(&log_level).unwrap_or_else(|_| EnvFilter::new("info")),
-            )
-            .init();
+            ))
+        };
+
+        // Build journald layer as Option (feature-gated)
+        #[cfg(feature = "journald")]
+        let journald_layer = config
+            .journald
+            .as_ref()
+            .filter(|j| j.enabled)
+            .and_then(|j| init_journald_layer(j, &service_name));
+
+        // Single init call site with Option-wrapped layers
+        let registry = tracing_subscriber::registry().with(fmt_layer);
+        #[cfg(feature = "journald")]
+        let registry = registry.with(journald_layer);
+        registry.init();
 
         tracing::info!(
             service = %service_name,
@@ -441,5 +516,18 @@ mod tests {
             meter.is_none(),
             "get_meter should return None before initialization"
         );
+    }
+
+    #[test]
+    #[cfg(feature = "journald")]
+    fn test_init_journald_layer_graceful_fallback() {
+        let config = crate::config::JournaldConfig {
+            enabled: true,
+            syslog_identifier: Some("test-svc".to_string()),
+            field_prefix: None,
+            disable_fmt_layer: false,
+        };
+        // Should not panic regardless of platform (graceful fallback on non-systemd)
+        let _ = init_journald_layer(&config, "test-svc");
     }
 }

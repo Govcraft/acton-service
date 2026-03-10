@@ -123,7 +123,7 @@ pub fn load_server_config(tls_config: &TlsConfig) -> Result<Arc<ServerConfig>> {
     // Build server config
     let config = ServerConfig::builder()
         .with_no_client_auth()
-        .with_single_cert(cert_chain, key.into())
+        .with_single_cert(cert_chain, key)
         .map_err(|e| {
             crate::error::Error::Internal(format!("Failed to build TLS server config: {}", e))
         })?;

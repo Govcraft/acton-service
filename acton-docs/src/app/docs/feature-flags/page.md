@@ -520,6 +520,24 @@ HTTP metrics collection via OpenTelemetry for detailed monitoring.
 {% dep("otelMetrics") %}
 ```
 
+### `journald`
+
+Native systemd journal integration with structured fields. Writes tracing events directly to journald with native journal fields instead of embedding JSON strings.
+
+**When to use**: Deploying on Linux with systemd, want native `journalctl` field filtering
+
+**Dependencies**: tracing-journald
+
+**Provides**:
+- Native structured journal fields (MESSAGE, PRIORITY, CODE_FILE, CODE_LINE)
+- Custom span/event fields as journal fields
+- Configurable syslog identifier for `journalctl -t` filtering
+- Optional suppression of JSON stdout to prevent double logging
+
+```toml
+{% $dep.journaldOnly %}
+```
+
 ### `jwt`
 
 JWT token authentication support. PASETO is the default token format and requires no feature flag.
@@ -734,6 +752,7 @@ Some features work better together:
 | `cedar-authz` | `cache` | Policy decision caching dramatically improves performance (10-50ms → 1-5ms) |
 | `cache` | `governor` | Distributed rate limiting needs Redis |
 | `otel-metrics` | `observability` | Metrics require tracing foundation |
+| `journald` | `observability` | Journald layer works alongside OTLP tracing |
 | `resilience` | `http` or `grpc` | Resilience patterns apply to HTTP/gRPC calls |
 | `openapi` | `http` | OpenAPI docs are for HTTP endpoints |
 | `session-redis` | Production deployments | Sessions persist across restarts and work across multiple instances |

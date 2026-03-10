@@ -350,6 +350,77 @@ async fn main() -> Result<()> {
 
 ---
 
+## Journald Integration
+
+On Linux systems with systemd, acton-service can write tracing events directly to the journal with **native structured fields** instead of embedding JSON strings.
+
+### Why Native Journal Fields?
+
+Without journald integration, logs appear as opaque JSON strings in the journal:
+
+```
+Mar 09 10:30:45 myhost my-service[1234]: {"timestamp":"...","level":"INFO","message":"User created"}
+```
+
+With native journal fields, each field is independently queryable:
+
+```bash
+journalctl -t my-service LEVEL=INFO
+journalctl -t my-service F_USER_ID=123
+```
+
+### Setup
+
+Enable the `journald` feature:
+
+```toml
+[dependencies]
+{% $dep.journald %}
+```
+
+Configure in `config.toml`:
+
+```toml
+[journald]
+enabled = true
+syslog_identifier = "my-service"  # for journalctl -t filtering
+# field_prefix = "F"              # prefix for custom fields (default)
+# disable_fmt_layer = true        # suppress JSON stdout if journal captures stdout
+```
+
+### Querying with journalctl
+
+```bash
+# Filter by service
+journalctl -t my-service
+
+# Filter by priority
+journalctl -t my-service -p warning
+
+# Filter by custom fields (prefixed with F_ by default)
+journalctl -t my-service F_REQUEST_ID=req_01h455vb4pex5vsknk084sn02q
+
+# Show all fields
+journalctl -t my-service -o verbose
+```
+
+### Suppressing Double Output
+
+On systemd systems, stdout is typically captured by the journal. When journald integration is enabled, you may see duplicate log entries — once from the JSON fmt layer (via stdout) and once from the journald layer (via the journal socket). To prevent this, set `disable_fmt_layer = true`:
+
+```toml
+[journald]
+enabled = true
+syslog_identifier = "my-service"
+disable_fmt_layer = true  # suppress JSON stdout, journal-only
+```
+
+### Platform Compatibility
+
+The journald feature compiles on all platforms but only activates on Linux systems with systemd. On other platforms (macOS, containers without journald), it falls back gracefully — a warning is printed and the service continues without journald output.
+
+---
+
 ## Configuration
 
 ### Environment Variables

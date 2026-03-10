@@ -123,6 +123,11 @@ where
     #[serde(default)]
     pub tls: Option<TlsConfig>,
 
+    /// Journald configuration (optional, requires `journald` feature)
+    #[cfg(feature = "journald")]
+    #[serde(default)]
+    pub journald: Option<JournaldConfig>,
+
     /// Account management configuration (optional)
     #[cfg(feature = "accounts")]
     #[serde(default)]
@@ -707,6 +712,33 @@ pub struct TlsConfig {
 
     /// Path to PEM-encoded private key
     pub key_path: PathBuf,
+}
+
+/// Journald logging configuration (requires `journald` feature)
+///
+/// When enabled, tracing events are written directly to the systemd journal
+/// with native structured fields instead of embedding JSON strings.
+#[cfg(feature = "journald")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JournaldConfig {
+    /// Enable journald output (default: true when section is present)
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Syslog identifier for `journalctl -t <identifier>`
+    /// Defaults to the service name
+    #[serde(default)]
+    pub syslog_identifier: Option<String>,
+
+    /// Field prefix for user-defined fields (default: "F" per tracing-journald)
+    /// Set to empty string to disable prefixing
+    #[serde(default)]
+    pub field_prefix: Option<String>,
+
+    /// Disable the JSON fmt layer when journald is active
+    /// Prevents double output on systemd systems where stdout goes to journal
+    #[serde(default = "default_false")]
+    pub disable_fmt_layer: bool,
 }
 
 /// Security headers configuration
@@ -1424,6 +1456,8 @@ where
             lockout: None,
             #[cfg(feature = "tls")]
             tls: None,
+            #[cfg(feature = "journald")]
+            journald: None,
             #[cfg(feature = "accounts")]
             accounts: None,
             custom: T::default(),
@@ -1517,6 +1551,8 @@ mod tests {
             lockout: None,
             #[cfg(feature = "tls")]
             tls: None,
+            #[cfg(feature = "journald")]
+            journald: None,
             #[cfg(feature = "accounts")]
             accounts: None,
             custom,
@@ -1575,6 +1611,8 @@ mod tests {
             lockout: None,
             #[cfg(feature = "tls")]
             tls: None,
+            #[cfg(feature = "journald")]
+            journald: None,
             #[cfg(feature = "accounts")]
             accounts: None,
             custom: custom.clone(),

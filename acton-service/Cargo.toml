@@ -122,6 +122,7 @@ paginator-sqlx = { version = "0.2.2", optional = true }
 blake3 = { workspace = true, optional = true }
 tokio-rustls = { workspace = true, optional = true }
 rustls-pemfile = { workspace = true, optional = true }
+tracing-journald = { workspace = true, optional = true }
 
 [features]
 default = ["http", "observability"]
@@ -146,7 +147,7 @@ auth = ["dep:argon2", "dep:rand", "dep:blake3", "dep:base64"] # Core: password h
 oauth = ["auth", "dep:oauth2", "dep:openidconnect", "dep:base64"]  # OAuth/OIDC providers (requires auth)
 auth-full = ["auth", "oauth", "jwt", "cache", "database", "login-lockout", "accounts"]  # All auth features (excludes turso - mutually exclusive with database)
 
-full = ["http", "grpc", "websocket", "database", "cache", "events", "observability", "resilience", "otel-metrics", "governor", "openapi", "cedar-authz", "jwt", "auth", "session-memory", "session-redis", "htmx", "askama", "sse", "pagination-full", "handlers", "login-lockout", "tls", "accounts", "account-handlers"]
+full = ["http", "grpc", "websocket", "database", "cache", "events", "observability", "resilience", "otel-metrics", "governor", "openapi", "cedar-authz", "jwt", "auth", "session-memory", "session-redis", "htmx", "askama", "sse", "pagination-full", "handlers", "login-lockout", "tls", "accounts", "account-handlers", "journald"]
 tonic-health = ["dep:tonic-health"]
 tonic-reflection = ["dep:tonic-reflection"]
 tower-resilience-circuitbreaker = ["dep:tower-resilience-circuitbreaker"]
@@ -197,6 +198,8 @@ accounts = ["auth"]
 
 # Pre-built REST handlers for account management
 account-handlers = ["accounts"]
+# Native systemd journal integration
+journald = ["dep:tracing-journald"]
 
 # Basic examples
 [[example]]

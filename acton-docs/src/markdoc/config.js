@@ -69,6 +69,8 @@ const config = {
       auditOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["audit"] }`,
       auditDatabase: `acton-service = { version = "${ACTON_VERSION}", features = ["audit", "database", "http", "observability"] }`,
       loginLockout: `acton-service = { version = "${ACTON_VERSION}", features = ["login-lockout", "http", "observability"] }`,
+      journald: `acton-service = { version = "${ACTON_VERSION}", features = ["journald", "http", "observability"] }`,
+      journaldOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["journald"] }`,
     },
   },
 }

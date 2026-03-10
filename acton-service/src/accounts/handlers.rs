@@ -96,7 +96,7 @@ async fn get_account(
     let account = svc
         .get_account(&id)
         .await?
-        .ok_or_else(|| AccountError::NotFound(id))?;
+        .ok_or(AccountError::NotFound(id))?;
     Ok(Json(account))
 }
 

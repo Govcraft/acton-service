@@ -325,13 +325,11 @@ impl LoginLockout {
         let delay = self.config.base_delay_ms as f64 * self.config.delay_multiplier.powf(exponent);
 
         // Cap at max_delay_ms, handling potential infinity/NaN from large exponents
-        let capped = if delay.is_finite() {
+        if delay.is_finite() {
             (delay as u64).min(self.config.max_delay_ms)
         } else {
             self.config.max_delay_ms
-        };
-
-        capped
+        }
     }
 
     /// Get a Redis connection from the pool
