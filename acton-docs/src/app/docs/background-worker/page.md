@@ -53,6 +53,67 @@ async fn start_sync(
 
 `ServiceBuilder::build()` automatically spawns the `BackgroundWorker` when `[background_worker]` is configured with `enabled = true`. No manual runtime or spawn calls needed.
 
+**3. (Optional) Submit startup tasks between `build()` and `serve()`:**
+
+```rust
+let service = ServiceBuilder::new()
+    .with_routes(routes)
+    .build();
+
+// Submit tasks before serving — useful for cache warming, data sync, etc.
+if let Some(worker) = service.state().background_worker() {
+    worker.submit("cache-warm", || async {
+        warm_cache().await?;
+        Ok(())
+    }).await;
+}
+
+service.serve().await?;
+```
+
+---
+
+## Startup Tasks
+
+Use `service.state()` to access the `BackgroundWorker` between `build()` and `serve()`. This is the recommended pattern for tasks that should run at application startup:
+
+```rust
+use acton_service::prelude::*;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let routes = VersionedApiBuilder::new()
+        .add_version(ApiVersion::V1, |router| {
+            router.route("/hello", get(hello))
+        })
+        .build_routes();
+
+    let service = ServiceBuilder::new()
+        .with_routes(routes)
+        .build();
+
+    // Submit startup tasks before serving
+    if let Some(worker) = service.state().background_worker() {
+        worker.submit("cache-warm", || async {
+            load_cache_from_database().await?;
+            Ok(())
+        }).await;
+
+        worker.submit("config-sync", || async {
+            sync_remote_config().await?;
+            Ok(())
+        }).await;
+    }
+
+    service.serve().await?;
+    Ok(())
+}
+```
+
+{% callout type="note" title="Non-blocking" %}
+Startup tasks run concurrently in the background. `serve()` does not wait for them to complete — the server starts accepting requests immediately. If your application requires a task to finish before serving traffic, await the work directly instead of submitting it to the worker.
+{% /callout %}
+
 ---
 
 ## Configuration

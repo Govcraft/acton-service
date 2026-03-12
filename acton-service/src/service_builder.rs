@@ -838,6 +838,10 @@ where
             state
         };
 
+        // Clone state before it's consumed by Router::with_state().
+        // AppState uses Arc internally, so this is a cheap reference-count bump.
+        let state_clone = state.clone();
+
         // Handle both types of versioned routes
         let app = match routes {
             VersionedRoutes::WithState(router) => {
@@ -1104,6 +1108,7 @@ where
 
         ActonService {
             config,
+            state: state_clone,
             listener_addr,
             app,
             #[cfg(feature = "grpc")]
@@ -1378,6 +1383,7 @@ where
     T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
 {
     config: Config<T>,
+    state: AppState<T>,
     listener_addr: std::net::SocketAddr,
     app: Router,
     #[cfg(feature = "grpc")]
@@ -1615,6 +1621,34 @@ where
     pub fn config(&self) -> &Config<T> {
         &self.config
     }
+
+    /// Get a reference to the application state
+    ///
+    /// This is useful for accessing services (e.g., `BackgroundWorker`) between
+    /// `build()` and `serve()` — for example, to submit startup tasks like
+    /// cache warming or data synchronization.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let service = ServiceBuilder::new()
+    ///     .with_config(config)
+    ///     .with_routes(routes)
+    ///     .build();
+    ///
+    /// // Submit a startup task before serving
+    /// if let Some(worker) = service.state().background_worker() {
+    ///     worker.submit("cache-warm", || async {
+    ///         // warm caches...
+    ///         Ok(())
+    ///     }).await;
+    /// }
+    ///
+    /// service.serve().await?;
+    /// ```
+    pub fn state(&self) -> &AppState<T> {
+        &self.state
+    }
 }
 
 #[cfg(test)]
@@ -1649,6 +1683,21 @@ mod tests {
         // let _service = ServiceBuilder::new()
         //     .with_config(config)
         //     .with_state(state);
+    }
+
+    #[test]
+    fn test_acton_service_exposes_state() {
+        use crate::config::Config;
+        use crate::prelude::ServiceBuilder;
+
+        let config = Config::<()>::default();
+        let service = ServiceBuilder::new()
+            .with_config(config)
+            .build();
+
+        // state() should be accessible and background_worker() returns None
+        // when not configured
+        assert!(service.state().background_worker().is_none());
     }
 
     #[test]
