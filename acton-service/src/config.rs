@@ -133,6 +133,10 @@ where
     #[serde(default)]
     pub accounts: Option<crate::accounts::AccountsConfig>,
 
+    /// Background worker configuration (optional)
+    #[serde(default)]
+    pub background_worker: Option<crate::agents::BackgroundWorkerConfig>,
+
     /// Custom configuration extensions
     ///
     /// Any fields in config.toml that don't match the above framework fields
@@ -1460,6 +1464,7 @@ where
             journald: None,
             #[cfg(feature = "accounts")]
             accounts: None,
+            background_worker: None,
             custom: T::default(),
         }
     }
@@ -1555,6 +1560,7 @@ mod tests {
             journald: None,
             #[cfg(feature = "accounts")]
             accounts: None,
+            background_worker: None,
             custom,
         };
 
@@ -1615,6 +1621,7 @@ mod tests {
             journald: None,
             #[cfg(feature = "accounts")]
             accounts: None,
+            background_worker: None,
             custom: custom.clone(),
         };
 

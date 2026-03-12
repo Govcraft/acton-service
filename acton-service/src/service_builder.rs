@@ -734,6 +734,51 @@ where
             }
         };
 
+        // Spawn background worker agent if configured
+        let background_worker: Option<crate::agents::BackgroundWorker> = {
+            let bw_config = config.background_worker.clone().unwrap_or_default();
+            if bw_config.enabled {
+                if let Ok(_handle) = tokio::runtime::Handle::try_current() {
+                    let result = tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current().block_on(async {
+                            if self.agent_runtime.is_none() {
+                                self.agent_runtime =
+                                    Some(acton_reactive::prelude::ActonApp::launch_async().await);
+                            }
+                            if let Some(ref mut runtime) = self.agent_runtime {
+                                match crate::agents::BackgroundWorker::spawn(runtime, &bw_config)
+                                    .await
+                                {
+                                    Ok(worker) => {
+                                        tracing::info!("Background worker agent spawned");
+                                        Some(worker)
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(
+                                            "Failed to spawn background worker: {}",
+                                            e
+                                        );
+                                        None
+                                    }
+                                }
+                            } else {
+                                tracing::warn!(
+                                    "No agent runtime available for background worker"
+                                );
+                                None
+                            }
+                        })
+                    });
+                    result
+                } else {
+                    tracing::warn!("No tokio runtime available for background worker");
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
         let routes = self.routes.unwrap_or_default();
 
         // Build AppState with agent-managed pools
@@ -786,6 +831,10 @@ where
             #[cfg(feature = "auth")]
             if let Some(ref km) = key_manager {
                 state.set_key_manager(km.clone());
+            }
+
+            if let Some(ref worker) = background_worker {
+                state.set_background_worker(worker.clone());
             }
 
             state

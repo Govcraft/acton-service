@@ -101,6 +101,9 @@ where
     #[cfg(feature = "auth")]
     key_manager: Option<Arc<crate::auth::key_rotation::KeyManager>>,
 
+    /// Background worker for managed background tasks
+    background_worker: Option<crate::agents::BackgroundWorker>,
+
     /// Agent broker handle for type-safe event broadcasting
     broker: Option<ActorHandle>,
 }
@@ -130,6 +133,7 @@ where
             account_service: None,
             #[cfg(feature = "auth")]
             key_manager: None,
+            background_worker: None,
             broker: None,
         }
     }
@@ -164,6 +168,7 @@ where
             account_service: None,
             #[cfg(feature = "auth")]
             key_manager: None,
+            background_worker: None,
             broker: None,
         }
     }
@@ -362,6 +367,19 @@ where
     /// Set the agent broker handle (internal use only)
     pub(crate) fn set_broker(&mut self, broker: ActorHandle) {
         self.broker = Some(broker);
+    }
+
+    /// Get the background worker for submitting managed background tasks
+    ///
+    /// Returns the background worker if it was enabled in configuration
+    /// and successfully spawned during service startup.
+    pub fn background_worker(&self) -> Option<&crate::agents::BackgroundWorker> {
+        self.background_worker.as_ref()
+    }
+
+    /// Set the background worker (internal use by ServiceBuilder)
+    pub(crate) fn set_background_worker(&mut self, worker: crate::agents::BackgroundWorker) {
+        self.background_worker = Some(worker);
     }
 
     /// Get the audit logger for emitting audit events
@@ -761,6 +779,7 @@ where
             account_service: None,
             #[cfg(feature = "auth")]
             key_manager: None,
+            background_worker: None,
             broker: None,
         })
     }

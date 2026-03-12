@@ -11,7 +11,7 @@
 use std::time::Duration;
 
 use acton_reactive::prelude::*;
-use acton_service::agents::{BackgroundWorker, TaskStatus};
+use acton_service::agents::{BackgroundWorker, BackgroundWorkerConfig, TaskStatus};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -25,8 +25,12 @@ async fn main() -> anyhow::Result<()> {
     // Create an agent runtime using ActonApp::launch()
     let mut runtime = ActonApp::launch();
 
-    // Spawn the background worker
-    let worker = BackgroundWorker::spawn(&mut runtime).await?;
+    // Spawn the background worker with default config (enabled)
+    let config = BackgroundWorkerConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    let worker = BackgroundWorker::spawn(&mut runtime, &config).await?;
     tracing::info!("BackgroundWorker spawned");
 
     // Submit a quick task
