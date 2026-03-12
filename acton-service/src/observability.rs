@@ -90,19 +90,19 @@ where
         let fmt_layer = if suppress_fmt {
             None
         } else {
-            Some(tracing_subscriber::fmt::layer().json().with_filter(
-                EnvFilter::try_from_default_env()
-                    .or_else(|_| EnvFilter::try_new(&log_level))
-                    .unwrap_or_else(|_| EnvFilter::new("info")),
-            ))
+            Some(
+                tracing_subscriber::fmt::layer().json().with_filter(
+                    EnvFilter::try_from_default_env()
+                        .or_else(|_| EnvFilter::try_new(&log_level))
+                        .unwrap_or_else(|_| EnvFilter::new("info")),
+                ),
+            )
         };
 
         // Build telemetry layer as Option (OTLP)
         let mut tracer_provider_to_set: Option<SdkTracerProvider> = None;
-        let telemetry_layer = otlp_config
-            .as_ref()
-            .filter(|c| c.enabled)
-            .and_then(|otlp| match init_otlp_tracer(otlp, &service_name) {
+        let telemetry_layer = otlp_config.as_ref().filter(|c| c.enabled).and_then(|otlp| {
+            match init_otlp_tracer(otlp, &service_name) {
                 Ok(provider) => {
                     let tracer = provider.tracer(service_name.clone());
                     tracer_provider_to_set = Some(provider);
@@ -115,7 +115,8 @@ where
                     );
                     None
                 }
-            });
+            }
+        });
 
         // Build journald layer as Option (feature-gated)
         #[cfg(feature = "journald")]
@@ -241,10 +242,7 @@ fn init_journald_layer(
 ) -> Option<tracing_journald::Layer> {
     match tracing_journald::Layer::new() {
         Ok(layer) => {
-            let identifier = config
-                .syslog_identifier
-                .as_deref()
-                .unwrap_or(service_name);
+            let identifier = config.syslog_identifier.as_deref().unwrap_or(service_name);
             let mut layer = layer.with_syslog_identifier(identifier.to_string());
             if let Some(ref prefix) = config.field_prefix {
                 layer = layer.with_field_prefix(if prefix.is_empty() {

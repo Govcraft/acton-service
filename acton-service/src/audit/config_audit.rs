@@ -258,20 +258,19 @@ where
     };
 
     // Reload config from disk using the same Figment sources
-    let disk_config = match crate::config::Config::<T>::load_for_service(
-        &state.config().service.name,
-    ) {
-        Ok(c) => c,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "error": format!("Failed to reload config from disk: {}", e)
-                })),
-            )
-                .into_response();
-        }
-    };
+    let disk_config =
+        match crate::config::Config::<T>::load_for_service(&state.config().service.name) {
+            Ok(c) => c,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": format!("Failed to reload config from disk: {}", e)
+                    })),
+                )
+                    .into_response();
+            }
+        };
 
     // Serialize, redact, and fingerprint the disk config
     let disk_serialized = match serde_json::to_value(&disk_config) {

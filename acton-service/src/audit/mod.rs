@@ -40,10 +40,10 @@ pub use alert_webhook::WebhookAlertHook;
 pub use archive::archive_events;
 pub use chain::{verify_chain, AuditChain, ChainVerificationError};
 pub use config::{AlertConfig, AuditConfig, SyslogConfig};
-pub use event::{AuditEvent, AuditEventKind, AuditSeverity, AuditSource};
-pub use logger::AuditLogger;
-pub use middleware::{audit_layer, AuditRoute};
 pub use config_audit::{
     compute_config_fingerprint, drift_check_handler, redact_config, DriftCheckResult,
 };
+pub use event::{AuditEvent, AuditEventKind, AuditSeverity, AuditSource};
+pub use logger::AuditLogger;
+pub use middleware::{audit_layer, AuditRoute};
 pub use storage::AuditStorage;

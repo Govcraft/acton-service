@@ -161,9 +161,7 @@ async fn main() -> Result<()> {
             .await
             .expect("Failed to bind gRPC listener");
 
-        serve(listener, grpc_app)
-            .await
-            .expect("gRPC server failed");
+        serve(listener, grpc_app).await.expect("gRPC server failed");
     });
 
     // Wait for gRPC server to start

@@ -665,18 +665,16 @@ where
                 if audit_cfg.audit_config_events {
                     match serde_json::to_value(&config) {
                         Ok(config_value) => {
-                            let redacted =
-                                crate::audit::config_audit::redact_config(&config_value);
+                            let redacted = crate::audit::config_audit::redact_config(&config_value);
                             let fingerprint =
                                 crate::audit::config_audit::compute_config_fingerprint(&redacted);
 
-                            let event =
-                                crate::audit::config_audit::build_config_loaded_event(
-                                    &config.service.name,
-                                    &fingerprint,
-                                    &redacted,
-                                    &config.service.environment,
-                                );
+                            let event = crate::audit::config_audit::build_config_loaded_event(
+                                &config.service.name,
+                                &fingerprint,
+                                &redacted,
+                                &config.service.environment,
+                            );
 
                             let logger_clone = logger.clone();
                             tokio::task::block_in_place(|| {

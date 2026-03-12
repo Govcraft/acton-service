@@ -196,10 +196,7 @@ struct CreateOrderResponse {
 async fn create_order_handler(
     State(event_bus): State<EventBus>,
     Json(req): Json<CreateOrderRequest>,
-) -> std::result::Result<
-    (StatusCode, Json<CreateOrderResponse>),
-    (StatusCode, String),
-> {
+) -> std::result::Result<(StatusCode, Json<CreateOrderResponse>), (StatusCode, String)> {
     let order_id = uuid::Uuid::new_v4().to_string();
 
     // Create event
@@ -400,9 +397,7 @@ async fn main() -> Result<()> {
             .await
             .expect("Failed to bind gRPC listener");
 
-        serve(listener, grpc_app)
-            .await
-            .expect("gRPC server failed");
+        serve(listener, grpc_app).await.expect("gRPC server failed");
     });
 
     // Wait for gRPC to start
