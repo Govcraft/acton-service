@@ -412,7 +412,7 @@ pub mod prelude {
     pub use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 
     // Background task management (user-facing)
-    pub use crate::agents::{BackgroundWorker, TaskStatus};
+    pub use crate::agents::{BackgroundWorker, BackgroundWorkerConfig, TaskStatus};
 
     // Health status types (for checking aggregated health)
     pub use crate::agents::{AggregatedHealthResponse, HealthStatus};

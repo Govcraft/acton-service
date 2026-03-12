@@ -24,7 +24,7 @@ mod pool;
 // ============================================================================
 
 // Background worker - users can use this for managed background tasks
-pub use background_worker::{BackgroundWorker, TaskStatus};
+pub use background_worker::{BackgroundWorker, BackgroundWorkerConfig, TaskStatus};
 
 // Health status types - users may want to check aggregated health
 pub use messages::{AggregatedHealthResponse, ComponentHealth, HealthStatus};

@@ -251,6 +251,16 @@ lazy_init = true      # Initialize connection in background
 # audit_events = true                      # Emit audit events for account lifecycle
 
 # ============================================================================
+# BACKGROUND WORKER CONFIGURATION (Optional)
+# Managed background task execution with concurrency control
+# ============================================================================
+# [background_worker]
+# enabled = true
+# max_concurrent_tasks = 0          # 0 = unlimited
+# task_shutdown_timeout_secs = 5
+# cleanup_interval_secs = 0         # 0 = disabled
+
+# ============================================================================
 # OPENTELEMETRY CONFIGURATION (Optional)
 # ============================================================================
 [otlp]
