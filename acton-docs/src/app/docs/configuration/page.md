@@ -586,16 +586,22 @@ max_retries = 5
 retry_delay_secs = 2
 optional = true
 lazy_init = true
+
+[background_worker]
+enabled = true
+max_concurrent_tasks = 10
+task_shutdown_timeout_secs = 5
+cleanup_interval_secs = 300
 ```
 
 {% callout type="note" title="Automatic Agent Spawning" %}
-When `ServiceBuilder::build()` detects configured connection pools, it automatically spawns **pool agents** to manage them. These agents:
+When `ServiceBuilder::build()` detects configured connection pools, it automatically spawns **pool agents** to manage them. When `[background_worker]` is configured with `enabled = true`, a `BackgroundWorker` agent is also auto-spawned. These agents:
 
 - **Handle connection lifecycle** - Automatic connection, reconnection, and graceful shutdown
-- **Update shared state** - Pools are accessible via `state.db()`, `state.redis()`, `state.nats()`
+- **Update shared state** - Pools are accessible via `state.db()`, `state.redis()`, `state.nats()`; the background worker via `state.background_worker()`
 - **Report health status** - Pool health is reflected in `/ready` endpoint
 
-You never interact with agents directly - they work transparently behind `AppState`. See [Reactive Architecture](/docs/reactive-architecture) for implementation details.
+You never interact with agents directly - they work transparently behind `AppState`. See [Reactive Architecture](/docs/reactive-architecture) and [Background Worker](/docs/background-worker) for details.
 {% /callout %}
 
 ### Understanding lazy_init

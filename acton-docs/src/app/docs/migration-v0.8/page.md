@@ -47,20 +47,34 @@ See [Request IDs](/docs/request-ids) for the full API.
 
 ### BackgroundWorker Agent
 
-New managed background task execution:
+New managed background task execution, auto-spawned via configuration:
+
+```toml
+# config.toml
+[background_worker]
+enabled = true
+```
 
 ```rust
-use acton_service::agents::{BackgroundWorker, TaskStatus};
+use acton_service::prelude::*;
+use acton_service::agents::TaskStatus;
 
-let worker = BackgroundWorker::spawn(&mut runtime).await?;
+// In a handler — worker is available via AppState
+async fn handler(State(state): State<AppState>) {
+    if let Some(worker) = state.background_worker() {
+        worker.submit("my-task", || async {
+            do_work().await?;
+            Ok(())
+        }).await;
 
-worker.submit("my-task", || async {
-    do_work().await?;
-    Ok(())
-}).await;
-
-let status = worker.get_task_status("my-task").await;
+        let status = worker.get_task_status("my-task").await;
+    }
+}
 ```
+
+{% callout type="note" title="API Change" %}
+`BackgroundWorker::spawn()` now takes a `&BackgroundWorkerConfig` parameter. When using `ServiceBuilder`, the worker is spawned automatically — you don't call `spawn()` directly.
+{% /callout %}
 
 See [Background Worker](/docs/background-worker) for the complete guide.
 
@@ -193,24 +207,33 @@ async fn handler(
 
 ### BackgroundWorker for Tasks
 
-Replace ad-hoc `tokio::spawn` with managed workers:
+Replace ad-hoc `tokio::spawn` with managed workers. Enable via configuration and access through `AppState`:
+
+```toml
+# config.toml
+[background_worker]
+enabled = true
+```
 
 ```rust
-use acton_service::agents::{BackgroundWorker, TaskStatus};
+use acton_service::prelude::*;
+use acton_service::agents::TaskStatus;
 
-// Setup
-let worker = BackgroundWorker::spawn(&mut runtime).await?;
+async fn cleanup_handler(State(state): State<AppState>) {
+    let worker = state.background_worker()
+        .expect("background worker is enabled");
 
-// Submit tasks
-worker.submit("cleanup", || async {
-    cleanup_old_data().await
-}).await;
+    // Submit tasks
+    worker.submit("cleanup", || async {
+        cleanup_old_data().await
+    }).await;
 
-// Monitor
-let status = worker.get_task_status("cleanup").await;
+    // Monitor
+    let status = worker.get_task_status("cleanup").await;
 
-// Cancel if needed
-worker.cancel("cleanup").await;
+    // Cancel if needed
+    worker.cancel("cleanup").await;
+}
 ```
 
 ### Health Monitoring
