@@ -8,6 +8,7 @@
 //! - **PostgreSQL** (`database` feature): Uses `CREATE RULE` to prevent UPDATE/DELETE
 //! - **Turso** (`turso` feature): Uses triggers to prevent UPDATE/DELETE
 //! - **SurrealDB** (`surrealdb` feature): Uses `PERMISSIONS FOR update, delete NONE`
+//! - **ClickHouse** (`clickhouse` feature): Naturally append-only (MergeTree engine)
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -23,6 +24,9 @@ pub mod turso;
 
 #[cfg(feature = "surrealdb")]
 pub mod surrealdb_impl;
+
+#[cfg(feature = "clickhouse")]
+pub mod clickhouse_impl;
 
 /// Trait for audit event persistence backends
 ///

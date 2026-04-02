@@ -93,6 +93,9 @@ pub mod cache;
 #[cfg(feature = "events")]
 pub mod events;
 
+#[cfg(feature = "clickhouse")]
+pub mod clickhouse_backend;
+
 pub mod observability;
 
 #[cfg(feature = "openapi")]
@@ -192,6 +195,12 @@ pub mod prelude {
     };
     #[cfg(feature = "events")]
     pub use crate::pool_health::NatsClientHealth;
+
+    #[cfg(feature = "clickhouse")]
+    pub use crate::pool_health::ClickHouseHealth;
+
+    #[cfg(feature = "clickhouse")]
+    pub use crate::clickhouse_backend::AnalyticsWriter;
 
     #[cfg(feature = "cache")]
     pub use crate::middleware::{RedisTokenRevocation, TokenRevocation};

@@ -80,6 +80,11 @@ where
     #[serde(default)]
     pub nats: Option<NatsConfig>,
 
+    /// ClickHouse configuration (optional)
+    #[cfg(feature = "clickhouse")]
+    #[serde(default)]
+    pub clickhouse: Option<ClickHouseConfig>,
+
     /// OpenTelemetry configuration (optional)
     #[serde(default)]
     pub otlp: Option<OtlpConfig>,
@@ -522,6 +527,49 @@ pub struct NatsConfig {
     /// Whether to initialize connection lazily (in background)
     #[serde(default = "default_lazy_init")]
     pub lazy_init: bool,
+}
+
+/// ClickHouse analytical database configuration
+///
+/// ClickHouse is a columnar OLAP database used as a complementary analytical store.
+/// Unlike the primary database backends (PostgreSQL, Turso, SurrealDB), ClickHouse
+/// is composable and can be used alongside any of them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClickHouseConfig {
+    /// ClickHouse HTTP URL (e.g., `http://localhost:8123`)
+    pub url: String,
+
+    /// Database name
+    #[serde(default = "default_clickhouse_database")]
+    pub database: String,
+
+    /// Username for authentication
+    #[serde(default)]
+    pub username: Option<String>,
+
+    /// Password for authentication
+    #[serde(default)]
+    pub password: Option<String>,
+
+    /// Maximum retry attempts for establishing connection
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
+
+    /// Delay between retry attempts in seconds
+    #[serde(default = "default_retry_delay")]
+    pub retry_delay_secs: u64,
+
+    /// Whether ClickHouse is optional (service can start without it)
+    #[serde(default = "default_false")]
+    pub optional: bool,
+
+    /// Whether to initialize connection lazily (in background)
+    #[serde(default = "default_lazy_init")]
+    pub lazy_init: bool,
+}
+
+fn default_clickhouse_database() -> String {
+    "default".to_string()
 }
 
 /// OpenTelemetry configuration
@@ -1444,6 +1492,8 @@ where
             surrealdb: None,
             redis: None,
             nats: None,
+            #[cfg(feature = "clickhouse")]
+            clickhouse: None,
             otlp: None,
             grpc: None,
             #[cfg(feature = "websocket")]
@@ -1540,6 +1590,8 @@ mod tests {
             surrealdb: None,
             redis: None,
             nats: None,
+            #[cfg(feature = "clickhouse")]
+            clickhouse: None,
             otlp: None,
             grpc: None,
             #[cfg(feature = "websocket")]
@@ -1601,6 +1653,8 @@ mod tests {
             surrealdb: None,
             redis: None,
             nats: None,
+            #[cfg(feature = "clickhouse")]
+            clickhouse: None,
             otlp: None,
             grpc: None,
             #[cfg(feature = "websocket")]

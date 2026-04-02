@@ -50,6 +50,7 @@ export const navigation = [
       { title: 'Turso (libsql)', href: '/docs/turso' },
       { title: 'Cache (Redis)', href: '/docs/cache' },
       { title: 'Events (NATS)', href: '/docs/events' },
+      { title: 'ClickHouse (Analytics)', href: '/docs/clickhouse' },
       { title: 'WebSocket', href: '/docs/websocket' },
       { title: 'HTMX Support', href: '/docs/htmx' },
       { title: 'Askama Templates', href: '/docs/askama' },

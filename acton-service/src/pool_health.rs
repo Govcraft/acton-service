@@ -174,6 +174,32 @@ impl NatsClientHealth {
     }
 }
 
+/// ClickHouse analytical database health status
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg(feature = "clickhouse")]
+pub struct ClickHouseHealth {
+    /// Connection URL (sanitized, no credentials)
+    pub url: String,
+
+    /// Database name
+    pub database: String,
+
+    /// Whether the client is connected
+    pub connected: bool,
+}
+
+#[cfg(feature = "clickhouse")]
+impl ClickHouseHealth {
+    /// Create health status from ClickHouse config (when connected)
+    pub fn from_config(config: &crate::config::ClickHouseConfig, connected: bool) -> Self {
+        Self {
+            url: crate::clickhouse_backend::sanitize_url(&config.url),
+            database: config.database.clone(),
+            connected,
+        }
+    }
+}
+
 /// Overall pool health summary
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PoolHealthSummary {
@@ -202,6 +228,11 @@ pub struct PoolHealthSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub surrealdb: Option<SurrealDbHealth>,
 
+    /// ClickHouse analytical database health
+    #[cfg(feature = "clickhouse")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clickhouse: Option<ClickHouseHealth>,
+
     /// Overall healthy status
     pub healthy: bool,
 }
@@ -220,6 +251,8 @@ impl PoolHealthSummary {
             turso: None,
             #[cfg(feature = "surrealdb")]
             surrealdb: None,
+            #[cfg(feature = "clickhouse")]
+            clickhouse: None,
             healthy: true,
         }
     }
@@ -281,12 +314,132 @@ impl PoolHealthSummary {
             }
         };
 
-        database_healthy && cache_healthy && events_healthy && turso_healthy && surrealdb_healthy
+        let clickhouse_healthy = {
+            #[cfg(feature = "clickhouse")]
+            {
+                self.clickhouse.as_ref().is_none_or(|ch| ch.connected)
+            }
+            #[cfg(not(feature = "clickhouse"))]
+            {
+                true
+            }
+        };
+
+        database_healthy
+            && cache_healthy
+            && events_healthy
+            && turso_healthy
+            && surrealdb_healthy
+            && clickhouse_healthy
     }
 }
 
 impl Default for PoolHealthSummary {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pool_health_summary_default_is_healthy() {
+        let summary = PoolHealthSummary::new();
+        assert!(summary.is_healthy(), "Empty summary with no backends should be healthy");
+    }
+
+    #[cfg(feature = "clickhouse")]
+    mod clickhouse_health_tests {
+        use super::*;
+        use crate::config::ClickHouseConfig;
+
+        fn test_config() -> ClickHouseConfig {
+            ClickHouseConfig {
+                url: "http://admin:secret@ch.internal:8123".to_string(),
+                database: "analytics".to_string(),
+                username: Some("admin".to_string()),
+                password: Some("secret".to_string()),
+                max_retries: 5,
+                retry_delay_secs: 2,
+                optional: false,
+                lazy_init: true,
+            }
+        }
+
+        #[test]
+        fn test_clickhouse_health_from_config_connected() {
+            let config = test_config();
+            let health = ClickHouseHealth::from_config(&config, true);
+
+            assert!(health.connected);
+            assert_eq!(health.database, "analytics");
+            // URL must be sanitized — credentials must not appear
+            assert!(!health.url.contains("admin"));
+            assert!(!health.url.contains("secret"));
+            assert!(health.url.contains("ch.internal:8123"));
+        }
+
+        #[test]
+        fn test_clickhouse_health_from_config_disconnected() {
+            let config = test_config();
+            let health = ClickHouseHealth::from_config(&config, false);
+
+            assert!(!health.connected);
+            assert_eq!(health.database, "analytics");
+        }
+
+        #[test]
+        fn test_clickhouse_health_serializes_to_json() {
+            let config = test_config();
+            let health = ClickHouseHealth::from_config(&config, true);
+            let json = serde_json::to_value(&health).unwrap();
+
+            assert_eq!(json["connected"], true);
+            assert_eq!(json["database"], "analytics");
+            assert!(json["url"].is_string());
+            // Credentials must not appear in serialized output
+            let url_str = json["url"].as_str().unwrap();
+            assert!(!url_str.contains("admin"));
+            assert!(!url_str.contains("secret"));
+        }
+
+        #[test]
+        fn test_pool_health_summary_unhealthy_when_clickhouse_disconnected() {
+            let mut summary = PoolHealthSummary::new();
+            summary.clickhouse = Some(ClickHouseHealth {
+                url: "http://ch:8123".to_string(),
+                database: "default".to_string(),
+                connected: false,
+            });
+
+            assert!(
+                !summary.is_healthy(),
+                "Summary should be unhealthy when ClickHouse is disconnected"
+            );
+        }
+
+        #[test]
+        fn test_pool_health_summary_healthy_when_clickhouse_connected() {
+            let mut summary = PoolHealthSummary::new();
+            summary.clickhouse = Some(ClickHouseHealth {
+                url: "http://ch:8123".to_string(),
+                database: "default".to_string(),
+                connected: true,
+            });
+
+            assert!(
+                summary.is_healthy(),
+                "Summary should be healthy when ClickHouse is connected"
+            );
+        }
+
+        #[test]
+        fn test_pool_health_summary_healthy_when_clickhouse_none() {
+            let summary = PoolHealthSummary::new();
+            // clickhouse is None — should not affect health
+            assert!(summary.is_healthy());
+        }
     }
 }

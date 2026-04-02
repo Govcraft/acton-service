@@ -76,7 +76,8 @@ where
             feature = "cache",
             feature = "events",
             feature = "turso",
-            feature = "surrealdb"
+            feature = "surrealdb",
+            feature = "clickhouse"
         )),
         allow(unused_mut)
     )]
@@ -87,7 +88,8 @@ where
             feature = "cache",
             feature = "events",
             feature = "turso",
-            feature = "surrealdb"
+            feature = "surrealdb",
+            feature = "clickhouse"
         )),
         allow(unused_mut)
     )]
@@ -510,6 +512,78 @@ where
 
                 dependencies.insert(
                     "surrealdb".to_string(),
+                    DependencyStatus {
+                        healthy: false,
+                        message: Some(message),
+                    },
+                );
+            }
+        }
+    }
+
+    // Check ClickHouse connection
+    #[cfg(feature = "clickhouse")]
+    if state.config().clickhouse.is_some() {
+        match state.clickhouse().await {
+            Some(client) => match client.query("SELECT 1").execute().await {
+                Ok(_) => {
+                    dependencies.insert(
+                        "clickhouse".to_string(),
+                        DependencyStatus {
+                            healthy: true,
+                            message: Some("Connected".to_string()),
+                        },
+                    );
+                }
+                Err(e) => {
+                    tracing::error!("ClickHouse health check failed: {}", e);
+                    let is_optional = state
+                        .config()
+                        .clickhouse
+                        .as_ref()
+                        .map(|c| c.optional)
+                        .unwrap_or(false);
+
+                    if !is_optional {
+                        all_ready = false;
+                    }
+
+                    dependencies.insert(
+                        "clickhouse".to_string(),
+                        DependencyStatus {
+                            healthy: false,
+                            message: Some(format!("Query failed: {}", e)),
+                        },
+                    );
+                }
+            },
+            None => {
+                let is_optional = state
+                    .config()
+                    .clickhouse
+                    .as_ref()
+                    .map(|c| c.optional)
+                    .unwrap_or(false);
+
+                let is_lazy = state
+                    .config()
+                    .clickhouse
+                    .as_ref()
+                    .map(|c| c.lazy_init)
+                    .unwrap_or(false);
+
+                if !is_optional {
+                    all_ready = false;
+                }
+
+                let message = if is_lazy {
+                    "Connection initializing (lazy mode)".to_string()
+                } else {
+                    "Not connected".to_string()
+                };
+
+                dependencies.insert(
+                    "clickhouse".to_string(),
                     DependencyStatus {
                         healthy: false,
                         message: Some(message),

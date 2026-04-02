@@ -51,3 +51,6 @@ pub(crate) use pool::{SharedTursoDb, TursoDbAgent};
 
 #[cfg(feature = "surrealdb")]
 pub(crate) use pool::{SharedSurrealDb, SurrealDbAgent};
+
+#[cfg(feature = "clickhouse")]
+pub(crate) use pool::{ClickHousePoolAgent, SharedClickHouseClient};

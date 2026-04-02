@@ -291,6 +291,11 @@ pub enum Error {
     #[error("NATS error: {0}")]
     Nats(String),
 
+    /// ClickHouse error
+    #[cfg(feature = "clickhouse")]
+    #[error("ClickHouse error: {0}")]
+    ClickHouse(String),
+
     /// PASETO error (default token format)
     #[error("PASETO error: {0}")]
     Paseto(String),
@@ -487,6 +492,19 @@ impl IntoResponse for Error {
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "NATS_ERROR",
                         "Event system error",
+                    ),
+                )
+            }
+
+            #[cfg(feature = "clickhouse")]
+            Error::ClickHouse(e) => {
+                tracing::error!("ClickHouse error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    ErrorResponse::with_code(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "ANALYTICS_ERROR",
+                        "Analytics operation failed",
                     ),
                 )
             }
@@ -772,6 +790,13 @@ impl From<DatabaseError> for Error {
 impl From<redis::RedisError> for Error {
     fn from(err: redis::RedisError) -> Self {
         Error::Redis(Box::new(err))
+    }
+}
+
+#[cfg(feature = "clickhouse")]
+impl From<clickhouse::error::Error> for Error {
+    fn from(err: clickhouse::error::Error) -> Self {
+        Error::ClickHouse(err.to_string())
     }
 }
 

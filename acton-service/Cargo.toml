@@ -123,6 +123,8 @@ blake3 = { workspace = true, optional = true }
 tokio-rustls = { workspace = true, optional = true }
 rustls-pemfile = { workspace = true, optional = true }
 tracing-journald = { workspace = true, optional = true }
+# ClickHouse (optional)
+clickhouse = { version = "0.14.3", features = ["uuid"], optional = true }
 
 [features]
 default = ["http", "observability"]
@@ -200,6 +202,9 @@ accounts = ["auth"]
 account-handlers = ["accounts"]
 # Native systemd journal integration
 journald = ["dep:tracing-journald"]
+
+# ClickHouse analytical database (composable with any primary database)
+clickhouse = ["dep:clickhouse"]
 
 # Basic examples
 [[example]]

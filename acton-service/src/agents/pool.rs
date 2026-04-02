@@ -884,6 +884,182 @@ impl SurrealDbAgent {
     }
 }
 
+// ============================================================================
+// ClickHouse Client Agent
+// ============================================================================
+
+#[cfg(feature = "clickhouse")]
+use super::messages::{ClickHouseClientConnected, ClickHouseClientConnectionFailed};
+#[cfg(all(
+    feature = "clickhouse",
+    not(feature = "database"),
+    not(feature = "events"),
+    not(feature = "cache"),
+    not(feature = "turso"),
+    not(feature = "surrealdb")
+))]
+use acton_reactive::prelude::*;
+#[cfg(all(
+    feature = "clickhouse",
+    not(feature = "database"),
+    not(feature = "cache"),
+    not(feature = "events"),
+    not(feature = "turso"),
+    not(feature = "surrealdb")
+))]
+use std::sync::Arc;
+#[cfg(all(
+    feature = "clickhouse",
+    not(feature = "database"),
+    not(feature = "cache"),
+    not(feature = "events"),
+    not(feature = "turso"),
+    not(feature = "surrealdb")
+))]
+use tokio::sync::RwLock;
+
+/// Shared client storage type for ClickHouse connections
+#[cfg(feature = "clickhouse")]
+pub type SharedClickHouseClient = Arc<RwLock<Option<clickhouse::Client>>>;
+
+/// State for the ClickHouse client agent
+#[cfg(feature = "clickhouse")]
+#[derive(Default)]
+pub struct ClickHouseClientState {
+    /// The underlying ClickHouse client
+    pub client: Option<clickhouse::Client>,
+    /// Configuration for the ClickHouse connection
+    pub config: Option<crate::config::ClickHouseConfig>,
+    /// Whether the agent is currently attempting to connect
+    pub connecting: bool,
+    /// Shared storage that AppState reads from directly
+    pub shared_client: Option<SharedClickHouseClient>,
+}
+
+#[cfg(feature = "clickhouse")]
+impl std::fmt::Debug for ClickHouseClientState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClickHouseClientState")
+            .field("config", &self.config)
+            .field("connecting", &self.connecting)
+            .field("has_client", &self.client.is_some())
+            .finish()
+    }
+}
+
+/// Agent-based ClickHouse client manager
+///
+/// Manages a ClickHouse HTTP client connection with automatic connection
+/// and graceful shutdown. ClickHouse uses an HTTP-based protocol, so there
+/// is no connection pool -- the client itself is lightweight and clonable.
+#[cfg(feature = "clickhouse")]
+pub struct ClickHousePoolAgent;
+
+#[cfg(feature = "clickhouse")]
+impl ClickHousePoolAgent {
+    /// Spawn a new ClickHouse pool agent with the given configuration
+    ///
+    /// # Arguments
+    ///
+    /// * `runtime` - The agent runtime to spawn into
+    /// * `config` - ClickHouse connection configuration
+    /// * `shared_client` - Shared storage that will be updated when the client connects.
+    pub async fn spawn(
+        runtime: &mut ActorRuntime,
+        config: crate::config::ClickHouseConfig,
+        shared_client: Option<SharedClickHouseClient>,
+    ) -> anyhow::Result<ActorHandle> {
+        let mut agent = runtime.new_actor::<ClickHouseClientState>();
+
+        // Initialize state before starting
+        agent.model.config = Some(config);
+        agent.model.connecting = true;
+        agent.model.shared_client = shared_client;
+
+        // Handle client connected message
+        agent.mutate_on::<ClickHouseClientConnected>(|agent, envelope| {
+            let client = envelope.message().client.clone();
+            agent.model.client = Some(client.clone());
+            agent.model.connecting = false;
+
+            // Update shared storage if configured
+            let shared_client = agent.model.shared_client.clone();
+
+            Reply::pending(async move {
+                if let Some(shared) = shared_client {
+                    *shared.write().await = Some(client);
+                    tracing::info!("ClickHouse client connected and stored in shared state");
+                } else {
+                    tracing::info!("ClickHouse client connected (no shared state)");
+                }
+            })
+        });
+
+        // Handle client connection failed message
+        agent.mutate_on::<ClickHouseClientConnectionFailed>(|agent, envelope| {
+            let error_msg = envelope.message().error.clone();
+            agent.model.connecting = false;
+            tracing::error!("ClickHouse client connection failed: {}", error_msg);
+
+            Reply::ready()
+        });
+
+        // Initialize connection on startup
+        agent.after_start(|agent| {
+            let config = agent.model.config.clone();
+            let self_handle = agent.handle().clone();
+
+            Reply::pending(async move {
+                if let Some(cfg) = config {
+                    tracing::info!("ClickHouse pool agent starting, connecting to ClickHouse...");
+
+                    let result = tokio::spawn(async move {
+                        crate::clickhouse_backend::create_client(&cfg).await
+                    })
+                    .await;
+
+                    match result {
+                        Ok(Ok(client)) => {
+                            self_handle
+                                .send(ClickHouseClientConnected { client })
+                                .await;
+                        }
+                        Ok(Err(e)) => {
+                            self_handle
+                                .send(ClickHouseClientConnectionFailed {
+                                    error: e.to_string(),
+                                })
+                                .await;
+                        }
+                        Err(e) => {
+                            self_handle
+                                .send(ClickHouseClientConnectionFailed {
+                                    error: format!("Connection task panicked: {}", e),
+                                })
+                                .await;
+                        }
+                    }
+                }
+            })
+        });
+
+        // Cleanup on shutdown
+        agent.before_stop(|agent| {
+            let client = agent.model.client.clone();
+            Reply::pending(async move {
+                if client.is_some() {
+                    tracing::info!("ClickHouse pool agent stopping, closing connection...");
+                    drop(client);
+                    tracing::info!("ClickHouse client closed");
+                }
+            })
+        });
+
+        let handle = agent.start().await;
+        Ok(handle)
+    }
+}
+
 // =============================================================================
 // Tests
 // =============================================================================

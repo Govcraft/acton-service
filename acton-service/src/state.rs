@@ -25,7 +25,8 @@ use std::sync::Arc;
     feature = "cache",
     feature = "events",
     feature = "turso",
-    feature = "surrealdb"
+    feature = "surrealdb",
+    feature = "clickhouse"
 ))]
 use tokio::sync::RwLock;
 
@@ -85,6 +86,9 @@ where
     #[cfg(feature = "surrealdb")]
     surrealdb_client: Arc<RwLock<Option<Arc<crate::surrealdb_backend::SurrealClient>>>>,
 
+    #[cfg(feature = "clickhouse")]
+    clickhouse_client: Arc<RwLock<Option<clickhouse::Client>>>,
+
     /// Audit logger for emitting audit events
     #[cfg(feature = "audit")]
     audit_logger: Option<crate::audit::AuditLogger>,
@@ -125,6 +129,8 @@ where
             nats_client: Arc::new(RwLock::new(None)),
             #[cfg(feature = "surrealdb")]
             surrealdb_client: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "clickhouse")]
+            clickhouse_client: Arc::new(RwLock::new(None)),
             #[cfg(feature = "audit")]
             audit_logger: None,
             #[cfg(feature = "audit")]
@@ -160,6 +166,8 @@ where
             nats_client: Arc::new(RwLock::new(None)),
             #[cfg(feature = "surrealdb")]
             surrealdb_client: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "clickhouse")]
+            clickhouse_client: Arc::new(RwLock::new(None)),
             #[cfg(feature = "audit")]
             audit_logger: None,
             #[cfg(feature = "audit")]
@@ -334,6 +342,33 @@ where
         self.surrealdb_client = storage;
     }
 
+    /// Get the ClickHouse client
+    ///
+    /// Returns a cloned `clickhouse::Client` if available. The client uses `Arc`
+    /// internally, so cloning is cheap.
+    ///
+    /// When using agent-based pool management, the client is automatically
+    /// populated by the `ClickHousePoolAgent` when the connection is established.
+    #[cfg(feature = "clickhouse")]
+    pub async fn clickhouse(&self) -> Option<clickhouse::Client> {
+        self.clickhouse_client.read().await.clone()
+    }
+
+    /// Get direct access to the ClickHouse client RwLock
+    #[cfg(feature = "clickhouse")]
+    pub fn clickhouse_lock(&self) -> &Arc<RwLock<Option<clickhouse::Client>>> {
+        &self.clickhouse_client
+    }
+
+    /// Set the ClickHouse client storage (internal use by ServiceBuilder)
+    #[cfg(feature = "clickhouse")]
+    pub(crate) fn set_clickhouse_client_storage(
+        &mut self,
+        storage: Arc<RwLock<Option<clickhouse::Client>>>,
+    ) {
+        self.clickhouse_client = storage;
+    }
+
     /// Get the agent broker handle for event broadcasting
     ///
     /// Returns the broker handle if the acton-reactive runtime was initialized.
@@ -490,6 +525,16 @@ where
             if let Some(surrealdb_config) = &self.config.surrealdb {
                 summary.surrealdb = Some(crate::pool_health::SurrealDbHealth::from_config(
                     surrealdb_config,
+                    true, // connected
+                ));
+            }
+        }
+
+        #[cfg(feature = "clickhouse")]
+        if self.clickhouse().await.is_some() {
+            if let Some(ch_config) = &self.config.clickhouse {
+                summary.clickhouse = Some(crate::pool_health::ClickHouseHealth::from_config(
+                    ch_config,
                     true, // connected
                 ));
             }
@@ -767,6 +812,8 @@ where
             turso_db: Arc::new(RwLock::new(None)), // Turso uses agents, not builder
             #[cfg(feature = "surrealdb")]
             surrealdb_client: Arc::new(RwLock::new(None)), // SurrealDB uses agents, not builder
+            #[cfg(feature = "clickhouse")]
+            clickhouse_client: Arc::new(RwLock::new(None)), // ClickHouse uses agents, not builder
             #[cfg(feature = "cache")]
             redis_pool,
             #[cfg(feature = "events")]
@@ -818,5 +865,75 @@ mod tests {
             .unwrap();
 
         assert_eq!(state.config().service.name, "acton-service");
+    }
+
+    #[cfg(feature = "clickhouse")]
+    mod clickhouse_state_tests {
+        use super::*;
+
+        #[tokio::test]
+        async fn test_clickhouse_accessor_returns_none_when_not_configured() {
+            let state = AppState::<()>::default();
+            assert!(
+                state.clickhouse().await.is_none(),
+                "ClickHouse client should be None when not configured"
+            );
+        }
+
+        #[tokio::test]
+        async fn test_clickhouse_lock_returns_shared_storage() {
+            let state = AppState::<()>::default();
+            let lock = state.clickhouse_lock();
+            let guard = lock.read().await;
+            assert!(guard.is_none());
+        }
+
+        #[tokio::test]
+        async fn test_set_clickhouse_client_storage_replaces_storage() {
+            let mut state = AppState::<()>::default();
+
+            // Create new shared storage with a default client
+            let client = clickhouse::Client::default()
+                .with_url("http://localhost:8123")
+                .with_database("test");
+            let storage = std::sync::Arc::new(tokio::sync::RwLock::new(Some(client)));
+
+            state.set_clickhouse_client_storage(storage.clone());
+
+            // Now the accessor should return the client
+            let result = state.clickhouse().await;
+            assert!(
+                result.is_some(),
+                "After setting storage with a client, accessor should return Some"
+            );
+        }
+
+        #[tokio::test]
+        async fn test_clickhouse_state_survives_clone() {
+            let mut state = AppState::<()>::default();
+            let client = clickhouse::Client::default()
+                .with_url("http://localhost:8123");
+            let storage = std::sync::Arc::new(tokio::sync::RwLock::new(Some(client)));
+            state.set_clickhouse_client_storage(storage);
+
+            // Clone and verify both see the same data
+            let cloned = state.clone();
+            assert!(state.clickhouse().await.is_some());
+            assert!(cloned.clickhouse().await.is_some());
+        }
+
+        #[tokio::test]
+        async fn test_builder_produces_state_with_none_clickhouse() {
+            let state = AppStateBuilder::<()>::new()
+                .without_tracing()
+                .build()
+                .await
+                .unwrap();
+
+            assert!(
+                state.clickhouse().await.is_none(),
+                "Builder without clickhouse config should produce state with None client"
+            );
+        }
     }
 }

@@ -115,6 +115,27 @@ pub(crate) struct SurrealDbConnectionFailed {
     pub error: String,
 }
 
+/// Internal message sent when a ClickHouse client connects successfully
+#[cfg(feature = "clickhouse")]
+#[derive(Clone)]
+pub(crate) struct ClickHouseClientConnected {
+    pub client: clickhouse::Client,
+}
+
+#[cfg(feature = "clickhouse")]
+impl std::fmt::Debug for ClickHouseClientConnected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClickHouseClientConnected").finish()
+    }
+}
+
+/// Internal message sent when a ClickHouse client connection fails
+#[cfg(feature = "clickhouse")]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ClickHouseClientConnectionFailed {
+    pub error: String,
+}
+
 // =============================================================================
 // Background Worker Agent messages
 // =============================================================================

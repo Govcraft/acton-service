@@ -2,4 +2,4 @@
  * Version information for acton-service
  * This should match the version in the root Cargo.toml workspace.package.version
  */
-export const VERSION = '0.19.0'
+export const VERSION = '0.20.0'

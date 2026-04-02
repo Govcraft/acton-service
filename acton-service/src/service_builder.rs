@@ -290,7 +290,8 @@ where
         feature = "cache",
         feature = "events",
         feature = "turso",
-        feature = "surrealdb"
+        feature = "surrealdb",
+        feature = "clickhouse"
     ))]
     fn init_agent_runtime(&mut self) -> &mut acton_reactive::prelude::ActorRuntime {
         // Note: agent_runtime should already be initialized in the async block
@@ -306,7 +307,8 @@ where
         feature = "cache",
         feature = "events",
         feature = "turso",
-        feature = "surrealdb"
+        feature = "surrealdb",
+        feature = "clickhouse"
     ))]
     fn broker(&self) -> Option<acton_reactive::prelude::ActorHandle> {
         self.agent_runtime.as_ref().map(|r| r.broker())
@@ -376,12 +378,16 @@ where
         #[cfg(feature = "surrealdb")]
         let needs_surrealdb_agent = config.surrealdb.is_some();
 
+        #[cfg(feature = "clickhouse")]
+        let needs_clickhouse_agent = config.clickhouse.is_some();
+
         #[cfg(any(
             feature = "database",
             feature = "cache",
             feature = "events",
             feature = "turso",
-            feature = "surrealdb"
+            feature = "surrealdb",
+            feature = "clickhouse"
         ))]
         let needs_agents = {
             #[cfg(feature = "database")]
@@ -409,7 +415,12 @@ where
             #[cfg(not(feature = "surrealdb"))]
             let surrealdb = false;
 
-            db || redis || nats || turso || surrealdb
+            #[cfg(feature = "clickhouse")]
+            let clickhouse = needs_clickhouse_agent;
+            #[cfg(not(feature = "clickhouse"))]
+            let clickhouse = false;
+
+            db || redis || nats || turso || surrealdb || clickhouse
         };
 
         // Initialize agent runtime and spawn pool agents if needed
@@ -449,6 +460,14 @@ where
                 None
             };
 
+        #[cfg(feature = "clickhouse")]
+        let shared_clickhouse_client: Option<crate::agents::SharedClickHouseClient> =
+            if needs_clickhouse_agent {
+                Some(std::sync::Arc::new(tokio::sync::RwLock::new(None)))
+            } else {
+                None
+            };
+
         // Agent handles for AppState
         #[cfg(feature = "database")]
         let mut db_agent_handle: Option<acton_reactive::prelude::ActorHandle> = None;
@@ -460,13 +479,16 @@ where
         let mut turso_agent_handle: Option<acton_reactive::prelude::ActorHandle> = None;
         #[cfg(feature = "surrealdb")]
         let mut surrealdb_agent_handle: Option<acton_reactive::prelude::ActorHandle> = None;
+        #[cfg(feature = "clickhouse")]
+        let mut clickhouse_agent_handle: Option<acton_reactive::prelude::ActorHandle> = None;
 
         #[cfg(any(
             feature = "database",
             feature = "cache",
             feature = "events",
             feature = "turso",
-            feature = "surrealdb"
+            feature = "surrealdb",
+            feature = "clickhouse"
         ))]
         let broker_handle = if needs_agents {
             // Use block_in_place to run async code in sync context
@@ -579,6 +601,29 @@ where
                                 }
                             }
                         }
+
+                        // Spawn ClickHouse agent
+                        #[cfg(feature = "clickhouse")]
+                        if let Some(ref ch_config) = config.clickhouse {
+                            match crate::agents::ClickHousePoolAgent::spawn(
+                                runtime,
+                                ch_config.clone(),
+                                shared_clickhouse_client.clone(),
+                            )
+                            .await
+                            {
+                                Ok(handle) => {
+                                    tracing::info!("ClickHouse pool agent spawned");
+                                    clickhouse_agent_handle = Some(handle);
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Failed to spawn ClickHouse pool agent: {}",
+                                        e
+                                    );
+                                }
+                            }
+                        }
                     });
                 });
             }
@@ -593,7 +638,8 @@ where
             feature = "cache",
             feature = "events",
             feature = "turso",
-            feature = "surrealdb"
+            feature = "surrealdb",
+            feature = "clickhouse"
         )))]
         let broker_handle: Option<acton_reactive::prelude::ActorHandle> = None;
 
@@ -814,6 +860,11 @@ where
             #[cfg(feature = "surrealdb")]
             if let Some(client) = shared_surrealdb_client {
                 state.set_surrealdb_client_storage(client);
+            }
+
+            #[cfg(feature = "clickhouse")]
+            if let Some(client) = shared_clickhouse_client {
+                state.set_clickhouse_client_storage(client);
             }
 
             #[cfg(feature = "audit")]

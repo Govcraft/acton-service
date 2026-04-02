@@ -4,7 +4,7 @@ import { siteConfig } from '../lib/config'
 
 // Extract version from workspace Cargo.toml
 // This should be kept in sync with the workspace version
-const ACTON_VERSION = '0.19.0'
+const ACTON_VERSION = '0.20.0'
 
 // Helper function to build dependency string
 function buildDep(features) {
@@ -65,6 +65,10 @@ const config = {
       jwtOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["jwt"] }`,
       websocketOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["websocket"] }`,
       tursoOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["turso"] }`,
+      clickhouse: `acton-service = { version = "${ACTON_VERSION}", features = ["clickhouse", "http", "observability"] }`,
+      clickhouseOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["clickhouse"] }`,
+      clickhouseDatabase: `acton-service = { version = "${ACTON_VERSION}", features = ["clickhouse", "database", "http", "observability"] }`,
+      clickhouseAudit: `acton-service = { version = "${ACTON_VERSION}", features = ["clickhouse", "audit", "http", "observability"] }`,
       audit: `acton-service = { version = "${ACTON_VERSION}", features = ["audit", "http", "observability"] }`,
       auditOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["audit"] }`,
       auditDatabase: `acton-service = { version = "${ACTON_VERSION}", features = ["audit", "database", "http", "observability"] }`,

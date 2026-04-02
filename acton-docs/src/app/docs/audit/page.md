@@ -36,6 +36,7 @@ Auth Events --> AuditLogger.log() -------------------------+             +--> Sy
 |---|---|
 | `audit` alone | In-memory hash chain + syslog export |
 | `audit` + `database`/`turso`/`surrealdb` | Persistent append-only storage |
+| `audit` + `clickhouse` | Analytical audit storage (MergeTree, time-partitioned) |
 | `audit` + `observability` | OTLP log export via tracing |
 | `audit` + token auth (PASETO/JWT) | Automatic auth event emission |
 
@@ -53,6 +54,13 @@ With a database backend for persistent storage:
 ```toml
 [dependencies]
 {% $dep.auditDatabase %}
+```
+
+Or with ClickHouse for analytical audit storage:
+
+```toml
+[dependencies]
+{% $dep.clickhouseAudit %}
 ```
 
 ## Configuration
