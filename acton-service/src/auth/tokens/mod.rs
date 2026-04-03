@@ -33,6 +33,8 @@ pub mod jwt_generator;
 
 pub mod refresh;
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -112,6 +114,7 @@ pub struct ClaimsBuilder {
     perms: Vec<String>,
     iss: Option<String>,
     aud: Option<String>,
+    custom: HashMap<String, serde_json::Value>,
 }
 
 impl ClaimsBuilder {
@@ -186,6 +189,40 @@ impl ClaimsBuilder {
         self
     }
 
+    /// Add a custom claim
+    ///
+    /// Custom claims are included in the token payload alongside standard claims.
+    /// Values can be any JSON-serializable type.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let claims = ClaimsBuilder::new()
+    ///     .user("123")
+    ///     .custom_claim("tenant_id", "org-42")
+    ///     .custom_claim("level", 5)
+    ///     .build()?;
+    /// ```
+    pub fn custom_claim(
+        mut self,
+        key: impl Into<String>,
+        value: impl Into<serde_json::Value>,
+    ) -> Self {
+        self.custom.insert(key.into(), value.into());
+        self
+    }
+
+    /// Add multiple custom claims from an iterator of key-value pairs
+    pub fn custom_claims(
+        mut self,
+        claims: impl IntoIterator<Item = (impl Into<String>, impl Into<serde_json::Value>)>,
+    ) -> Self {
+        for (key, value) in claims {
+            self.custom.insert(key.into(), value.into());
+        }
+        self
+    }
+
     /// Build the Claims (without expiration - that's set by the generator)
     ///
     /// Note: `exp`, `iat`, and `jti` are set by the token generator.
@@ -205,6 +242,7 @@ impl ClaimsBuilder {
             jti: None, // Set by generator
             iss: self.iss,
             aud: self.aud,
+            custom: self.custom,
         })
     }
 }
@@ -240,6 +278,31 @@ mod tests {
 
         assert_eq!(claims.sub, "client:api-client-abc");
         assert_eq!(claims.roles, vec!["service"]);
+    }
+
+    #[test]
+    fn test_claims_builder_custom_claims() {
+        let claims = ClaimsBuilder::new()
+            .user("123")
+            .custom_claim("tenant_id", serde_json::json!("org-42"))
+            .custom_claim("level", serde_json::json!(5))
+            .custom_claims([
+                ("region".to_string(), serde_json::json!("us-east-1")),
+                ("beta".to_string(), serde_json::json!(true)),
+            ])
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            claims.custom_claim_as::<String>("tenant_id"),
+            Some("org-42".to_string())
+        );
+        assert_eq!(claims.custom_claim_as::<i64>("level"), Some(5));
+        assert_eq!(
+            claims.custom_claim_as::<String>("region"),
+            Some("us-east-1".to_string())
+        );
+        assert_eq!(claims.custom_claim_as::<bool>("beta"), Some(true));
     }
 
     #[test]

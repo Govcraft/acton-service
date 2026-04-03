@@ -104,6 +104,9 @@ async fn login(
         .set_claim(TokenIdentifierClaim::from(uuid::Uuid::new_v4().to_string()))
         .set_claim(CustomClaim::try_from(("email", user.email.as_str()))?)
         .set_claim(CustomClaim::try_from(("roles", json!(user.roles)))?)
+        // Custom claims — any serializable value
+        .set_claim(CustomClaim::try_from(("tenant_id", user.tenant_id.as_str()))?)
+        .set_claim(CustomClaim::try_from(("subscription_tier", "enterprise"))?)
         .build(&key)?;
 
     Ok(Json(LoginResponse { token }))
@@ -292,6 +295,10 @@ Token claims are extracted into a `Claims` struct available in request handlers:
 - `username` - User's display name
 - `email` - User's email address
 
+**Custom Claims:**
+
+Any additional fields in the token payload are captured as custom claims in a `HashMap<String, serde_json::Value>`. This allows application-specific data like tenant IDs, feature flags, or subscription tiers to be included in tokens without modifying the `Claims` struct. See [Token Generation - Custom Claims](/docs/token-generation#custom-claims) for how to create tokens with custom claims.
+
 **Example PASETO Payload:**
 ```json
 {
@@ -300,6 +307,8 @@ Token claims are extracted into a `Claims` struct available in request handlers:
   "email": "alice@example.com",
   "roles": ["user", "premium"],
   "perms": ["read:documents", "write:documents"],
+  "tenant_id": "org-42",
+  "subscription_tier": "enterprise",
   "exp": "2024-12-31T23:59:59+00:00",
   "iat": "2024-01-01T00:00:00+00:00",
   "jti": "unique-token-id-abc123"
@@ -328,6 +337,10 @@ async fn protected_handler(
     if claims.perms.contains(&"write:documents".to_string()) {
         // Permission-specific logic
     }
+
+    // Access custom claims
+    let tenant: Option<String> = claims.custom_claim_as("tenant_id");
+    let tier: Option<String> = claims.custom_claim_as("subscription_tier");
 
     format!("Hello, {}!", username)
 }

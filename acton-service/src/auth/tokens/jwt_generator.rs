@@ -3,6 +3,7 @@
 //! Generates JWT tokens for authentication. This complements the existing
 //! `JwtAuth` validator.
 
+use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,6 +39,8 @@ struct JwtClaims {
     roles: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     perms: Vec<String>,
+    #[serde(flatten, default, skip_serializing_if = "HashMap::is_empty")]
+    custom: HashMap<String, serde_json::Value>,
 }
 
 /// JWT token generator
@@ -136,6 +139,7 @@ impl JwtGenerator {
             username: claims.username.clone(),
             roles: claims.roles.clone(),
             perms: claims.perms.clone(),
+            custom: claims.custom.clone(),
         };
 
         // If a key manager is configured, use the active signing key from rotation

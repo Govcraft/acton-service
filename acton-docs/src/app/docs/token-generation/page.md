@@ -16,7 +16,7 @@ This guide covers token generation. See the [Authentication Overview](/docs/auth
 
 Token generation in acton-service creates cryptographic tokens for stateless authentication. The module supports two token formats: PASETO V4 (the secure default) and JWT (feature-gated for compatibility). Refresh tokens enable long-lived sessions with automatic rotation and reuse detection.
 
-The `TokenGenerator` trait abstracts token creation, with `PasetoGenerator` and `JwtGenerator` implementations. Claims include standard fields (subject, expiration, issuer) plus custom fields (roles, permissions, email). Storage backends (Redis, PostgreSQL, Turso) handle refresh token persistence with built-in security features.
+The `TokenGenerator` trait abstracts token creation, with `PasetoGenerator` and `JwtGenerator` implementations. Claims include standard fields (subject, expiration, issuer), built-in fields (roles, permissions, email), and arbitrary custom claims for application-specific data. Storage backends (Redis, PostgreSQL, Turso) handle refresh token persistence with built-in security features.
 
 **Key characteristics:**
 
@@ -137,6 +137,14 @@ let claims = ClaimsBuilder::new()
 let claims = ClaimsBuilder::new()
     .subject("custom:identifier")          // sub: "custom:identifier"
     .build()?;
+
+// With custom claims
+let claims = ClaimsBuilder::new()
+    .user("123")
+    .custom_claim("tenant_id", serde_json::json!("org-42"))
+    .custom_claim("level", serde_json::json!(5))
+    .custom_claim("features", serde_json::json!(["beta", "dark_mode"]))
+    .build()?;
 ```
 
 **Claims structure:**
@@ -153,6 +161,58 @@ let claims = ClaimsBuilder::new()
 | `jti` | Option | Token ID (set by generator if configured) |
 | `iss` | Option | Issuer |
 | `aud` | Option | Audience |
+| `custom` | HashMap | Arbitrary custom claims (via `#[serde(flatten)]`) |
+
+### Custom Claims
+
+Custom claims allow you to embed arbitrary application-specific data in tokens. Any JSON-serializable value is supported — strings, numbers, booleans, arrays, and objects. Custom claims work identically with both PASETO and JWT tokens.
+
+```rust
+use acton_service::auth::ClaimsBuilder;
+
+let claims = ClaimsBuilder::new()
+    .user("123")
+    .custom_claim("tenant_id", serde_json::json!("org-42"))
+    .custom_claim("subscription_tier", serde_json::json!("enterprise"))
+    .custom_claim("feature_flags", serde_json::json!(["beta", "dark_mode"]))
+    .custom_claims([
+        ("region".to_string(), serde_json::json!("us-east-1")),
+        ("max_requests".to_string(), serde_json::json!(10000)),
+    ])
+    .build()?;
+```
+
+Custom claims are stored in a `HashMap<String, serde_json::Value>` and serialized flat alongside the standard claims using `#[serde(flatten)]`. This means a token payload looks like:
+
+```json
+{
+  "sub": "user:123",
+  "exp": "2024-12-31T23:59:59+00:00",
+  "tenant_id": "org-42",
+  "subscription_tier": "enterprise",
+  "feature_flags": ["beta", "dark_mode"],
+  "region": "us-east-1",
+  "max_requests": 10000
+}
+```
+
+**Retrieving custom claims** after token validation:
+
+```rust
+// Get as raw JSON value
+if let Some(value) = claims.custom_claim("tenant_id") {
+    println!("Tenant: {}", value);
+}
+
+// Get as a typed value (returns None if missing or wrong type)
+let tenant: Option<String> = claims.custom_claim_as("tenant_id");
+let max_req: Option<i64> = claims.custom_claim_as("max_requests");
+let flags: Option<Vec<String>> = claims.custom_claim_as("feature_flags");
+```
+
+{% callout type="warning" title="Reserved Claim Keys" %}
+Do not use standard claim keys (`sub`, `exp`, `iat`, `jti`, `iss`, `aud`) or built-in field names (`email`, `username`, `roles`, `perms`) as custom claim keys. PASETO will reject reserved keys, and built-in fields are handled by their dedicated `ClaimsBuilder` methods.
+{% /callout %}
 
 ---
 
@@ -412,11 +472,12 @@ async fn login(
         return Err(Error::Auth("Invalid credentials".into()));
     }
 
-    // 2. Build claims
+    // 2. Build claims (including custom claims for multi-tenancy)
     let claims = ClaimsBuilder::new()
         .user(&user.id)
         .email(&user.email)
         .roles(user.roles.clone())
+        .custom_claim("tenant_id", serde_json::json!(&user.tenant_id))
         .build()?;
 
     // 3. Generate access token

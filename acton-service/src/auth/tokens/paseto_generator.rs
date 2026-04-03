@@ -221,6 +221,11 @@ impl PasetoGenerator {
             payload["perms"] = json!(claims.perms);
         }
 
+        // Add custom claims
+        for (key, value) in &claims.custom {
+            payload[key] = value.clone();
+        }
+
         // Use config issuer/audience, or claims issuer/audience
         let issuer = self.issuer.as_ref().or(claims.iss.as_ref());
         let audience = self.audience.as_ref().or(claims.aud.as_ref());
@@ -362,26 +367,22 @@ impl PasetoGenerator {
             builder.set_claim(AudienceClaim::from(aud));
         }
 
-        // Add custom claims
-        if let Some(email) = payload.get("email").and_then(|v| v.as_str()) {
-            let claim = CustomClaim::try_from(("email", email))
-                .map_err(|e| Error::Paseto(format!("Invalid email claim: {}", e)))?;
-            builder.set_claim(claim);
-        }
-        if let Some(username) = payload.get("username").and_then(|v| v.as_str()) {
-            let claim = CustomClaim::try_from(("username", username))
-                .map_err(|e| Error::Paseto(format!("Invalid username claim: {}", e)))?;
-            builder.set_claim(claim);
-        }
-        if let Some(roles) = payload.get("roles") {
-            let claim = CustomClaim::try_from(("roles", roles.clone()))
-                .map_err(|e| Error::Paseto(format!("Invalid roles claim: {}", e)))?;
-            builder.set_claim(claim);
-        }
-        if let Some(perms) = payload.get("perms") {
-            let claim = CustomClaim::try_from(("perms", perms.clone()))
-                .map_err(|e| Error::Paseto(format!("Invalid perms claim: {}", e)))?;
-            builder.set_claim(claim);
+        // Add all non-standard claims (email, username, roles, perms, and user-defined custom claims)
+        let standard_keys: &[&str] = &["sub", "exp", "iat", "jti", "iss", "aud"];
+        if let Some(obj) = payload.as_object() {
+            for (key, value) in obj {
+                if standard_keys.contains(&key.as_str()) {
+                    continue;
+                }
+                let claim = if let Some(s) = value.as_str() {
+                    CustomClaim::try_from((key.as_str(), s))
+                        .map_err(|e| Error::Paseto(format!("Invalid '{}' claim: {}", key, e)))?
+                } else {
+                    CustomClaim::try_from((key.as_str(), value.clone()))
+                        .map_err(|e| Error::Paseto(format!("Invalid '{}' claim: {}", key, e)))?
+                };
+                builder.set_claim(claim);
+            }
         }
 
         Ok(())
@@ -470,6 +471,7 @@ mod tests {
             jti: None,
             iss: None,
             aud: None,
+            custom: Default::default(),
         };
 
         let token = generator.generate_token(&claims).unwrap();
@@ -513,6 +515,7 @@ mod tests {
             jti: None,
             iss: None,
             aud: None,
+            custom: Default::default(),
         };
 
         let token = generator.generate_token(&claims).unwrap();
@@ -543,6 +546,7 @@ mod tests {
             jti: None,
             iss: None,
             aud: None,
+            custom: Default::default(),
         };
 
         // Generate with 1 hour expiry
@@ -572,9 +576,66 @@ mod tests {
             jti: None,
             iss: None,
             aud: None,
+            custom: Default::default(),
         };
 
         let token = generator.generate_token(&claims).unwrap();
         assert!(token.starts_with("v4.local."));
+    }
+
+    #[test]
+    fn test_custom_claims_round_trip() {
+        let key_file = create_test_key_file();
+
+        let paseto_gen_config = PasetoGenerationConfig {
+            version: "v4".to_string(),
+            purpose: "local".to_string(),
+            key_path: key_file.path().to_path_buf(),
+            issuer: None,
+            audience: None,
+        };
+        let token_config = TokenGenerationConfig::default();
+        let generator = PasetoGenerator::new(&paseto_gen_config, &token_config).unwrap();
+
+        let paseto_config = crate::config::PasetoConfig {
+            version: "v4".to_string(),
+            purpose: "local".to_string(),
+            key_path: key_file.path().to_path_buf(),
+            issuer: None,
+            audience: None,
+        };
+        let validator = PasetoAuth::new(&paseto_config).unwrap();
+
+        let mut custom = std::collections::HashMap::new();
+        custom.insert("tenant_id".to_string(), json!("org-42"));
+        custom.insert("level".to_string(), json!(5));
+        custom.insert("features".to_string(), json!(["beta", "dark_mode"]));
+
+        let claims = Claims {
+            sub: "user:123".to_string(),
+            email: None,
+            username: None,
+            roles: vec![],
+            perms: vec![],
+            exp: 0,
+            iat: None,
+            jti: None,
+            iss: None,
+            aud: None,
+            custom,
+        };
+
+        let token = generator.generate_token(&claims).unwrap();
+        let validated = validator.validate_token(&token).unwrap();
+
+        assert_eq!(
+            validated.custom_claim_as::<String>("tenant_id"),
+            Some("org-42".to_string())
+        );
+        assert_eq!(validated.custom_claim_as::<i64>("level"), Some(5));
+        assert_eq!(
+            validated.custom_claim_as::<Vec<String>>("features"),
+            Some(vec!["beta".to_string(), "dark_mode".to_string()])
+        );
     }
 }

@@ -308,6 +308,20 @@ impl PasetoAuth {
             json["iat"].as_i64()
         };
 
+        // Collect custom claims (any keys not in the standard set)
+        let known_keys: &[&str] = &[
+            "sub", "exp", "iat", "jti", "iss", "aud", "email", "username", "roles", "perms",
+        ];
+        let custom = json
+            .as_object()
+            .map(|obj| {
+                obj.iter()
+                    .filter(|(k, _)| !known_keys.contains(&k.as_str()))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
         Ok(Claims {
             sub,
             email: json["email"].as_str().map(String::from),
@@ -333,6 +347,7 @@ impl PasetoAuth {
             jti: json["jti"].as_str().map(String::from),
             iss: json["iss"].as_str().map(String::from),
             aud: json["aud"].as_str().map(String::from),
+            custom,
         })
     }
 }

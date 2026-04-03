@@ -3,6 +3,8 @@
 //! Provides a unified interface for token validation supporting both PASETO (default)
 //! and JWT (feature-gated).
 
+use std::collections::HashMap;
+
 use axum::http::HeaderMap;
 use serde::{Deserialize, Serialize};
 
@@ -53,6 +55,14 @@ pub struct Claims {
     /// Audience (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aud: Option<String>,
+
+    /// Custom claims (arbitrary key-value pairs)
+    ///
+    /// Any claims not matching the known fields above are captured here.
+    /// This supports both rusty_paseto's `CustomClaim` and JWT's flexible
+    /// payload structure.
+    #[serde(flatten, default, skip_serializing_if = "HashMap::is_empty")]
+    pub custom: HashMap<String, serde_json::Value>,
 }
 
 impl Claims {
@@ -97,6 +107,19 @@ impl Claims {
         } else {
             None
         }
+    }
+
+    /// Get a custom claim value by key
+    pub fn custom_claim(&self, key: &str) -> Option<&serde_json::Value> {
+        self.custom.get(key)
+    }
+
+    /// Get a custom claim as a typed value, returning `None` if the key is
+    /// missing or deserialization fails
+    pub fn custom_claim_as<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
+        self.custom
+            .get(key)
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
     }
 }
 
@@ -160,6 +183,7 @@ mod tests {
             jti: None,
             iss: None,
             aud: None,
+            custom: HashMap::new(),
         };
 
         assert!(claims.is_user());
@@ -181,6 +205,7 @@ mod tests {
             jti: None,
             iss: None,
             aud: None,
+            custom: HashMap::new(),
         };
 
         assert!(!claims.is_user());
@@ -202,6 +227,7 @@ mod tests {
             jti: None,
             iss: None,
             aud: None,
+            custom: HashMap::new(),
         };
 
         assert!(claims.has_role("admin"));
@@ -209,6 +235,70 @@ mod tests {
         assert!(!claims.has_role("super_admin"));
         assert!(claims.has_permission("ban_user"));
         assert!(!claims.has_permission("delete_system"));
+    }
+
+    #[test]
+    fn test_custom_claims() {
+        let mut custom = HashMap::new();
+        custom.insert(
+            "tenant_id".to_string(),
+            serde_json::Value::String("org-42".to_string()),
+        );
+        custom.insert(
+            "feature_flags".to_string(),
+            serde_json::json!(["beta", "dark_mode"]),
+        );
+
+        let claims = Claims {
+            sub: "user:123".to_string(),
+            email: None,
+            username: None,
+            roles: vec![],
+            perms: vec![],
+            exp: 0,
+            iat: None,
+            jti: None,
+            iss: None,
+            aud: None,
+            custom,
+        };
+
+        assert_eq!(
+            claims.custom_claim("tenant_id"),
+            Some(&serde_json::Value::String("org-42".to_string()))
+        );
+        assert_eq!(
+            claims.custom_claim_as::<String>("tenant_id"),
+            Some("org-42".to_string())
+        );
+        assert_eq!(
+            claims.custom_claim_as::<Vec<String>>("feature_flags"),
+            Some(vec!["beta".to_string(), "dark_mode".to_string()])
+        );
+        assert_eq!(claims.custom_claim("nonexistent"), None);
+    }
+
+    #[test]
+    fn test_custom_claims_serde_flatten() {
+        let json = serde_json::json!({
+            "sub": "user:1",
+            "exp": 9999999999_i64,
+            "tenant_id": "org-42",
+            "level": 5
+        });
+
+        let claims: Claims = serde_json::from_value(json).unwrap();
+        assert_eq!(claims.sub, "user:1");
+        assert_eq!(
+            claims.custom_claim_as::<String>("tenant_id"),
+            Some("org-42".to_string())
+        );
+        assert_eq!(claims.custom_claim_as::<i64>("level"), Some(5));
+
+        // Round-trip: custom claims should serialize back
+        let serialized = serde_json::to_value(&claims).unwrap();
+        assert_eq!(serialized["tenant_id"], "org-42");
+        assert_eq!(serialized["level"], 5);
     }
 
     #[cfg(feature = "cache")]

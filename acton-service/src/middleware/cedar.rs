@@ -945,6 +945,7 @@ mod tests {
             jti: None,
             iss: None,
             aud: None,
+            custom: Default::default(),
         };
 
         let principal = build_principal(&claims).unwrap();
