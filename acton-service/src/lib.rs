@@ -155,6 +155,12 @@ pub mod accounts;
 /// - [`HealthStatus`](agents::HealthStatus) - for health check results
 pub mod agents;
 
+/// Actor-backed extensions for custom application state
+///
+/// Provides the [`ActorExtension`](extensions::ActorExtension) trait for registering
+/// custom supervised actors via [`ServiceBuilder::with_actor`](service_builder::ServiceBuilder::with_actor).
+pub mod extensions;
+
 /// Build-time utilities for compiling protocol buffers
 ///
 /// These are used in `build.rs` scripts, not at runtime.
@@ -212,6 +218,7 @@ pub mod prelude {
     };
     pub use crate::server::Server;
     pub use crate::service_builder::{ActonService, ServiceBuilder, VersionedRoutes};
+    pub use crate::extensions::{ActorExtension, ActorExtensions};
     pub use crate::state::{AppState, AppStateBuilder};
     pub use crate::versioning::{
         extract_version_from_path, versioned_router, ApiVersion, DeprecationInfo,

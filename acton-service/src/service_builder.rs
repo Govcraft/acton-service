@@ -131,6 +131,7 @@ where
     #[cfg(feature = "cedar-authz")]
     cedar_path_normalizer: Option<fn(&str) -> String>,
     agent_runtime: Option<acton_reactive::prelude::ActorRuntime>,
+    actor_extensions: Vec<Box<dyn crate::extensions::ActorExtensionSpawner>>,
 }
 
 impl<T> ServiceBuilder<T>
@@ -150,7 +151,33 @@ where
             #[cfg(feature = "cedar-authz")]
             cedar_path_normalizer: None,
             agent_runtime: None,
+            actor_extensions: Vec::new(),
         }
+    }
+
+    /// Register a custom actor extension.
+    ///
+    /// The actor will be spawned under a framework-managed supervisor during
+    /// [`build()`](Self::build). It must implement [`ActorExtension`](crate::extensions::ActorExtension),
+    /// which requires configuring message handlers via the `configure` method.
+    ///
+    /// Access the actor's handle in request handlers via [`AppState::actor::<A>()`](crate::AppState::actor).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// ServiceBuilder::new()
+    ///     .with_actor::<MyCache>()
+    ///     .with_routes(routes)
+    ///     .build()
+    ///     .serve()
+    ///     .await?;
+    /// ```
+    pub fn with_actor<A: crate::extensions::ActorExtension>(mut self) -> Self {
+        self.actor_extensions.push(Box::new(
+            crate::extensions::ActorExtensionEntry::<A>(std::marker::PhantomData),
+        ));
+        self
     }
 
     /// Set the service configuration (optional, defaults to Config::default())
@@ -285,14 +312,6 @@ where
     ///
     /// Returns a mutable reference to the `ActorRuntime` for spawning agents.
     /// Called automatically by `build()` when connection pools are configured.
-    #[cfg(any(
-        feature = "database",
-        feature = "cache",
-        feature = "events",
-        feature = "turso",
-        feature = "surrealdb",
-        feature = "clickhouse"
-    ))]
     fn init_agent_runtime(&mut self) -> &mut acton_reactive::prelude::ActorRuntime {
         // Note: agent_runtime should already be initialized in the async block
         // before this is called
@@ -302,14 +321,6 @@ where
     }
 
     /// Get the agent broker handle (internal use only)
-    #[cfg(any(
-        feature = "database",
-        feature = "cache",
-        feature = "events",
-        feature = "turso",
-        feature = "surrealdb",
-        feature = "clickhouse"
-    ))]
     fn broker(&self) -> Option<acton_reactive::prelude::ActorHandle> {
         self.agent_runtime.as_ref().map(|r| r.broker())
     }
@@ -633,16 +644,6 @@ where
             None
         };
 
-        #[cfg(not(any(
-            feature = "database",
-            feature = "cache",
-            feature = "events",
-            feature = "turso",
-            feature = "surrealdb",
-            feature = "clickhouse"
-        )))]
-        let broker_handle: Option<acton_reactive::prelude::ActorHandle> = None;
-
         // Spawn audit agent if configured
         #[cfg(feature = "audit")]
         let audit_logger: Option<crate::audit::AuditLogger> = {
@@ -823,6 +824,70 @@ where
             }
         };
 
+        // Spawn actor extensions under a supervisor if any were registered
+        let pending_extensions = std::mem::take(&mut self.actor_extensions);
+        let actor_extensions = if !pending_extensions.is_empty() {
+            if let Ok(_handle) = tokio::runtime::Handle::try_current() {
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        // Initialize agent runtime if not already done (e.g., no pool features enabled)
+                        if self.agent_runtime.is_none() {
+                            tracing::debug!(
+                                "Initializing acton-reactive agent runtime for actor extensions"
+                            );
+                            self.agent_runtime =
+                                Some(acton_reactive::prelude::ActonApp::launch_async().await);
+                        }
+
+                        let runtime = self.init_agent_runtime();
+
+                        // Spawn the extensions supervisor
+                        let supervisor = runtime
+                            .new_actor::<crate::extensions::ExtensionsSupervisorState>();
+                        let supervisor_handle = supervisor.start().await;
+                        tracing::info!("Extensions supervisor spawned");
+
+                        // Spawn each user actor under supervision
+                        let mut handles = std::collections::HashMap::new();
+                        for ext in &pending_extensions {
+                            match ext.spawn(&supervisor_handle, runtime).await {
+                                Ok((type_id, handle)) => {
+                                    handles.insert(type_id, handle);
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        "Failed to spawn actor extension: {}",
+                                        e
+                                    );
+                                }
+                            }
+                        }
+
+                        crate::extensions::ActorExtensions::from(handles)
+                    })
+                })
+            } else {
+                tracing::warn!(
+                    "No tokio runtime available, skipping actor extension spawning"
+                );
+                crate::extensions::ActorExtensions::default()
+            }
+        } else {
+            crate::extensions::ActorExtensions::default()
+        };
+
+        // When no pool features are enabled, the runtime may still have been
+        // initialized for actor extensions. Provide the broker if available.
+        #[cfg(not(any(
+            feature = "database",
+            feature = "cache",
+            feature = "events",
+            feature = "turso",
+            feature = "surrealdb",
+            feature = "clickhouse"
+        )))]
+        let broker_handle: Option<acton_reactive::prelude::ActorHandle> = self.broker();
+
         let routes = self.routes.unwrap_or_default();
 
         // Build AppState with agent-managed pools
@@ -884,6 +949,10 @@ where
 
             if let Some(ref worker) = background_worker {
                 state.set_background_worker(worker.clone());
+            }
+
+            if !actor_extensions.is_empty() {
+                state.set_actor_extensions(actor_extensions);
             }
 
             state
