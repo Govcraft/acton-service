@@ -4,7 +4,7 @@ import { siteConfig } from '../lib/config'
 
 // Extract version from workspace Cargo.toml
 // This should be kept in sync with the workspace version
-const ACTON_VERSION = '0.20.0'
+const ACTON_VERSION = '0.21.0'
 
 // Helper function to build dependency string
 function buildDep(features) {
