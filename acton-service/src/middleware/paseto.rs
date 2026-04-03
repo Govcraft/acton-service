@@ -281,6 +281,25 @@ impl PasetoAuth {
     }
 
     /// Convert serde_json::Value to Claims
+    /// Parse a JSON value that might be an array or a stringified JSON array.
+    ///
+    /// PASETO custom claims can only store strings, so arrays like `["admin"]`
+    /// get serialized to `"[\"admin\"]"` during token generation. This function
+    /// handles both the native array case and the stringified case.
+    fn parse_string_or_array(value: &serde_json::Value) -> Vec<String> {
+        // Direct array
+        if let Some(arr) = value.as_array() {
+            return arr.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        }
+        // Stringified JSON array
+        if let Some(s) = value.as_str() {
+            if let Ok(arr) = serde_json::from_str::<Vec<String>>(s) {
+                return arr;
+            }
+        }
+        Vec::new()
+    }
+
     fn json_to_claims(json: serde_json::Value) -> Result<Claims, Error> {
         let sub = json["sub"]
             .as_str()
@@ -317,7 +336,15 @@ impl PasetoAuth {
             .map(|obj| {
                 obj.iter()
                     .filter(|(k, _)| !known_keys.contains(&k.as_str()))
-                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .map(|(k, v)| {
+                        // Try to parse stringified JSON back into structured values
+                        let parsed = if let Some(s) = v.as_str() {
+                            serde_json::from_str(s).unwrap_or_else(|_| v.clone())
+                        } else {
+                            v.clone()
+                        };
+                        (k.clone(), parsed)
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -326,22 +353,8 @@ impl PasetoAuth {
             sub,
             email: json["email"].as_str().map(String::from),
             username: json["username"].as_str().map(String::from),
-            roles: json["roles"]
-                .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            perms: json["perms"]
-                .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default(),
+            roles: Self::parse_string_or_array(&json["roles"]),
+            perms: Self::parse_string_or_array(&json["perms"]),
             exp,
             iat,
             jti: json["jti"].as_str().map(String::from),

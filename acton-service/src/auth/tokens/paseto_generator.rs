@@ -397,16 +397,21 @@ impl PasetoGenerator {
     /// PASETO's `CustomClaim` only accepts `&str`. Non-string values (arrays,
     /// objects, numbers, booleans) are serialized to their JSON representation.
     /// Standard claims (sub, exp, iat, jti, iss, aud) are left untouched.
+    /// Normalize a claims payload so ALL non-standard claim values become strings.
+    ///
+    /// PASETO's `CustomClaim` only accepts `&str`. Non-string values (arrays,
+    /// objects, numbers, booleans) are serialized to their JSON representation.
+    /// Standard PASETO claims (sub, exp, iat, jti, iss, aud) are left untouched
+    /// since they use dedicated PASETO claim types.
     fn normalize_custom_claims(payload: &serde_json::Value) -> serde_json::Value {
-        let standard_keys: &[&str] = &["sub", "exp", "iat", "jti", "iss", "aud"];
+        let paseto_standard_keys: &[&str] = &["sub", "exp", "iat", "jti", "iss", "aud"];
         let mut normalized = payload.clone();
         if let Some(obj) = normalized.as_object_mut() {
             for (key, value) in obj.iter_mut() {
-                if standard_keys.contains(&key.as_str()) {
+                if paseto_standard_keys.contains(&key.as_str()) {
                     continue;
                 }
                 if !value.is_string() {
-                    // Serialize to JSON string representation
                     *value = serde_json::Value::String(value.to_string());
                 }
             }
