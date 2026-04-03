@@ -290,9 +290,10 @@ impl PasetoGenerator {
         footer: &str,
     ) -> Result<String, Error> {
         let key = PasetoSymmetricKey::<V4, Local>::from(Key::from(key_bytes));
+        let payload = Self::normalize_custom_claims(payload);
 
         let mut builder = PasetoBuilder::<V4, Local>::default();
-        Self::populate_builder_claims(&mut builder, payload)?;
+        Self::populate_builder_claims(&mut builder, &payload)?;
 
         if !footer.is_empty() {
             builder.set_footer(Footer::from(footer));
@@ -318,9 +319,10 @@ impl PasetoGenerator {
         footer: &str,
     ) -> Result<String, Error> {
         let key = PasetoAsymmetricPrivateKey::<V4, Public>::from(private_key_bytes.as_slice());
+        let payload = Self::normalize_custom_claims(payload);
 
         let mut builder = PasetoBuilder::<V4, Public>::default();
-        Self::populate_builder_claims(&mut builder, payload)?;
+        Self::populate_builder_claims(&mut builder, &payload)?;
 
         if !footer.is_empty() {
             builder.set_footer(Footer::from(footer));
@@ -335,6 +337,9 @@ impl PasetoGenerator {
     ///
     /// Shared between V4 Local and V4 Public builders to avoid
     /// duplicating claim-setting logic.
+    ///
+    /// `payload_normalized` must have all non-string values pre-serialized to JSON strings
+    /// so the builder can borrow them for the required lifetime.
     fn populate_builder_claims<'a, Version, Purpose>(
         builder: &mut PasetoBuilder<'a, Version, Purpose>,
         payload: &'a serde_json::Value,
@@ -374,18 +379,39 @@ impl PasetoGenerator {
                 if standard_keys.contains(&key.as_str()) {
                     continue;
                 }
-                let claim = if let Some(s) = value.as_str() {
-                    CustomClaim::try_from((key.as_str(), s))
-                        .map_err(|e| Error::Paseto(format!("Invalid '{}' claim: {}", key, e)))?
-                } else {
-                    CustomClaim::try_from((key.as_str(), value.clone()))
-                        .map_err(|e| Error::Paseto(format!("Invalid '{}' claim: {}", key, e)))?
-                };
+                // All custom claim values are strings after normalize_custom_claims
+                let s = value.as_str().ok_or_else(|| {
+                    Error::Paseto(format!("Custom claim '{key}' is not a string after normalization"))
+                })?;
+                let claim = CustomClaim::try_from((key.as_str(), s))
+                    .map_err(|e| Error::Paseto(format!("Invalid '{key}' claim: {e}")))?;
                 builder.set_claim(claim);
             }
         }
 
         Ok(())
+    }
+
+    /// Normalize a claims payload so all custom claim values are JSON strings.
+    ///
+    /// PASETO's `CustomClaim` only accepts `&str`. Non-string values (arrays,
+    /// objects, numbers, booleans) are serialized to their JSON representation.
+    /// Standard claims (sub, exp, iat, jti, iss, aud) are left untouched.
+    fn normalize_custom_claims(payload: &serde_json::Value) -> serde_json::Value {
+        let standard_keys: &[&str] = &["sub", "exp", "iat", "jti", "iss", "aud"];
+        let mut normalized = payload.clone();
+        if let Some(obj) = normalized.as_object_mut() {
+            for (key, value) in obj.iter_mut() {
+                if standard_keys.contains(&key.as_str()) {
+                    continue;
+                }
+                if !value.is_string() {
+                    // Serialize to JSON string representation
+                    *value = serde_json::Value::String(value.to_string());
+                }
+            }
+        }
+        normalized
     }
 }
 
