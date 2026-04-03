@@ -141,9 +141,13 @@ impl JwtAuth {
         mut request: Request<Body>,
         next: Next,
     ) -> Result<Response, Error> {
-        // Skip authentication for health and readiness endpoints
+        // Skip authentication for infrastructure endpoints
         let path = request.uri().path();
-        if path == "/health" || path == "/ready" {
+        if path == "/health"
+            || path == "/ready"
+            || path.starts_with("/swagger-ui")
+            || path.starts_with("/api-docs")
+        {
             return Ok(next.run(request).await);
         }
 

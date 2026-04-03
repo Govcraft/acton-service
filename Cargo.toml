@@ -7,7 +7,7 @@ default-members = ["acton-service", "acton-cli"]
 resolver = "2"
 
 [workspace.package]
-version = "0.21.2"
+version = "0.21.3"
 edition = "2021"
 authors = ["roland@govcraft.ai"]
 license = "MIT"
