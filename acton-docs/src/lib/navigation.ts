@@ -15,6 +15,7 @@ export const navigation = [
       { title: 'Concepts', href: '/docs/concepts' },
       { title: 'Reactive Architecture', href: '/docs/reactive-architecture' },
       { title: 'Background Worker', href: '/docs/background-worker' },
+      { title: 'Actor Extensions', href: '/docs/actor-extensions' },
       { title: 'API Versioning', href: '/docs/api-versioning' },
       { title: 'HTTP + gRPC Support', href: '/docs/dual-protocol' },
       { title: 'gRPC Guide', href: '/docs/grpc-guide' },

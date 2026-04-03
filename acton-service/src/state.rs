@@ -110,6 +110,9 @@ where
 
     /// Agent broker handle for type-safe event broadcasting
     broker: Option<ActorHandle>,
+
+    /// User-registered actor extensions
+    actor_extensions: crate::extensions::ActorExtensions,
 }
 
 impl<T> Default for AppState<T>
@@ -141,6 +144,7 @@ where
             key_manager: None,
             background_worker: None,
             broker: None,
+            actor_extensions: crate::extensions::ActorExtensions::default(),
         }
     }
 }
@@ -178,6 +182,7 @@ where
             key_manager: None,
             background_worker: None,
             broker: None,
+            actor_extensions: crate::extensions::ActorExtensions::default(),
         }
     }
 
@@ -402,6 +407,29 @@ where
     /// Set the agent broker handle (internal use only)
     pub(crate) fn set_broker(&mut self, broker: ActorHandle) {
         self.broker = Some(broker);
+    }
+
+    /// Get the [`ActorHandle`] for a registered actor extension.
+    ///
+    /// Actor extensions are custom actors registered via
+    /// [`ServiceBuilder::with_actor`](crate::ServiceBuilder::with_actor).
+    /// They run under a framework-managed supervisor with configurable restart policies.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// async fn handler(State(state): State<AppState>) -> impl IntoResponse {
+    ///     let cache = state.actor::<MyCache>().unwrap();
+    ///     cache.send(CacheSet { key: "k".into(), value: "v".into() }).await;
+    /// }
+    /// ```
+    pub fn actor<A: crate::extensions::ActorExtension>(&self) -> Option<&ActorHandle> {
+        self.actor_extensions.get::<A>()
+    }
+
+    /// Set the actor extensions (internal use by ServiceBuilder)
+    pub(crate) fn set_actor_extensions(&mut self, ext: crate::extensions::ActorExtensions) {
+        self.actor_extensions = ext;
     }
 
     /// Get the background worker for submitting managed background tasks
@@ -828,6 +856,7 @@ where
             key_manager: None,
             background_worker: None,
             broker: None,
+            actor_extensions: crate::extensions::ActorExtensions::default(),
         })
     }
 }

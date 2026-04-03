@@ -388,32 +388,43 @@ pub struct OrderCompletedEvent {
 }
 ```
 
-### Subscribing Agents
+### Subscribing to Events
 
-Create agents that react to broadcasted events:
+The recommended way to subscribe to broker events is through [Actor Extensions](/docs/actor-extensions). Define an actor extension that subscribes in its `after_start` hook:
 
 ```rust
+use acton_service::prelude::*;
 use acton_reactive::prelude::*;
 
-pub struct NotificationAgent {
-    // Agent state
-}
+#[acton_actor]
+pub struct NotificationActor;
 
-impl NotificationAgent {
-    pub async fn spawn(runtime: &mut AgentRuntime) -> Result<AgentHandle> {
-        let agent = runtime
-            .new_agent::<Self>()
-            .with_handler(|agent: &mut Self, event: UserCreatedEvent| async move {
-                // React to user creation
-                send_welcome_email(&event.email).await?;
-                Ok(())
+impl ActorExtension for NotificationActor {
+    fn configure(actor: &mut ManagedActor<Idle, Self>) {
+        actor.mutate_on::<UserCreatedEvent>(|_actor, envelope| {
+            let email = envelope.message().email.clone();
+            Reply::pending(async move {
+                send_welcome_email(&email).await;
             })
-            .spawn()
-            .await?;
+        });
 
-        Ok(agent)
+        actor.after_start(|actor| {
+            let handle = actor.handle().clone();
+            Reply::pending(async move {
+                handle.subscribe::<UserCreatedEvent>().await;
+            })
+        });
     }
 }
+
+// Register with ServiceBuilder
+ServiceBuilder::new()
+    .with_actor::<NotificationActor>()
+    .with_routes(routes)
+    .build();
+```
+
+The actor extension is automatically supervised and will restart on failure. See [Actor Extensions](/docs/actor-extensions) for the full guide.
 ```
 
 ### Use Cases
@@ -441,6 +452,7 @@ Use the **Event Broker** for internal coordination and **NATS** for cross-servic
 
 ## Next Steps
 
+- **[Actor Extensions](/docs/actor-extensions)** - Add custom supervised actors for your application state
 - **[Background Worker](/docs/background-worker)** - Learn about managed background task execution
 - **[Health Checks](/docs/health-checks)** - Configure health and readiness endpoints
 - **[Database Integration](/docs/database)** - PostgreSQL-specific features
