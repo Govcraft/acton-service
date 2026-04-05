@@ -218,6 +218,18 @@ pub struct PasetoConfig {
     /// Audience to validate (optional)
     #[serde(default)]
     pub audience: Option<String>,
+
+    /// Path prefixes that bypass token authentication.
+    ///
+    /// Requests whose path starts with any of these prefixes will be passed
+    /// through without requiring a bearer token. Use this for session-based
+    /// frontend routes (e.g. `/admin/`, `/forge/`) that coexist with
+    /// token-protected API routes.
+    ///
+    /// Infrastructure paths (`/health`, `/ready`, `/swagger-ui`, `/api-docs`)
+    /// are always skipped regardless of this setting.
+    #[serde(default)]
+    pub public_paths: Vec<String>,
 }
 
 impl Default for PasetoConfig {
@@ -228,6 +240,7 @@ impl Default for PasetoConfig {
             key_path: PathBuf::from("./keys/paseto.key"),
             issuer: None,
             audience: None,
+            public_paths: Vec::new(),
         }
     }
 }
@@ -258,6 +271,18 @@ pub struct JwtConfig {
     /// JWT audience to validate
     #[serde(default)]
     pub audience: Option<String>,
+
+    /// Path prefixes that bypass token authentication.
+    ///
+    /// Requests whose path starts with any of these prefixes will be passed
+    /// through without requiring a bearer token. Use this for session-based
+    /// frontend routes (e.g. `/admin/`, `/forge/`) that coexist with
+    /// token-protected API routes.
+    ///
+    /// Infrastructure paths (`/health`, `/ready`, `/swagger-ui`, `/api-docs`)
+    /// are always skipped regardless of this setting.
+    #[serde(default)]
+    pub public_paths: Vec<String>,
 }
 
 /// Rate limiting configuration
@@ -1575,6 +1600,7 @@ mod tests {
                 key_path: PathBuf::from("./test-key.key"),
                 issuer: Some("test-issuer".to_string()),
                 audience: None,
+                public_paths: Vec::new(),
             })),
             rate_limit: RateLimitConfig {
                 per_user_rpm: 100,

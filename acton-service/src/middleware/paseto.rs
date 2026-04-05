@@ -50,6 +50,8 @@ pub struct PasetoAuth {
     revocation: Option<Arc<dyn TokenRevocation>>,
     #[cfg(feature = "auth")]
     key_manager: Option<Arc<KeyManager>>,
+    /// Path prefixes that bypass token authentication.
+    public_paths: Arc<[String]>,
 }
 
 impl PasetoAuth {
@@ -122,6 +124,7 @@ impl PasetoAuth {
             revocation: None,
             #[cfg(feature = "auth")]
             key_manager: None,
+            public_paths: config.public_paths.clone().into(),
         })
     }
 
@@ -153,12 +156,13 @@ impl PasetoAuth {
         mut request: Request<Body>,
         next: Next,
     ) -> Result<Response, Error> {
-        // Skip authentication for infrastructure endpoints
+        // Skip authentication for infrastructure endpoints and configured public paths
         let path = request.uri().path();
         if path == "/health"
             || path == "/ready"
             || path.starts_with("/swagger-ui")
             || path.starts_with("/api-docs")
+            || auth.public_paths.iter().any(|p| path.starts_with(p.as_str()))
         {
             return Ok(next.run(request).await);
         }

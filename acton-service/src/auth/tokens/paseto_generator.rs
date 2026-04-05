@@ -531,6 +531,7 @@ mod tests {
             key_path: key_file.path().to_path_buf(),
             issuer: Some("test-issuer".to_string()),
             audience: Some("test-audience".to_string()),
+            public_paths: Vec::new(),
         };
         let validator = PasetoAuth::new(&paseto_config).unwrap();
 
@@ -634,6 +635,7 @@ mod tests {
             key_path: key_file.path().to_path_buf(),
             issuer: None,
             audience: None,
+            public_paths: Vec::new(),
         };
         let validator = PasetoAuth::new(&paseto_config).unwrap();
 

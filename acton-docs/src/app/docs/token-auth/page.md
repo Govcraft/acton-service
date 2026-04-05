@@ -134,36 +134,29 @@ exp: now + Duration::hours(24),
 
 ### How Route Protection Works
 
-**By default, ALL routes require authentication** when token middleware is configured. To make routes public, you must explicitly exclude them.
+**By default, ALL routes require authentication** when token middleware is configured. Infrastructure paths (`/health`, `/ready`, `/swagger-ui`, `/api-docs`) are always exempt. For application-level routes that should bypass token auth (e.g. session-based frontend routes), use `public_paths`.
 
 ### Configuration-Based Protection
 
-**Option 1: Exclude Specific Paths** (recommended for most services)
-
 ```toml
-[token]
-format = "paseto"
+[token.paseto]
 version = "v4"
 purpose = "local"
 key_path = "./keys/paseto.key"
 
-# Routes that DON'T require authentication
-exclude_paths = [
-    "/health",
-    "/ready",
-    "/login",
-    "/register",
-    "/public/*",          # Wildcard patterns supported
-    "/api/v1/docs/*"
-]
+# Path prefixes that bypass token authentication.
+# Use for session-based frontend routes that coexist with token-protected API routes.
+public_paths = ["/admin/", "/forge/", "/login"]
 ```
 
 With this config:
-- `/health` → Public (no token required)
-- `/login` → Public (obviously!)
-- `/public/terms` → Public (matches wildcard)
+- `/health` → Public (infrastructure, always exempt)
+- `/admin/login` → Public (matches `/admin/` prefix)
+- `/forge/Contact/entities` → Public (matches `/forge/` prefix)
+- `/login` → Public (matches `/login` prefix)
 - `/api/v1/users` → Protected (requires valid token)
-- `/admin/settings` → Protected (requires valid token)
+
+Routes listed in `public_paths` use prefix matching — `/admin/` matches `/admin/login`, `/admin/users`, etc.
 
 ### Health Checks and Token Auth
 

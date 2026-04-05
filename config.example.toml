@@ -8,11 +8,25 @@ log_level = "info"  # trace, debug, info, warn, error
 timeout_secs = 30
 environment = "dev"  # dev, staging, production
 
-[jwt]
+# ============================================================================
+# TOKEN AUTHENTICATION (Choose one: [token.paseto] or [token.jwt])
+# ============================================================================
+# PASETO v4 (symmetric or asymmetric)
+# [token.paseto]
+# version = "v4"
+# purpose = "local"                      # "local" (symmetric) or "public" (asymmetric)
+# key_path = "./keys/paseto.key"         # 32-byte key file
+# issuer = "my-service"
+# # audience = "api.mydomain.com"
+# # public_paths = ["/admin/", "/forge/"]  # Skip token auth for these prefixes
+
+# JWT (RSA, ECDSA, or HMAC)
+[token.jwt]
 public_key_path = "./keys/jwt-public.pem"
-algorithm = "RS256"  # RS256, ES256, HS256
+algorithm = "RS256"                        # RS256, ES256, HS256
 issuer = "https://auth.mydomain.com"
 audience = "api.mydomain.com"
+# public_paths = ["/admin/", "/forge/"]    # Skip token auth for these prefixes
 
 [rate_limit]
 # Redis-based global rate limiting
