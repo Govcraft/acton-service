@@ -156,6 +156,14 @@ impl PasetoAuth {
         mut request: Request<Body>,
         next: Next,
     ) -> Result<Response, Error> {
+        // CORS preflight requests carry no credentials by spec — pass through
+        // so the downstream CorsLayer can respond with the appropriate
+        // Access-Control-Allow-* headers. Authenticating OPTIONS would
+        // unconditionally 401 every cross-origin browser request.
+        if request.method() == http::Method::OPTIONS {
+            return Ok(next.run(request).await);
+        }
+
         // Skip authentication for infrastructure endpoints and configured public paths
         let path = request.uri().path();
         if path == "/health"
