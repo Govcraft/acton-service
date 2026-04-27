@@ -7,14 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Documentation
+### Breaking changes
 
-- Replace incorrect Router::new() examples with VersionedApiBuilder
-- **htmx**: Add comprehensive HTMX, Askama, and SSE documentation
+- **governor**: Route-rate-limit keys now match against the full pre-nest
+  request path. Configurations that previously relied on bug #7 by writing
+  post-nest keys (e.g. `"POST /uploads"` for a route registered under
+  `add_version(ApiVersion::V1, ...)`) must be updated to the documented
+  full path (e.g. `"POST /api/v1/uploads"`). The auto-applied middleware is
+  attached to the outer router, so the URI it sees is the URI the client
+  sent.
+
+### Fixed
+
+- **governor**: Auto-apply the rate-limit middleware from
+  `[rate_limit]` config in `ServiceBuilder` (issue #7, bug 1). Previously the
+  layer was never attached and users had to wire it manually despite docs
+  claiming auto-apply.
+- **governor**: Anonymous requests now fall back to per-IP rate limiting
+  (issue #7, bug 2). Previously, requests with no claims and no matching
+  per-route config silently passed through.
+- **governor**: Route-key matching now sees the full pre-nest path
+  (issue #7, bug 3). Doc-style keys like `"POST /api/v1/uploads"` now match
+  as documented.
 
 ### Features
 
+- **rate-limit**: Add `auto_apply` config knob (default `true`) to opt out
+  of the auto-applied governor middleware.
+- **rate-limit**: Add `trust_forwarded_headers` config knob (default
+  `false`) to control IP resolution from `X-Forwarded-For` / `X-Real-IP`.
+  Default-safe so direct-exposure deployments are not trivially spoofable.
 - **htmx**: Add frontend routes support to VersionedApiBuilder
+
+### Documentation
+
+- **rate-limiting**: Document auto-apply behavior, IP fallback resolution
+  order, the `auto_apply` and `trust_forwarded_headers` config knobs, and
+  the breaking change to route-key matching.
+- Replace incorrect Router::new() examples with VersionedApiBuilder
+- **htmx**: Add comprehensive HTMX, Askama, and SSE documentation
 
 ### Miscellaneous
 

@@ -17,15 +17,16 @@ acton-service provides two rate limiting implementations: Redis-backed for distr
 
 ## Quick Start
 
-Rate limiting in acton-service is configured declaratively via `config.toml` and automatically applied to all endpoints. No code changes required.
+Rate limiting in acton-service is configured declaratively via `config.toml` and automatically applied to all endpoints when the `governor` feature is enabled. No code changes required.
 
 ### Configuration
 
 ```toml
 [rate_limit]
-enabled = true
 per_user_rpm = 100          # Per-user rate limit: 100 requests per minute
 per_client_rpm = 1000       # Per-client rate limit: 1000 requests per minute
+auto_apply = true           # Auto-attach the middleware (default: true)
+trust_forwarded_headers = false  # Trust X-Forwarded-For / X-Real-IP (default: false)
 ```
 
 Rate limits are automatically applied based on token claims:
@@ -33,7 +34,26 @@ Rate limits are automatically applied based on token claims:
 - **Per-client limits** use the `client_id` claim as identifier
 - **Anonymous requests** fall back to IP address-based limiting
 
-No additional code needed. The rate limiter is automatically integrated into the middleware stack during service initialization.
+The middleware is wired by `ServiceBuilder` to the **outer** router (before any `Router::nest` strips the path prefix), so route-rate-limit keys like `"POST /api/v1/uploads"` match the full request path as documented.
+
+### Auto-apply opt-out
+
+Set `auto_apply = false` to wire the middleware manually inside your route closure. Useful when you need to scope rate-limiting to a subset of routes or apply it after a custom middleware.
+
+### Trusting forwarded-for headers
+
+`trust_forwarded_headers` defaults to `false`. **Only enable it when running behind a proxy you trust** (nginx, ALB, Cloudflare). Direct clients can otherwise spoof their IP via `X-Forwarded-For` and bypass per-IP limits.
+
+When enabled, the middleware resolves the client IP in this order:
+1. First entry of `X-Forwarded-For` (left-most = original client)
+2. `X-Real-IP`
+3. Direct TCP peer address (`ConnectInfo<SocketAddr>`)
+
+When disabled, only the direct peer address is used.
+
+{% callout type="warning" title="Breaking change in 0.23" %}
+Route-rate-limit keys now match the **full** request path (e.g. `"POST /api/v1/uploads"`). Configurations that relied on the previous bug — using post-nest keys like `"POST /uploads"` for routes registered under `add_version(V1, ...)` — must be updated. See the [CHANGELOG](https://github.com/Govcraft/acton-service/blob/main/CHANGELOG.md) for details.
+{% /callout %}
 
 ## Per-Route Configuration
 
