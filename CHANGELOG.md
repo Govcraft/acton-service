@@ -7,8 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.23.0] - 2026-04-26
+
 ### Breaking changes
 
+- **deps**: Pin `sqlx` to the stable `0.8` line (was `0.9.0-alpha.1`) and
+  add the `tls-rustls` feature (issue #8). This unblocks downstream crates
+  pinned to `sqlx ^0.8` from sharing the `AppState` pool — previously the
+  alpha-vs-stable major skew put two `sqlx` versions in the same binary
+  and prevented `Arc<sqlx::PgPool>` from flowing across crate boundaries.
+  Anyone embedding acton-service alongside another crate on the alpha
+  must drop back to stable `0.8.x`. Adding `tls-rustls` lets the pool
+  agent connect to managed Postgres URLs that use `?sslmode=require`
+  (RDS, Cloud SQL, Neon, Supabase, Crunchy) instead of retrying forever
+  and silently falling back to in-memory audit storage.
 - **governor**: Route-rate-limit keys now match against the full pre-nest
   request path. Configurations that previously relied on bug #7 by writing
   post-nest keys (e.g. `"POST /uploads"` for a route registered under
@@ -29,6 +41,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **governor**: Route-key matching now sees the full pre-nest path
   (issue #7, bug 3). Doc-style keys like `"POST /api/v1/uploads"` now match
   as documented.
+- **middleware**: Bypass token authentication for CORS preflight `OPTIONS`
+  requests so browsers can negotiate cross-origin calls without a token.
+- **service-builder**: Install the broker handle on `AppState` when actor
+  extensions are registered without any pool agents, fixing
+  `service_builder_initializes_broker_for_extensions_only`.
 
 ### Features
 
@@ -37,6 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **rate-limit**: Add `trust_forwarded_headers` config knob (default
   `false`) to control IP resolution from `X-Forwarded-For` / `X-Real-IP`.
   Default-safe so direct-exposure deployments are not trivially spoofable.
+- **token-auth**: Add `public_paths` to the token auth middleware
+  configuration so selected routes can be exposed without authentication.
 - **htmx**: Add frontend routes support to VersionedApiBuilder
 
 ### Documentation
