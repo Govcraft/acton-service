@@ -294,6 +294,8 @@ mod tests {
                 per_client_rpm: 1000,
                 window_secs: 60,
                 routes: std::collections::HashMap::new(),
+                auto_apply: true,
+                trust_forwarded_headers: false,
             };
             let _rate_limit = RateLimit::new(config);
         }
@@ -323,6 +325,8 @@ mod tests {
                 per_client_rpm: 1000,
                 window_secs: 60,
                 routes,
+                auto_apply: true,
+                trust_forwarded_headers: false,
             };
             let rate_limit = RateLimit::new(config);
 

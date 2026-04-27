@@ -7,6 +7,8 @@
 use std::time::Duration;
 
 #[cfg(feature = "governor")]
+use std::net::{IpAddr, SocketAddr};
+#[cfg(feature = "governor")]
 use std::num::NonZeroU32;
 #[cfg(feature = "governor")]
 use std::sync::Arc;
@@ -14,8 +16,8 @@ use std::sync::Arc;
 #[cfg(feature = "governor")]
 use axum::{
     body::Body,
-    extract::{Request, State},
-    http::{header::HeaderValue, HeaderName},
+    extract::{ConnectInfo, OriginalUri, Request, State},
+    http::{header::HeaderValue, HeaderMap, HeaderName},
     middleware::Next,
     response::Response,
 };
@@ -154,6 +156,43 @@ impl RateLimitExceeded {
 #[cfg(feature = "governor")]
 type GovernorLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 
+/// Resolve the client IP for an unauthenticated request.
+///
+/// Order of precedence:
+/// 1. If `trust_forwarded_headers` is true:
+///    - The first parseable IP in `X-Forwarded-For` (comma-separated, left-most).
+///    - The single IP in `X-Real-IP`.
+/// 2. The direct TCP peer from `ConnectInfo<SocketAddr>`.
+///
+/// Returns `None` when no IP can be resolved. Pure function — easy to unit-test.
+#[cfg(feature = "governor")]
+pub(crate) fn extract_client_ip(
+    headers: &HeaderMap,
+    connect_info: Option<&SocketAddr>,
+    trust_forwarded_headers: bool,
+) -> Option<IpAddr> {
+    if trust_forwarded_headers {
+        if let Some(value) = headers.get("x-forwarded-for") {
+            if let Ok(s) = value.to_str() {
+                if let Some(first) = s.split(',').next() {
+                    if let Ok(ip) = first.trim().parse::<IpAddr>() {
+                        return Some(ip);
+                    }
+                }
+            }
+        }
+        if let Some(value) = headers.get("x-real-ip") {
+            if let Ok(s) = value.to_str() {
+                if let Ok(ip) = s.trim().parse::<IpAddr>() {
+                    return Some(ip);
+                }
+            }
+        }
+    }
+
+    connect_info.map(|sa| sa.ip())
+}
+
 /// Governor-based rate limiting middleware state
 ///
 /// Provides local (in-memory) rate limiting with per-route configuration support.
@@ -165,7 +204,7 @@ pub struct GovernorRateLimit {
     route_patterns: Arc<CompiledRoutePatterns>,
     /// Per-route rate limiters, keyed by normalized route path
     route_limiters: Arc<DashMap<String, Arc<GovernorLimiter>>>,
-    /// Global rate limiters, keyed by user/client ID
+    /// Global rate limiters, keyed by user/client/IP identifier
     global_limiters: Arc<DashMap<String, Arc<GovernorLimiter>>>,
 }
 
@@ -186,19 +225,45 @@ impl GovernorRateLimit {
     ///
     /// Checks rate limits in the following order:
     /// 1. Per-route limits (if configured for the request path)
-    /// 2. Global per-user limits (if JWT claims present)
-    /// 3. Global per-client limits (if client token)
+    /// 2. Global per-user/per-client limits (if JWT/PASETO claims present)
+    /// 3. Per-IP fallback for anonymous requests (when no route-specific limit
+    ///    matches and no claims are present)
+    ///
+    /// The path used for route matching is the request URI as seen by this
+    /// layer. When the layer is attached to the outer router (the default
+    /// auto-apply position), this is the full pre-nest path. When the
+    /// middleware is wired manually inside a nested router, axum populates
+    /// `OriginalUri` in the request extensions; the middleware prefers that
+    /// value over the post-nest URI so route keys still match the documented
+    /// full-path form.
     pub async fn middleware(
         State(rate_limit): State<Self>,
         request: Request<Body>,
         next: Next,
     ) -> Result<Response, Error> {
-        let method = request.method().as_str();
-        let path = request.uri().path();
+        let method = request.method().as_str().to_string();
+
+        // Prefer OriginalUri (set by axum on nested routers) so route-key
+        // matching always sees the full pre-nest path.
+        let path = request
+            .extensions()
+            .get::<OriginalUri>()
+            .map(|ou| ou.0.path().to_string())
+            .unwrap_or_else(|| request.uri().path().to_string());
+
         let claims = request.extensions().get::<Claims>().cloned();
+        let connect_info = request
+            .extensions()
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|ci| ci.0);
+        let client_ip = extract_client_ip(
+            request.headers(),
+            connect_info.as_ref(),
+            rate_limit.config.trust_forwarded_headers,
+        );
 
         // Check rate limit and get result for headers
-        let result = rate_limit.check_rate_limit(method, path, claims.as_ref())?;
+        let result = rate_limit.check_rate_limit(&method, &path, claims.as_ref(), client_ip)?;
 
         // Run the request
         let mut response = next.run(request).await;
@@ -209,12 +274,14 @@ impl GovernorRateLimit {
         Ok(response)
     }
 
-    /// Check rate limit considering per-route configuration
+    /// Check rate limit considering per-route configuration and the resolved
+    /// client IP for anonymous fallback.
     fn check_rate_limit(
         &self,
         method: &str,
         path: &str,
         claims: Option<&Claims>,
+        client_ip: Option<IpAddr>,
     ) -> Result<GovernorRateLimitResult, Error> {
         let normalized_path = normalize_path(path);
 
@@ -226,12 +293,13 @@ impl GovernorRateLimit {
             );
 
             let key = if route_config.per_user {
-                // Per-user route limit
+                // Per-user route limit - prefer claims, fall back to IP, then "unknown"
                 if let Some(claims) = claims {
                     format!("route:{}:user:{}", normalized_path, claims.sub)
+                } else if let Some(ip) = client_ip {
+                    format!("route:{}:ip:{}", normalized_path, ip)
                 } else {
-                    // No claims, use global route limit
-                    format!("route:{}:global", normalized_path)
+                    format!("route:{}:ip:unknown", normalized_path)
                 }
             } else {
                 // Global route limit (shared across all users)
@@ -272,13 +340,18 @@ impl GovernorRateLimit {
             return self.check_with_limiter(&self.global_limiters, &key, limit, burst_size);
         }
 
-        // No claims and no route-specific limit - allow the request
-        warn!("Governor rate limit called without JWT claims and no route-specific limit");
-        Ok(GovernorRateLimitResult {
-            limit: self.config.per_user_rpm,
-            remaining: self.config.per_user_rpm,
-            reset_secs: self.config.window_secs,
-        })
+        // No claims and no route-specific limit - fall back to per-IP limiting.
+        // Previously this branch silently allowed the request, contradicting
+        // the documented "anonymous requests fall back to IP-based limiting"
+        // behaviour.
+        let limit = self.config.per_user_rpm;
+        let burst_size = (limit / 10).max(1);
+        let key = match client_ip {
+            Some(ip) => format!("governor:ip:{}", ip),
+            None => "governor:ip:unknown".to_string(),
+        };
+
+        self.check_with_limiter(&self.global_limiters, &key, limit, burst_size)
     }
 
     /// Check rate limit using a specific limiter map
@@ -471,13 +544,7 @@ mod tests {
     #[cfg(feature = "governor")]
     #[test]
     fn test_governor_rate_limit_creation() {
-        use std::collections::HashMap;
-        let config = RateLimitConfig {
-            per_user_rpm: 200,
-            per_client_rpm: 1000,
-            window_secs: 60,
-            routes: HashMap::new(),
-        };
+        let config = RateLimitConfig::default();
         let _rate_limit = GovernorRateLimit::new(config);
     }
 
@@ -498,10 +565,8 @@ mod tests {
         );
 
         let config = RateLimitConfig {
-            per_user_rpm: 200,
-            per_client_rpm: 1000,
-            window_secs: 60,
             routes,
+            ..RateLimitConfig::default()
         };
         let rate_limit = GovernorRateLimit::new(config);
 
@@ -532,5 +597,181 @@ mod tests {
 
         // Next request should fail (burst exhausted)
         assert!(limiter.check().is_err());
+    }
+
+    // ---------------------------------------------------------------------
+    // Bug-fix regression tests for issue #7
+    // ---------------------------------------------------------------------
+
+    #[cfg(feature = "governor")]
+    #[test]
+    fn test_route_match_uses_full_path() {
+        // Regression for bug 3: route-key matching must work against the
+        // full pre-nest path. With the auto-apply layer attached to the
+        // outer router, the middleware sees `/api/v1/uploads`, not just
+        // `/uploads`.
+        use crate::config::RouteRateLimitConfig;
+        use std::collections::HashMap;
+
+        let mut routes = HashMap::new();
+        routes.insert(
+            "POST /api/v1/uploads".to_string(),
+            RouteRateLimitConfig {
+                requests_per_minute: 10,
+                burst_size: 1,
+                per_user: false, // global to avoid claims/IP confusion
+            },
+        );
+
+        let config = RateLimitConfig {
+            routes,
+            ..RateLimitConfig::default()
+        };
+        let rl = GovernorRateLimit::new(config);
+
+        // Full path matches.
+        let first = rl.check_rate_limit("POST", "/api/v1/uploads", None, None);
+        assert!(first.is_ok());
+
+        // The 2nd hit on the same global route bucket trips the burst=1 limit.
+        let second = rl.check_rate_limit("POST", "/api/v1/uploads", None, None);
+        assert!(matches!(second, Err(Error::RateLimitExceeded)));
+
+        // Post-nest path on a fresh middleware does NOT match the route key
+        // (it falls through to the IP-based fallback, which uses the global
+        // per_user_rpm and burst=20 — easily allows one request).
+        let rl2 = GovernorRateLimit::new(RateLimitConfig {
+            routes: {
+                let mut m = HashMap::new();
+                m.insert(
+                    "POST /api/v1/uploads".to_string(),
+                    RouteRateLimitConfig {
+                        requests_per_minute: 10,
+                        burst_size: 1,
+                        per_user: false,
+                    },
+                );
+                m
+            },
+            ..RateLimitConfig::default()
+        });
+        let post_nest = rl2.check_rate_limit("POST", "/uploads", None, None);
+        assert!(
+            post_nest.is_ok(),
+            "post-nest path must not match the full-path config key"
+        );
+    }
+
+    #[cfg(feature = "governor")]
+    #[test]
+    fn test_anonymous_falls_back_to_ip() {
+        // Regression for bug 2: anonymous requests must be IP-rate-limited,
+        // not silently allowed.
+        use std::net::{IpAddr, Ipv4Addr};
+
+        let config = RateLimitConfig {
+            // Tiny limit so the test is fast and deterministic.
+            per_user_rpm: 1,
+            ..RateLimitConfig::default()
+        };
+        let rl = GovernorRateLimit::new(config);
+
+        let ip_a = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+        let ip_b = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2));
+
+        // First request from ip_a succeeds.
+        let r1 = rl.check_rate_limit("GET", "/whatever", None, Some(ip_a));
+        assert!(r1.is_ok());
+
+        // Second request from ip_a is rate-limited (burst exhausted).
+        let r2 = rl.check_rate_limit("GET", "/whatever", None, Some(ip_a));
+        assert!(matches!(r2, Err(Error::RateLimitExceeded)));
+
+        // ip_b gets a fresh bucket.
+        let r3 = rl.check_rate_limit("GET", "/whatever", None, Some(ip_b));
+        assert!(r3.is_ok());
+    }
+
+    #[cfg(feature = "governor")]
+    #[test]
+    fn test_anonymous_no_ip_uses_unknown_bucket() {
+        // When neither claims nor an IP are available, requests should still
+        // be limited (they share a single "unknown" bucket — safer than
+        // letting them through).
+        let config = RateLimitConfig {
+            per_user_rpm: 1,
+            ..RateLimitConfig::default()
+        };
+        let rl = GovernorRateLimit::new(config);
+
+        let first = rl.check_rate_limit("GET", "/x", None, None);
+        assert!(first.is_ok());
+
+        let second = rl.check_rate_limit("GET", "/x", None, None);
+        assert!(matches!(second, Err(Error::RateLimitExceeded)));
+    }
+
+    #[cfg(feature = "governor")]
+    #[test]
+    fn test_extract_client_ip_xff_first_value() {
+        use axum::http::HeaderMap;
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "203.0.113.5, 10.0.0.1".parse().unwrap());
+
+        let ip = extract_client_ip(&headers, None, true).expect("IP from XFF");
+        assert_eq!(ip.to_string(), "203.0.113.5");
+    }
+
+    #[cfg(feature = "governor")]
+    #[test]
+    fn test_extract_client_ip_real_ip() {
+        use axum::http::HeaderMap;
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-real-ip", "198.51.100.7".parse().unwrap());
+
+        let ip = extract_client_ip(&headers, None, true).expect("IP from X-Real-IP");
+        assert_eq!(ip.to_string(), "198.51.100.7");
+    }
+
+    #[cfg(feature = "governor")]
+    #[test]
+    fn test_extract_client_ip_connect_info_fallback() {
+        use axum::http::HeaderMap;
+        use std::net::{Ipv4Addr, SocketAddr};
+
+        let headers = HeaderMap::new();
+        let sa = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 9)), 12345);
+
+        let ip = extract_client_ip(&headers, Some(&sa), true)
+            .expect("IP from connect info");
+        assert_eq!(ip.to_string(), "192.0.2.9");
+    }
+
+    #[cfg(feature = "governor")]
+    #[test]
+    fn test_extract_client_ip_distrust_headers() {
+        use axum::http::HeaderMap;
+        use std::net::{Ipv4Addr, SocketAddr};
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "203.0.113.5".parse().unwrap());
+        let sa = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 9)), 12345);
+
+        // trust=false MUST ignore XFF and use connect info.
+        let ip = extract_client_ip(&headers, Some(&sa), false)
+            .expect("IP from connect info despite XFF");
+        assert_eq!(ip.to_string(), "192.0.2.9");
+    }
+
+    #[cfg(feature = "governor")]
+    #[test]
+    fn test_extract_client_ip_none() {
+        use axum::http::HeaderMap;
+
+        let headers = HeaderMap::new();
+        assert!(extract_client_ip(&headers, None, true).is_none());
+        assert!(extract_client_ip(&headers, None, false).is_none());
     }
 }
