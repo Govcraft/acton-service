@@ -4,6 +4,7 @@
 //! Supports exact paths, method prefixes, wildcards, and automatic ID normalization.
 
 use regex::Regex;
+use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
@@ -88,7 +89,7 @@ impl CompiledRoutePatterns {
         }
 
         // Sort patterns by specificity (highest first)
-        patterns.sort_by(|a, b| b.specificity.cmp(&a.specificity));
+        patterns.sort_by_key(|p| Reverse(p.specificity));
 
         Self {
             method_exact,

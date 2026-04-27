@@ -370,14 +370,14 @@ fn show_dry_run(config: &ServiceConfig, project_path: &Path) {
     if config.grpc {
         println!("  ✓ gRPC Service");
     }
-    if config.database.is_some() {
-        println!("  ✓ Database ({})", config.database.as_ref().unwrap());
+    if let Some(database) = config.database.as_ref() {
+        println!("  ✓ Database ({database})");
     }
-    if config.cache.is_some() {
-        println!("  ✓ Cache ({})", config.cache.as_ref().unwrap());
+    if let Some(cache) = config.cache.as_ref() {
+        println!("  ✓ Cache ({cache})");
     }
-    if config.events.is_some() {
-        println!("  ✓ Events ({})", config.events.as_ref().unwrap());
+    if let Some(events) = config.events.as_ref() {
+        println!("  ✓ Events ({events})");
     }
     if config.observability {
         println!("  ✓ Observability");

@@ -176,8 +176,10 @@ mod tests {
 
     #[test]
     fn test_validate_empty_key_prefix() {
-        let mut config = LockoutConfig::default();
-        config.key_prefix = "".to_string();
+        let config = LockoutConfig {
+            key_prefix: String::new(),
+            ..LockoutConfig::default()
+        };
         assert_eq!(
             config.validate(),
             Err("key_prefix must not be empty".to_string())
@@ -186,8 +188,10 @@ mod tests {
 
     #[test]
     fn test_validate_key_prefix_with_colon() {
-        let mut config = LockoutConfig::default();
-        config.key_prefix = "my:prefix".to_string();
+        let config = LockoutConfig {
+            key_prefix: "my:prefix".to_string(),
+            ..LockoutConfig::default()
+        };
         assert_eq!(
             config.validate(),
             Err("key_prefix must not contain ':'".to_string())
@@ -196,8 +200,10 @@ mod tests {
 
     #[test]
     fn test_validate_key_prefix_with_whitespace() {
-        let mut config = LockoutConfig::default();
-        config.key_prefix = "my prefix".to_string();
+        let config = LockoutConfig {
+            key_prefix: "my prefix".to_string(),
+            ..LockoutConfig::default()
+        };
         assert_eq!(
             config.validate(),
             Err("key_prefix must not contain whitespace".to_string())
@@ -206,8 +212,10 @@ mod tests {
 
     #[test]
     fn test_validate_zero_max_attempts() {
-        let mut config = LockoutConfig::default();
-        config.max_attempts = 0;
+        let config = LockoutConfig {
+            max_attempts: 0,
+            ..LockoutConfig::default()
+        };
         assert_eq!(
             config.validate(),
             Err("max_attempts must be greater than 0".to_string())
@@ -216,8 +224,10 @@ mod tests {
 
     #[test]
     fn test_validate_zero_window_secs() {
-        let mut config = LockoutConfig::default();
-        config.window_secs = 0;
+        let config = LockoutConfig {
+            window_secs: 0,
+            ..LockoutConfig::default()
+        };
         assert_eq!(
             config.validate(),
             Err("window_secs must be greater than 0".to_string())
@@ -226,8 +236,10 @@ mod tests {
 
     #[test]
     fn test_validate_zero_lockout_duration() {
-        let mut config = LockoutConfig::default();
-        config.lockout_duration_secs = 0;
+        let config = LockoutConfig {
+            lockout_duration_secs: 0,
+            ..LockoutConfig::default()
+        };
         assert_eq!(
             config.validate(),
             Err("lockout_duration_secs must be greater than 0".to_string())
@@ -236,8 +248,10 @@ mod tests {
 
     #[test]
     fn test_validate_low_multiplier() {
-        let mut config = LockoutConfig::default();
-        config.delay_multiplier = 0.5;
+        let config = LockoutConfig {
+            delay_multiplier: 0.5,
+            ..LockoutConfig::default()
+        };
         assert_eq!(
             config.validate(),
             Err("delay_multiplier must be >= 1.0".to_string())

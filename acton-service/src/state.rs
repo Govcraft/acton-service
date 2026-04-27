@@ -481,12 +481,6 @@ where
         self.account_service.as_ref()
     }
 
-    /// Set the account service (internal use by ServiceBuilder)
-    #[cfg(feature = "accounts")]
-    pub(crate) fn set_account_service(&mut self, service: crate::accounts::AccountService) {
-        self.account_service = Some(service);
-    }
-
     /// Get the key manager for signing key rotation
     ///
     /// Returns the key manager if key rotation is enabled and was successfully

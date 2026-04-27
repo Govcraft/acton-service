@@ -436,9 +436,9 @@ mod tests {
             Ok(MockEntity { id: data.name })
         }
 
-        async fn update(&self, _id: &MockId, _data: MockUpdate) -> RepositoryResult<MockEntity> {
+        async fn update(&self, id: &MockId, data: MockUpdate) -> RepositoryResult<MockEntity> {
             Ok(MockEntity {
-                id: "updated".to_string(),
+                id: data.name.unwrap_or_else(|| id.0.clone()),
             })
         }
 
@@ -479,7 +479,7 @@ mod tests {
         }
     }
 
-    #[derive(Clone, PartialEq, Eq, Hash)]
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
     struct RelatedId(String);
 
     #[derive(Clone)]
@@ -549,7 +549,12 @@ mod tests {
         assert!(result.is_ok());
         let map = result.unwrap();
         assert_eq!(map.len(), 2);
-        assert!(map.contains_key(&RelatedId("1".to_string())));
-        assert!(map.contains_key(&RelatedId("2".to_string())));
+        let one = RelatedId("1".to_string());
+        let two = RelatedId("2".to_string());
+        assert!(map.contains_key(&one));
+        assert!(map.contains_key(&two));
+        // Confirm RelatedEntity.id round-trips through batch_load.
+        assert_eq!(map.get(&one).unwrap().id, one);
+        assert_eq!(map.get(&two).unwrap().id, two);
     }
 }

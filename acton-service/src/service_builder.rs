@@ -501,7 +501,7 @@ where
             feature = "surrealdb",
             feature = "clickhouse"
         ))]
-        let broker_handle = if needs_agents {
+        let mut broker_handle = if needs_agents {
             // Use block_in_place to run async code in sync context
             // Initialize agent runtime inside the async block using launch_async()
             if let Ok(_handle) = tokio::runtime::Handle::try_current() {
@@ -887,6 +887,21 @@ where
             feature = "clickhouse"
         )))]
         let broker_handle: Option<acton_reactive::prelude::ActorHandle> = self.broker();
+
+        // Pool features enabled, but no pool agents needed (e.g. only actor
+        // extensions). The actor-extension spawn block above may have
+        // initialized the runtime; pick up the broker now if it is available.
+        #[cfg(any(
+            feature = "database",
+            feature = "cache",
+            feature = "events",
+            feature = "turso",
+            feature = "surrealdb",
+            feature = "clickhouse"
+        ))]
+        if broker_handle.is_none() {
+            broker_handle = self.broker();
+        }
 
         let routes = self.routes.unwrap_or_default();
 

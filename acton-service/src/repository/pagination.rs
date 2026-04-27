@@ -606,8 +606,8 @@ mod tests {
 
     #[test]
     fn test_filter_value_from_f64() {
-        let value: FilterValue = 3.14_f64.into();
-        assert_eq!(value, FilterValue::Float(3.14));
+        let value: FilterValue = 2.5_f64.into();
+        assert_eq!(value, FilterValue::Float(2.5));
     }
 
     #[test]
