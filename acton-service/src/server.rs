@@ -91,6 +91,14 @@ impl Server {
         tracing::info!("Server listening on {}", addr);
 
         // Serve with graceful shutdown -- TLS or plain TCP
+        //
+        // Note: the TLS path serves the app directly without
+        // `into_make_service_with_connect_info`. A custom listener like
+        // `TlsListener` would require a `Connected` impl which orphan
+        // rules forbid for `SocketAddr`. Deployments that terminate TLS
+        // here and need IP-based rate-limiting should set
+        // `[rate_limit] trust_forwarded_headers = true` and run behind
+        // a proxy that sets `X-Forwarded-For`.
         #[cfg(feature = "tls")]
         if let Some(ref tls_config) = self.config.tls {
             if tls_config.enabled {
@@ -105,7 +113,10 @@ impl Server {
             }
         }
 
-        axum::serve(listener, app)
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
             .with_graceful_shutdown(shutdown_signal())
             .await?;
 

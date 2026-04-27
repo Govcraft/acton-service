@@ -1152,6 +1152,30 @@ where
             ));
         }
 
+        // Auto-apply governor rate-limit middleware if enabled.
+        //
+        // Layer order rationale: governor is applied here, AFTER cedar (above)
+        // and BEFORE token auth (below) in source order. Because axum applies
+        // layers in reverse, the runtime order becomes:
+        //
+        //     Request -> General MW -> Token Auth -> Audit -> Cedar -> Governor -> Handler
+        //
+        // This ensures Claims (set by token auth) are visible to the governor
+        // middleware. The layer is attached to the OUTER router, so
+        // `request.uri().path()` sees the full pre-nest path -- route keys like
+        // "POST /api/v1/uploads" match as documented.
+        #[cfg(feature = "governor")]
+        if config.rate_limit.auto_apply {
+            let gov = crate::middleware::governor::GovernorRateLimit::new(
+                config.rate_limit.clone(),
+            );
+            tracing::debug!("Auto-applying governor rate-limit middleware");
+            app = app.layer(axum::middleware::from_fn_with_state(
+                gov,
+                crate::middleware::governor::GovernorRateLimit::middleware,
+            ));
+        }
+
         // Auto-apply token authentication middleware if configured
         // NOTE: Token auth must be applied AFTER Cedar because Axum layers run in reverse order
         // This ensures the execution order is: Request → General Middleware → Token Auth → Cedar → Handler
@@ -1624,6 +1648,11 @@ where
                         });
 
                         // Run HTTP server (with optional TLS)
+                        // Note: the TLS path does not use ConnectInfo (orphan
+                        // rules forbid implementing `Connected` for `SocketAddr`
+                        // on a non-axum listener). For IP-based rate limiting
+                        // behind TLS, run behind a proxy and enable
+                        // `trust_forwarded_headers`.
                         #[cfg(feature = "tls")]
                         if let Some(ref server_config) = self.tls_config {
                             let tls_listener =
@@ -1647,7 +1676,11 @@ where
                         }
 
                         // Run HTTP server (plain TCP)
-                        let http_result = axum::serve(http_listener, self.app)
+                        let http_result = axum::serve(
+                            http_listener,
+                            self.app
+                                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                        )
                             .with_graceful_shutdown(shutdown_signal())
                             .await;
 
@@ -1667,6 +1700,8 @@ where
                         // Merge HTTP and gRPC services
                         let hybrid_service = grpc_routes.into_axum_router().merge(self.app);
 
+                        // Note: the TLS path does not use ConnectInfo (orphan
+                        // rules; see comment in dual-port path above).
                         #[cfg(feature = "tls")]
                         if let Some(ref server_config) = self.tls_config {
                             let tls_listener =
@@ -1687,7 +1722,12 @@ where
                             return Ok(());
                         }
 
-                        axum::serve(listener, hybrid_service)
+                        axum::serve(
+                            listener,
+                            hybrid_service.into_make_service_with_connect_info::<
+                                std::net::SocketAddr,
+                            >(),
+                        )
                             .with_graceful_shutdown(shutdown_signal())
                             .await?;
                     }
@@ -1713,6 +1753,8 @@ where
 
         let listener = TcpListener::bind(&self.listener_addr).await?;
 
+        // Note: the TLS path does not use ConnectInfo (orphan rules;
+        // see comment in gRPC dual-port path above).
         #[cfg(feature = "tls")]
         if let Some(ref server_config) = self.tls_config {
             let tls_listener = crate::tls::TlsListener::new(listener, server_config.clone());
@@ -1734,7 +1776,11 @@ where
             return Ok(());
         }
 
-        axum::serve(listener, self.app)
+        axum::serve(
+            listener,
+            self.app
+                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
             .with_graceful_shutdown(shutdown_signal())
             .await?;
 

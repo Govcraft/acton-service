@@ -322,6 +322,41 @@ pub struct RateLimitConfig {
     /// ```
     #[serde(default)]
     pub routes: std::collections::HashMap<String, RouteRateLimitConfig>,
+
+    /// Whether to auto-apply the governor rate-limit middleware in `ServiceBuilder`.
+    ///
+    /// When `true` (default) and the `governor` feature is enabled, the middleware
+    /// is attached to the outer router during `ServiceBuilder::build()`. The layer
+    /// runs *before* axum strips any nested route prefix, so route-rate-limit keys
+    /// match the full request path (e.g. `"POST /api/v1/uploads"` works as documented).
+    ///
+    /// Set to `false` to disable auto-apply and wire the middleware manually.
+    #[serde(default = "default_true")]
+    pub auto_apply: bool,
+
+    /// Whether to trust forwarded-for headers when resolving the client IP.
+    ///
+    /// When `true`, the middleware reads `X-Forwarded-For` (first value) and
+    /// `X-Real-IP` before falling back to the direct TCP peer address. Only
+    /// enable behind a proxy you trust to set these headers — direct clients
+    /// can otherwise spoof their IP.
+    ///
+    /// Defaults to `false` (do not trust) to be safe by default.
+    #[serde(default = "default_false")]
+    pub trust_forwarded_headers: bool,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            per_user_rpm: default_per_user_rpm(),
+            per_client_rpm: default_per_client_rpm(),
+            window_secs: default_window_secs(),
+            routes: std::collections::HashMap::new(),
+            auto_apply: true,
+            trust_forwarded_headers: false,
+        }
+    }
 }
 
 /// Per-route rate limit configuration
@@ -1503,12 +1538,7 @@ where
                 environment: default_environment(),
             },
             token: None,
-            rate_limit: RateLimitConfig {
-                per_user_rpm: default_per_user_rpm(),
-                per_client_rpm: default_per_client_rpm(),
-                window_secs: default_window_secs(),
-                routes: std::collections::HashMap::new(),
-            },
+            rate_limit: RateLimitConfig::default(),
             middleware: MiddlewareConfig::default(),
             database: None,
             #[cfg(feature = "turso")]
@@ -1607,6 +1637,8 @@ mod tests {
                 per_client_rpm: 500,
                 window_secs: 60,
                 routes: std::collections::HashMap::new(),
+                auto_apply: true,
+                trust_forwarded_headers: false,
             },
             middleware: MiddlewareConfig::default(),
             database: None,
@@ -1670,6 +1702,8 @@ mod tests {
                 per_client_rpm: 1000,
                 window_secs: 60,
                 routes: std::collections::HashMap::new(),
+                auto_apply: true,
+                trust_forwarded_headers: false,
             },
             middleware: MiddlewareConfig::default(),
             database: None,
