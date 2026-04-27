@@ -44,7 +44,7 @@ tonic-build = "0.14.2"
 tonic-prost-build = "0.14.2"
 
 # Database
-sqlx = { version = "0.9.0-alpha.1", features = ["runtime-tokio", "postgres", "json", "uuid", "chrono"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "json", "uuid", "chrono"] }
 
 # Turso/libsql
 libsql = { version = "0.9", features = ["replication", "remote"] }

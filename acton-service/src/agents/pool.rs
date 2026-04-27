@@ -195,7 +195,11 @@ impl DatabasePoolAgent {
 
                 if let Some(p) = pool {
                     tracing::info!("Database pool agent stopping, closing connections...");
-                    p.close().await;
+                    // sqlx 0.8's `Pool::close()` returns a `Send` but not `Sync`
+                    // future. `before_stop` requires the awaited future to be
+                    // `Send + Sync`, so we offload the non-Sync work onto a
+                    // tokio task whose `JoinHandle` is itself `Send + Sync`.
+                    let _ = tokio::spawn(async move { p.close().await }).await;
                     tracing::info!("Database pool closed");
                 }
             })
