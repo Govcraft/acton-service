@@ -47,7 +47,7 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use rand::Rng;
+use rand::RngExt;
 use tower_sessions::Session;
 
 use super::config::CsrfConfig;

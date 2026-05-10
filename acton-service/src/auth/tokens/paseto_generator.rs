@@ -318,7 +318,8 @@ impl PasetoGenerator {
         payload: &serde_json::Value,
         footer: &str,
     ) -> Result<String, Error> {
-        let key = PasetoAsymmetricPrivateKey::<V4, Public>::from(private_key_bytes.as_slice());
+        let raw_key = Key::from(private_key_bytes);
+        let key = PasetoAsymmetricPrivateKey::<V4, Public>::from(&raw_key);
         let payload = Self::normalize_custom_claims(payload);
 
         let mut builder = PasetoBuilder::<V4, Public>::default();
