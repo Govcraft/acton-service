@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.24.0] - 2026-05-10
+
+### Breaking changes
+
+- **deps**: Bump `surrealdb` from `2.6` to `3.0`. The `SurrealClient`
+  type alias re-exports `surrealdb::Surreal`, so this is a public-API
+  break for any consumer enabling the `surrealdb` feature. Code that
+  constructs `surrealdb::opt::auth::Root` must now pass owned `String`s
+  for `username`/`password`. Note that the embedded `mem://` engine is
+  now strict in 3.0 and has no pre-defined root user; production
+  deployments using real servers (ws/http) with pre-provisioned users
+  are unaffected.
+- **deps**: Bump `rusty_paseto` from `0.9` to `0.10`. The
+  `PasetoAsymmetricPrivateKey`/`PasetoSymmetricKey` constructors now
+  require `&Key<N>` instead of `&[u8]`; downstream code calling these
+  types directly must route their bytes through `Key::from(...)` first.
+- **deps**: Bump `rand` from `0.9` to `0.10`. `Rng::sample_iter` moved
+  to the `RngExt` trait; code using the iterator form must import
+  `rand::RngExt`.
+- **deps**: Bump `askama` and `askama_web` from `0.15` to `0.16`. No
+  source-level changes required at the acton-service layer, but
+  template metadata and derive output changed across the major bump
+  for crates using the `askama` feature.
+
+### Miscellaneous
+
+- **deps**: `cargo update` for all SemVer-compatible transitive bumps.
+
+
 ## [acton-service-v0.23.0] - 2026-04-26
 
 ### Breaking changes
