@@ -17,6 +17,13 @@ uuid = { version = "1.0", features = ["v4", "serde"] }
 {%- if has_cache and cache == "redis" -%}
 redis = { version = "0.32", features = ["tokio-comp"] }
 {% endif -%}
+{%- if graphql -%}
+# The async-graphql derive macros (`#[Object]`, `#[Subscription]`, ...) emit
+# paths referring to the `async_graphql` crate by name, so it must be listed as
+# a direct dependency in addition to enabling the acton-service `graphql`
+# feature.
+async-graphql = "7.2"
+{% endif -%}
 {%- if grpc %}
 
 [build-dependencies]

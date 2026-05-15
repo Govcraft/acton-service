@@ -143,6 +143,9 @@ pub mod lockout;
 #[cfg(feature = "accounts")]
 pub mod accounts;
 
+#[cfg(feature = "graphql")]
+pub mod graphql;
+
 /// Internal agent-based components
 ///
 /// Connection pool management is handled internally by agents. Users don't

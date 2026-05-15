@@ -1,6 +1,7 @@
 pub mod cargo_toml;
 pub mod config;
 pub mod deployment;
+pub mod graphql;
 pub mod handlers;
 pub mod service;
 pub mod worker;
@@ -27,6 +28,8 @@ pub struct ServiceTemplate {
     pub rate_limit: bool,
     pub openapi: bool,
     pub audit: bool,
+    /// Scaffold a GraphQL transport (versioned schema + GraphiQL).
+    pub graphql: bool,
 }
 
 impl ServiceTemplate {
@@ -51,6 +54,7 @@ impl ServiceTemplate {
             "rate_limit": self.rate_limit,
             "openapi": self.openapi,
             "audit": self.audit,
+            "graphql": self.graphql,
             "year": chrono::Utc::now().year(),
         })
     }
@@ -92,6 +96,10 @@ impl ServiceTemplate {
 
         if self.audit {
             features.push("audit".to_string());
+        }
+
+        if self.graphql {
+            features.push("graphql".to_string());
         }
 
         features

@@ -59,6 +59,10 @@ pub enum ServiceCommands {
         #[arg(long)]
         openapi: bool,
 
+        /// Scaffold a versioned GraphQL transport (Axum + async-graphql)
+        #[arg(long)]
+        graphql: bool,
+
         /// Use organization template
         #[arg(long, value_name = "NAME")]
         template: Option<String>,
@@ -295,6 +299,22 @@ pub enum AddCommands {
         dry_run: bool,
     },
 
+    /// Add GraphQL transport to an existing service
+    #[command(disable_version_flag = true)]
+    Graphql {
+        /// API version to scaffold the schema under (defaults to v1)
+        #[arg(long, value_name = "VERSION", default_value = "v1")]
+        version: String,
+
+        /// Enable Cedar resolver authorization (requires cedar-authz feature)
+        #[arg(long)]
+        cedar: bool,
+
+        /// Show what would be generated
+        #[arg(long, name = "dry-run")]
+        dry_run: bool,
+    },
+
     /// Add API version
     #[command(disable_version_flag = true)]
     Version {
@@ -467,6 +487,7 @@ pub async fn execute(command: ServiceCommands) -> Result<()> {
             resilience,
             rate_limit,
             openapi,
+            graphql,
             template,
             path,
             no_git,
@@ -487,6 +508,7 @@ pub async fn execute(command: ServiceCommands) -> Result<()> {
                 resilience,
                 rate_limit,
                 openapi,
+                graphql,
                 template,
                 path,
                 no_git,
@@ -559,6 +581,11 @@ pub async fn execute(command: ServiceCommands) -> Result<()> {
                 middleware_type,
                 dry_run,
             } => add::middleware::execute(middleware_type, dry_run).await,
+            AddCommands::Graphql {
+                version,
+                cedar,
+                dry_run,
+            } => add::graphql::execute(version, cedar, dry_run).await,
             AddCommands::Version {
                 version,
                 from,

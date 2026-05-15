@@ -294,6 +294,99 @@ macro_rules! openapi_response {
     };
 }
 
+/// GraphQL endpoint documentation (cosmetic listing in the OpenAPI spec).
+///
+/// Adds one `POST /{base}/v{n}/graphql` entry per registered API version so
+/// the Swagger/ReDoc UI surfaces the GraphQL endpoint alongside REST routes.
+/// The request body is documented as a generic `application/json` payload —
+/// for a typed schema, point the consumer at the `/graphql` endpoint itself,
+/// which serves GraphiQL with full introspection.
+#[cfg(feature = "graphql")]
+pub mod graphql {
+    use utoipa::openapi::{
+        path::{HttpMethod, OperationBuilder, PathItem},
+        request_body::RequestBodyBuilder,
+        ContentBuilder, OpenApi, ResponseBuilder, ResponsesBuilder,
+    };
+
+    use crate::versioning::ApiVersion;
+
+    /// Augment an OpenAPI spec with a POST entry for each registered GraphQL
+    /// version.
+    pub fn add_graphql_paths(
+        mut openapi: OpenApi,
+        base_path: Option<&str>,
+        versions: &[ApiVersion],
+    ) -> OpenApi {
+        for version in versions {
+            let path = match base_path {
+                Some(b) => format!("{}/{}/graphql", b, version.as_path_segment()),
+                None => format!("/{}/graphql", version.as_path_segment()),
+            };
+
+            let request_body = RequestBodyBuilder::new()
+                .description(Some("GraphQL request payload"))
+                .content(
+                    "application/json",
+                    ContentBuilder::new()
+                        .schema(Some(json_object_schema()))
+                        .build(),
+                )
+                .required(Some(utoipa::openapi::Required::True))
+                .build();
+
+            let responses = ResponsesBuilder::new()
+                .response(
+                    "200",
+                    ResponseBuilder::new()
+                        .description("GraphQL response (data and/or errors)")
+                        .content(
+                            "application/json",
+                            ContentBuilder::new()
+                                .schema(Some(json_object_schema()))
+                                .build(),
+                        ),
+                )
+                .build();
+
+            let operation = OperationBuilder::new()
+                .summary(Some(format!(
+                    "GraphQL endpoint ({})",
+                    version.as_path_segment()
+                )))
+                .description(Some(
+                    "Execute a GraphQL query or mutation. GET on the same path serves GraphiQL.",
+                ))
+                .tag("graphql")
+                .request_body(Some(request_body))
+                .responses(responses)
+                .build();
+
+            let path_item = PathItem::new(HttpMethod::Post, operation);
+            openapi.paths.paths.insert(path, path_item);
+        }
+        openapi
+    }
+
+    fn json_object_schema() -> utoipa::openapi::RefOr<utoipa::openapi::Schema> {
+        use utoipa::openapi::{ObjectBuilder, Type};
+        utoipa::openapi::RefOr::T(utoipa::openapi::Schema::Object(
+            ObjectBuilder::new().schema_type(Type::Object).build(),
+        ))
+    }
+
+    /// Convenience wrapper that infers the version list from a
+    /// [`VersionedGraphQL`](crate::graphql::VersionedGraphQL).
+    pub fn add_paths_from_versioned(
+        openapi: OpenApi,
+        graphql: &crate::graphql::VersionedGraphQL,
+    ) -> OpenApi {
+        let versions: Vec<ApiVersion> = graphql.versions().collect();
+        add_graphql_paths(openapi, graphql.base_path(), &versions)
+    }
+
+}
+
 /// OpenAPI security scheme helpers
 pub mod security {
     use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};

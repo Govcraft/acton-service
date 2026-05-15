@@ -146,6 +146,7 @@ fn parse_service_config(cargo_toml: &str) -> Result<ServiceTemplate> {
         rate_limit,
         openapi,
         audit,
+        graphql: false,
     })
 }
 

@@ -4,6 +4,9 @@ use anyhow::Result;
 {% if http -%}
 mod handlers;
 {% endif -%}
+{%- if graphql %}
+mod graphql;
+{% endif -%}
 {%- if grpc %}
 // Note: When you add gRPC services, create src/services.rs and add: mod services;
 {% endif %}
@@ -24,6 +27,9 @@ async fn main() -> Result<()> {
     // Build and serve
     ServiceBuilder::new()
         .with_routes(routes)
+{%- if graphql %}
+        .with_versioned_graphql(crate::graphql::build())
+{%- endif %}
         .build()
         .serve()
         .await?;
@@ -68,6 +74,9 @@ async fn main() -> Result<()> {
     // Set use_separate_port = true in config.toml to use separate ports
     ServiceBuilder::new()
         .with_routes(http_routes)
+{%- if graphql %}
+        .with_versioned_graphql(crate::graphql::build())
+{%- endif %}
         // .with_grpc_services(grpc_routes)  // Uncomment when you add gRPC services
         .build()
         .serve()

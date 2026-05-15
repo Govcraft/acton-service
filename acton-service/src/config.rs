@@ -103,6 +103,11 @@ where
     #[serde(default)]
     pub cedar: Option<CedarConfig>,
 
+    /// GraphQL transport configuration (optional)
+    #[cfg(feature = "graphql")]
+    #[serde(default)]
+    pub graphql: Option<GraphQLConfig>,
+
     /// Session configuration (optional)
     #[cfg(feature = "session")]
     #[serde(default)]
@@ -805,6 +810,53 @@ impl CedarConfig {
     /// Get cache TTL as Duration
     pub fn cache_ttl(&self) -> Duration {
         Duration::from_secs(self.cache_ttl_secs)
+    }
+}
+
+/// GraphQL transport configuration (requires `graphql` feature).
+///
+/// Drives `ServiceBuilder::with_versioned_graphql`. When `enabled = false`
+/// the schemas registered on the builder are ignored at mount time.
+#[cfg(feature = "graphql")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphQLConfig {
+    /// Enable the GraphQL transport. When false, registered schemas are not
+    /// mounted onto the Axum router.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Maximum allowed query depth. Queries that exceed this depth are
+    /// rejected before execution. `None` disables the limit.
+    #[serde(default)]
+    pub max_query_depth: Option<usize>,
+
+    /// Maximum allowed query complexity. Implementation uses
+    /// `async_graphql::SchemaBuilder::limit_complexity`. `None` disables the
+    /// limit.
+    #[serde(default)]
+    pub max_query_complexity: Option<usize>,
+
+    /// Serve GraphiQL on `GET /api/v{n}/graphql`. Disable in production if
+    /// the schema is sensitive.
+    #[serde(default = "default_true")]
+    pub graphiql_enabled: bool,
+
+    /// Allow schema introspection (`__schema`, `__type`). Disable in
+    /// production to harden the schema against probing.
+    #[serde(default = "default_true")]
+    pub introspection_enabled: bool,
+}
+
+#[cfg(feature = "graphql")]
+impl Default for GraphQLConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_query_depth: None,
+            max_query_complexity: None,
+            graphiql_enabled: true,
+            introspection_enabled: true,
+        }
     }
 }
 
@@ -1555,6 +1607,8 @@ where
             websocket: None,
             #[cfg(feature = "cedar-authz")]
             cedar: None,
+            #[cfg(feature = "graphql")]
+            graphql: None,
             #[cfg(feature = "session")]
             session: None,
             #[cfg(feature = "audit")]
@@ -1656,6 +1710,8 @@ mod tests {
             websocket: None,
             #[cfg(feature = "cedar-authz")]
             cedar: None,
+            #[cfg(feature = "graphql")]
+            graphql: None,
             #[cfg(feature = "session")]
             session: None,
             #[cfg(feature = "audit")]
@@ -1721,6 +1777,8 @@ mod tests {
             websocket: None,
             #[cfg(feature = "cedar-authz")]
             cedar: None,
+            #[cfg(feature = "graphql")]
+            graphql: None,
             #[cfg(feature = "session")]
             session: None,
             #[cfg(feature = "audit")]

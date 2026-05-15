@@ -130,6 +130,8 @@ where
     cedar: Option<crate::middleware::cedar::CedarAuthz>,
     #[cfg(feature = "cedar-authz")]
     cedar_path_normalizer: Option<fn(&str) -> String>,
+    #[cfg(feature = "graphql")]
+    graphql: Option<crate::graphql::VersionedGraphQL>,
     agent_runtime: Option<acton_reactive::prelude::ActorRuntime>,
     actor_extensions: Vec<Box<dyn crate::extensions::ActorExtensionSpawner>>,
 }
@@ -150,6 +152,8 @@ where
             cedar: None,
             #[cfg(feature = "cedar-authz")]
             cedar_path_normalizer: None,
+            #[cfg(feature = "graphql")]
+            graphql: None,
             agent_runtime: None,
             actor_extensions: Vec::new(),
         }
@@ -228,6 +232,43 @@ where
     #[cfg(feature = "grpc")]
     pub fn with_grpc_services(mut self, services: tonic::service::Routes) -> Self {
         self.grpc_services = Some(services);
+        self
+    }
+
+    /// Register a versioned GraphQL schema collection (requires "graphql" feature).
+    ///
+    /// Each schema is mounted at `/{base_path}/{version}/graphql` inside the
+    /// existing versioned Axum router, so it inherits the same middleware
+    /// stack (auth, tracing, rate limiting, CORS, ...) that protects REST
+    /// endpoints.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use acton_service::prelude::*;
+    /// use acton_service::graphql::VersionedGraphQLBuilder;
+    /// use async_graphql::{Object, Schema, EmptyMutation, EmptySubscription};
+    ///
+    /// struct Query;
+    /// #[Object] impl Query { async fn hello(&self) -> &'static str { "world" } }
+    ///
+    /// let schema = Schema::build(Query, EmptyMutation, EmptySubscription).finish();
+    /// let graphql = VersionedGraphQLBuilder::new()
+    ///     .with_base_path("/api")
+    ///     .add_version(ApiVersion::V1, schema)
+    ///     .build();
+    ///
+    /// let service = ServiceBuilder::new()
+    ///     .with_routes(routes)
+    ///     .with_versioned_graphql(graphql)
+    ///     .build();
+    /// ```
+    #[cfg(feature = "graphql")]
+    pub fn with_versioned_graphql(
+        mut self,
+        graphql: crate::graphql::VersionedGraphQL,
+    ) -> Self {
+        self.graphql = Some(graphql);
         self
     }
 
@@ -1007,6 +1048,90 @@ where
             }
         };
 
+        // Resolve Cedar (if configured) up front so the GraphQL transport can
+        // share the same instance via resolver-level checks. We move it out of
+        // `self` here; the HTTP middleware section below consumes this local.
+        #[cfg(feature = "cedar-authz")]
+        let cedar_authz: Option<crate::middleware::cedar::CedarAuthz> = {
+            if let Some(cedar) = self.cedar.take() {
+                tracing::debug!("Using explicit Cedar authorization middleware");
+                Some(cedar)
+            } else if let Some(ref cedar_config) = config.cedar {
+                if cedar_config.enabled {
+                    match tokio::runtime::Handle::try_current() {
+                        Ok(_handle) => {
+                            let cedar_path_normalizer = self.cedar_path_normalizer;
+                            match tokio::task::block_in_place(|| {
+                                tokio::runtime::Handle::current().block_on(async {
+                                    let mut builder = crate::middleware::cedar::CedarAuthz::builder(
+                                        cedar_config.clone(),
+                                    );
+                                    if let Some(normalizer) = cedar_path_normalizer {
+                                        builder = builder.with_path_normalizer(normalizer);
+                                    }
+                                    builder.build().await
+                                })
+                            }) {
+                                Ok(cedar) => {
+                                    if cedar_path_normalizer.is_some() {
+                                        tracing::debug!("Auto-configured Cedar authorization middleware with custom path normalizer");
+                                    } else {
+                                        tracing::debug!("Auto-configured Cedar authorization middleware with default path normalizer");
+                                    }
+                                    Some(cedar)
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Failed to initialize Cedar middleware: {}",
+                                        e
+                                    );
+                                    None
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            tracing::warn!("No tokio runtime available for Cedar initialization");
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        // Merge GraphQL routes (if any) BEFORE general middleware so GraphQL
+        // endpoints inherit auth, tracing, CORS, etc.
+        #[cfg(feature = "graphql")]
+        let app = if let Some(graphql) = self.graphql.take() {
+            let graphql_enabled = config
+                .graphql
+                .as_ref()
+                .map(|g| g.enabled)
+                .unwrap_or(true);
+            if graphql_enabled {
+                match crate::graphql::mount::build_router(
+                    graphql,
+                    config.graphql.as_ref(),
+                    #[cfg(feature = "graphql-cedar")]
+                    cedar_authz.clone(),
+                ) {
+                    Some(graphql_router) => {
+                        tracing::debug!("Merging GraphQL transport routes");
+                        app.merge(graphql_router)
+                    }
+                    None => app,
+                }
+            } else {
+                tracing::debug!("GraphQL transport configured but disabled by config");
+                app
+            }
+        } else {
+            app
+        };
+
         // Apply general middleware stack (CORS, compression, timeout, TraceLayer, etc.)
         // Layers are applied in reverse order (bottom layer is innermost/first)
         let mut app = Self::apply_middleware(app, &config);
@@ -1078,66 +1203,16 @@ where
             }
         }
 
-        // Auto-apply Cedar middleware if configured and enabled
+        // Auto-apply Cedar middleware if available (resolved earlier so the
+        // GraphQL transport can share the same instance for resolver checks).
         // NOTE: Cedar must be applied BEFORE JWT because Axum layers run in reverse order
         // This ensures the execution order is: Request → General Middleware → JWT → Cedar → Handler
         #[cfg(feature = "cedar-authz")]
-        {
-            let cedar_authz = if let Some(cedar) = self.cedar {
-                // User provided explicit Cedar instance - use it directly
-                tracing::debug!("Using explicit Cedar authorization middleware");
-                Some(cedar)
-            } else if let Some(ref cedar_config) = config.cedar {
-                if cedar_config.enabled {
-                    // Auto-configure Cedar from config
-                    match tokio::runtime::Handle::try_current() {
-                        Ok(_handle) => {
-                            // Use block_in_place to avoid nested runtime error
-                            let cedar_path_normalizer = self.cedar_path_normalizer;
-                            match tokio::task::block_in_place(|| {
-                                tokio::runtime::Handle::current().block_on(async {
-                                    let mut builder = crate::middleware::cedar::CedarAuthz::builder(
-                                        cedar_config.clone(),
-                                    );
-                                    if let Some(normalizer) = cedar_path_normalizer {
-                                        builder = builder.with_path_normalizer(normalizer);
-                                    }
-                                    builder.build().await
-                                })
-                            }) {
-                                Ok(cedar) => {
-                                    if cedar_path_normalizer.is_some() {
-                                        tracing::debug!("Auto-configured Cedar authorization middleware with custom path normalizer");
-                                    } else {
-                                        tracing::debug!("Auto-configured Cedar authorization middleware with default path normalizer");
-                                    }
-                                    Some(cedar)
-                                }
-                                Err(e) => {
-                                    tracing::warn!("Failed to initialize Cedar middleware: {}", e);
-                                    None
-                                }
-                            }
-                        }
-                        Err(_) => {
-                            tracing::warn!("No tokio runtime available for Cedar initialization");
-                            None
-                        }
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            // Apply Cedar middleware if available
-            if let Some(cedar) = cedar_authz {
-                app = app.layer(axum::middleware::from_fn_with_state(
-                    cedar,
-                    crate::middleware::cedar::CedarAuthz::middleware,
-                ));
-            }
+        if let Some(cedar) = cedar_authz {
+            app = app.layer(axum::middleware::from_fn_with_state(
+                cedar,
+                crate::middleware::cedar::CedarAuthz::middleware,
+            ));
         }
 
         // Apply audit middleware if configured

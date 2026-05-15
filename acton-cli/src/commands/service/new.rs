@@ -23,6 +23,7 @@ pub async fn execute(
     resilience: bool,
     rate_limit: bool,
     openapi: bool,
+    graphql: bool,
     _template: Option<String>,
     path: Option<String>,
     no_git: bool,
@@ -53,6 +54,7 @@ pub async fn execute(
             resilience,
             rate_limit,
             openapi,
+            graphql: graphql || full,
         }
     };
 
@@ -105,6 +107,7 @@ struct ServiceConfig {
     resilience: bool,
     rate_limit: bool,
     openapi: bool,
+    graphql: bool,
 }
 
 fn collect_interactive_config(name: &str) -> Result<ServiceConfig> {
@@ -188,6 +191,11 @@ fn collect_interactive_config(name: &str) -> Result<ServiceConfig> {
         .default(true)
         .interact()?;
 
+    let graphql = Confirm::with_theme(&theme)
+        .with_prompt("Add GraphQL transport?")
+        .default(false)
+        .interact()?;
+
     Ok(ServiceConfig {
         name: name.to_string(),
         http,
@@ -200,6 +208,7 @@ fn collect_interactive_config(name: &str) -> Result<ServiceConfig> {
         resilience: false,
         rate_limit: false,
         openapi: false,
+        graphql,
     })
 }
 
@@ -229,6 +238,7 @@ async fn create_project(config: &ServiceConfig, project_path: &Path, no_git: boo
         rate_limit: config.rate_limit,
         openapi: config.openapi,
         audit: false,
+        graphql: config.graphql,
     };
 
     // Initialize template engine
@@ -300,6 +310,15 @@ async fn create_project(config: &ServiceConfig, project_path: &Path, no_git: boo
         utils::create_dir_all(&proto_dir)?;
     }
 
+    // Generate graphql module if GraphQL enabled
+    if config.graphql {
+        pb.set_message("Generating GraphQL schema...");
+        utils::write_file(
+            &src_dir.join("graphql.rs"),
+            &templates::graphql::generate_module(),
+        )?;
+    }
+
     pb.set_message("Generating .gitignore...");
     utils::write_file(
         &project_path.join(".gitignore"),
@@ -358,6 +377,9 @@ fn show_dry_run(config: &ServiceConfig, project_path: &Path) {
         println!("  • build.rs");
         println!("  • proto/ (directory)");
     }
+    if config.graphql {
+        println!("  • src/graphql.rs");
+    }
     println!("  • .gitignore");
     println!("  • README.md");
     println!("  • Dockerfile");
@@ -388,6 +410,9 @@ fn show_dry_run(config: &ServiceConfig, project_path: &Path) {
     if config.rate_limit {
         println!("  ✓ Rate limiting");
     }
+    if config.graphql {
+        println!("  ✓ GraphQL transport");
+    }
 }
 
 fn show_success(config: &ServiceConfig, project_path: &Path) {
@@ -397,13 +422,19 @@ fn show_success(config: &ServiceConfig, project_path: &Path) {
         format!("Created {} service", config.name).bold()
     );
 
-    if config.http || config.grpc || config.database.is_some() {
+    if config.http || config.grpc || config.database.is_some() || config.graphql {
         println!("\n{}:", "Features enabled".bold());
         if config.http {
             println!("  {} HTTP REST API with versioning", "✓".green());
         }
         if config.grpc {
             println!("  {} gRPC service", "✓".green());
+        }
+        if config.graphql {
+            println!(
+                "  {} GraphQL transport at /api/v1/graphql",
+                "✓".green()
+            );
         }
         if let Some(db) = &config.database {
             println!("  {} {} database with connection pooling", "✓".green(), db);

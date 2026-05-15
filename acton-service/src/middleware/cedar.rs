@@ -221,6 +221,88 @@ impl CedarAuthz {
         }
     }
 
+    /// Evaluate a Cedar authorization request.
+    ///
+    /// This is the shared policy-evaluation entry point used by the HTTP
+    /// middleware, the gRPC Tower layer, and resolver-level checks (e.g.
+    /// `acton_service::graphql::CedarResolverCheck`). It builds the entity
+    /// hierarchy from the supplied claims, consults the cache (if enabled),
+    /// runs the policy set against the request, and writes the result back
+    /// to the cache. The result honors the `fail_open` config flag: when
+    /// `fail_open == true` a denial is reported as `Decision::Allow` and a
+    /// warning is logged.
+    ///
+    /// Returns `Error::Internal` on Cedar construction failures and surfaces
+    /// cache errors verbatim.
+    pub async fn authorize(
+        &self,
+        principal: &EntityUid,
+        action: &EntityUid,
+        resource: &EntityUid,
+        context: Context,
+        claims: &Claims,
+    ) -> Result<Decision, Error> {
+        let cedar_request = CedarRequest::new(
+            principal.clone(),
+            action.clone(),
+            resource.clone(),
+            context,
+            None,
+        )
+        .map_err(|e| Error::Internal(format!("Failed to build Cedar request: {}", e)))?;
+
+        // Check cache (if enabled).
+        #[cfg(feature = "cache")]
+        if let Some(cache) = &self.cache {
+            if let Some(decision) = cache.get(&cedar_request).await? {
+                return Ok(self.apply_fail_open(decision, principal, action));
+            }
+        }
+
+        let policy_set = self.policy_set.read().await;
+        let entities = build_entities(claims)?;
+
+        let raw_decision = self
+            .authorizer
+            .is_authorized(&cedar_request, &policy_set, &entities)
+            .decision();
+
+        // Cache decision (if enabled).
+        #[cfg(feature = "cache")]
+        if let Some(cache) = &self.cache {
+            let _ = cache
+                .set(&cedar_request, raw_decision, self.config.cache_ttl_secs)
+                .await;
+        }
+
+        Ok(self.apply_fail_open(raw_decision, principal, action))
+    }
+
+    /// Apply the `fail_open` policy and log denials.
+    fn apply_fail_open(
+        &self,
+        decision: Decision,
+        principal: &EntityUid,
+        action: &EntityUid,
+    ) -> Decision {
+        match decision {
+            Decision::Allow => Decision::Allow,
+            Decision::Deny => {
+                tracing::warn!(
+                    principal = ?principal,
+                    action = ?action,
+                    "Cedar policy denied request"
+                );
+                if self.config.fail_open {
+                    tracing::warn!("Cedar policy denied but fail_open=true, allowing request");
+                    Decision::Allow
+                } else {
+                    Decision::Deny
+                }
+            }
+        }
+    }
+
     /// Middleware function to evaluate Cedar policies (HTTP)
     pub async fn middleware(
         State(authz): State<Self>,
@@ -257,76 +339,14 @@ impl CedarAuthz {
         let principal = build_principal(&claims)?;
         let action = build_action_http(&method, &request, authz.path_normalizer)?;
         let context = build_context_http(request.headers(), &claims)?;
-
-        // Build resource (generic default)
         let resource = build_resource()?;
 
-        let cedar_request = CedarRequest::new(
-            principal.clone(),
-            action.clone(),
-            resource.clone(),
-            context,
-            None, // Schema: None (optional)
-        )
-        .map_err(|e| Error::Internal(format!("Failed to build Cedar request: {}", e)))?;
-
-        // Check cache (if enabled)
-        #[cfg(feature = "cache")]
-        if let Some(cache) = &authz.cache {
-            if let Some(decision) = cache.get(&cedar_request).await? {
-                match decision {
-                    Decision::Allow => return Ok(next.run(request).await),
-                    Decision::Deny => {
-                        return Err(Error::Forbidden("Access denied by policy".to_string()))
-                    }
-                }
-            }
-        }
-
-        // Evaluate policies
-        let policy_set = authz.policy_set.read().await;
-        let entities = build_entities(&claims)?;
-
-        let response = authz
-            .authorizer
-            .is_authorized(&cedar_request, &policy_set, &entities);
-
-        // Handle decision
-        match response.decision() {
-            Decision::Allow => {
-                // Cache decision (if enabled)
-                #[cfg(feature = "cache")]
-                if let Some(cache) = &authz.cache {
-                    let _ = cache
-                        .set(&cedar_request, Decision::Allow, authz.config.cache_ttl_secs)
-                        .await;
-                }
-
-                // Allow request to proceed
-                Ok(next.run(request).await)
-            }
-            Decision::Deny => {
-                tracing::warn!(
-                    principal = ?principal,
-                    action = ?action,
-                    "Cedar policy denied request"
-                );
-
-                // Cache denial (if enabled)
-                #[cfg(feature = "cache")]
-                if let Some(cache) = &authz.cache {
-                    let _ = cache
-                        .set(&cedar_request, Decision::Deny, authz.config.cache_ttl_secs)
-                        .await;
-                }
-
-                if authz.config.fail_open {
-                    tracing::warn!("Cedar policy denied but fail_open=true, allowing request");
-                    Ok(next.run(request).await)
-                } else {
-                    Err(Error::Forbidden("Access denied by policy".to_string()))
-                }
-            }
+        match authz
+            .authorize(&principal, &action, &resource, context, &claims)
+            .await?
+        {
+            Decision::Allow => Ok(next.run(request).await),
+            Decision::Deny => Err(Error::Forbidden("Access denied by policy".to_string())),
         }
     }
 
@@ -754,74 +774,19 @@ where
                 .parse()
                 .map_err(|_| Status::internal("Failed to parse resource"))?;
 
-            let cedar_request = CedarRequest::new(
-                principal.clone(),
-                action.clone(),
-                resource.clone(),
-                context,
-                None,
-            )
-            .map_err(|_| Status::internal("Failed to build Cedar request"))?;
+            let decision = authz
+                .authorize(&principal, &action, &resource, context, &claims)
+                .await
+                .map_err(|e| Status::internal(format!("Cedar authorization error: {}", e)))?;
 
-            // Check cache (if enabled)
-            #[cfg(feature = "cache")]
-            if let Some(cache) = &authz.cache {
-                if let Ok(Some(decision)) = cache.get(&cedar_request).await {
-                    match decision {
-                        Decision::Allow => return inner.call(req).await,
-                        Decision::Deny => {
-                            return Err(Status::permission_denied("Access denied by policy"))
-                        }
-                    }
-                }
-            }
-
-            // Evaluate policies
-            let policy_set = authz.policy_set.read().await;
-            let entities = build_entities(&claims)
-                .map_err(|_| Status::internal("Failed to build entities"))?;
-
-            let response = authz
-                .authorizer
-                .is_authorized(&cedar_request, &policy_set, &entities);
-
-            // Handle decision
-            match response.decision() {
-                Decision::Allow => {
-                    // Cache decision (if enabled)
-                    #[cfg(feature = "cache")]
-                    if let Some(cache) = &authz.cache {
-                        let _ = cache
-                            .set(&cedar_request, Decision::Allow, authz.config.cache_ttl_secs)
-                            .await;
-                    }
-
-                    inner.call(req).await
-                }
+            match decision {
+                Decision::Allow => inner.call(req).await,
                 Decision::Deny => {
                     tracing::warn!(
-                        principal = ?principal,
-                        action = ?action,
                         method = %method_path,
                         "Cedar policy denied gRPC request"
                     );
-
-                    // Cache denial (if enabled)
-                    #[cfg(feature = "cache")]
-                    if let Some(cache) = &authz.cache {
-                        let _ = cache
-                            .set(&cedar_request, Decision::Deny, authz.config.cache_ttl_secs)
-                            .await;
-                    }
-
-                    if authz.config.fail_open {
-                        tracing::warn!(
-                            "Cedar policy denied but fail_open=true, allowing gRPC request"
-                        );
-                        inner.call(req).await
-                    } else {
-                        Err(Status::permission_denied("Access denied by policy"))
-                    }
+                    Err(Status::permission_denied("Access denied by policy"))
                 }
             }
         })

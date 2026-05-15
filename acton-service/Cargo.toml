@@ -125,6 +125,10 @@ rustls-pemfile = { workspace = true, optional = true }
 tracing-journald = { workspace = true, optional = true }
 # ClickHouse (optional)
 clickhouse = { version = "0.14.3", features = ["uuid"], optional = true }
+# GraphQL (optional)
+async-graphql = { version = "7.2.1", features = ["uuid", "chrono", "dataloader", "apollo_tracing", "tracing"], optional = true }
+async-graphql-axum = { version = "7.2.1", optional = true }
+bytes = { version = "1.11.1", optional = true }
 
 [features]
 default = ["http", "observability"]
@@ -149,7 +153,7 @@ auth = ["dep:argon2", "dep:rand", "dep:blake3", "dep:base64"] # Core: password h
 oauth = ["auth", "dep:oauth2", "dep:openidconnect", "dep:base64"]  # OAuth/OIDC providers (requires auth)
 auth-full = ["auth", "oauth", "jwt", "cache", "database", "login-lockout", "accounts"]  # All auth features (excludes turso - mutually exclusive with database)
 
-full = ["http", "grpc", "websocket", "database", "cache", "events", "observability", "resilience", "otel-metrics", "governor", "openapi", "cedar-authz", "jwt", "auth", "session-memory", "session-redis", "htmx", "askama", "sse", "pagination-full", "handlers", "login-lockout", "tls", "accounts", "account-handlers", "journald"]
+full = ["http", "grpc", "websocket", "database", "cache", "events", "observability", "resilience", "otel-metrics", "governor", "openapi", "cedar-authz", "jwt", "auth", "session-memory", "session-redis", "htmx", "askama", "sse", "pagination-full", "handlers", "login-lockout", "tls", "accounts", "account-handlers", "journald", "graphql", "graphql-cedar"]
 tonic-health = ["dep:tonic-health"]
 tonic-reflection = ["dep:tonic-reflection"]
 tower-resilience-circuitbreaker = ["dep:tower-resilience-circuitbreaker"]
@@ -205,6 +209,14 @@ journald = ["dep:tracing-journald"]
 
 # ClickHouse analytical database (composable with any primary database)
 clickhouse = ["dep:clickhouse"]
+
+# GraphQL transport (async-graphql + Axum integration). Adds a third sibling
+# transport to `http` and `grpc`, mounted by `ServiceBuilder` under the same
+# versioned router and middleware stack.
+graphql = ["dep:async-graphql", "dep:async-graphql-axum", "dep:bytes"]
+# GraphQL with Cedar policy authorization callable from resolvers via
+# `acton_service::graphql::CedarResolverCheck`.
+graphql-cedar = ["graphql", "cedar-authz"]
 
 # Basic examples
 [[example]]
@@ -268,6 +280,12 @@ required-features = ["websocket"]
 name = "task-manager"
 path = "examples/htmx/task-manager.rs"
 required-features = ["htmx-full"]
+
+# GraphQL examples
+[[example]]
+name = "graphql-basic"
+path = "examples/graphql/graphql-basic.rs"
+required-features = ["graphql"]
 
 [build-dependencies]
 prost-build = "0.14.1"

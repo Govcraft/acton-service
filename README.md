@@ -292,6 +292,88 @@ use_separate_port = false  # Default: single-port mode with automatic protocol d
 # port = 9090              # Only used when use_separate_port = true
 ```
 
+### GraphQL Transport
+
+Enable the `graphql` feature to expose schemas alongside REST and gRPC. Each
+schema is mounted at `/{base}/v{n}/graphql` under the same versioned router,
+so it inherits the framework middleware stack (auth, tracing, rate limiting,
+Cedar, CORS). `GET` on the same path serves GraphiQL.
+
+```rust
+use acton_service::prelude::*;
+use acton_service::graphql::{GraphQLContextExt, VersionedGraphQLBuilder};
+use async_graphql::{Context, EmptyMutation, EmptySubscription, Object, Schema};
+
+struct Query;
+
+#[Object]
+impl Query {
+    async fn hello(&self) -> &'static str { "world" }
+
+    async fn whoami(&self, ctx: &Context<'_>) -> String {
+        // Claims placed in request extensions by PASETO/JWT middleware are
+        // forwarded into the resolver Context automatically.
+        ctx.claims().map(|c| c.sub.clone()).unwrap_or("anon".into())
+    }
+}
+
+let routes = VersionedApiBuilder::new()
+    .with_base_path("/api")
+    .add_version(ApiVersion::V1, |r| r)
+    .build_routes();
+
+let schema = Schema::build(Query, EmptyMutation, EmptySubscription).finish();
+let graphql = VersionedGraphQLBuilder::new()
+    .with_base_path("/api")
+    .add_version(ApiVersion::V1, schema)
+    .build();
+
+ServiceBuilder::new()
+    .with_routes(routes)
+    .with_versioned_graphql(graphql)
+    .build()
+    .serve()
+    .await?;
+```
+
+With the `graphql-cedar` feature enabled, resolvers can call into the same
+Cedar instance used by HTTP/gRPC middleware:
+
+```rust
+use acton_service::graphql::CedarResolverCheck;
+
+async fn document(ctx: &Context<'_>, id: String) -> async_graphql::Result<String> {
+    CedarResolverCheck::for_context(ctx)?
+        .with_action("readDocument")
+        .with_resource_type("Document")
+        .with_resource_id(&id)
+        .authorize()
+        .await
+        .map_err(|e| async_graphql::Error::new(e.to_string()))?;
+    Ok(format!("Document {} contents", id))
+}
+```
+
+Configure runtime knobs (depth, complexity, GraphiQL, introspection) under
+`[graphql]` in `config.toml`:
+
+```toml
+[graphql]
+enabled = true
+graphiql_enabled = true
+introspection_enabled = true
+# max_query_depth = 12
+# max_query_complexity = 200
+```
+
+Scaffold a graphql-ready service with the CLI:
+
+```bash
+acton service new my-svc --graphql                # new project
+acton service add graphql                         # retrofit existing project
+acton service add graphql --cedar                 # add Cedar resolver guard
+```
+
 ### Zero-Configuration Defaults
 
 Configuration follows the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html):
@@ -345,15 +427,17 @@ Enable only what you need:
 ```toml
 [dependencies]
 acton-service = { version = "0.2", features = [
-    "http",          # Axum HTTP framework (default)
-    "grpc",          # Tonic gRPC support
-    "database",      # PostgreSQL via SQLx
-    "cache",         # Redis connection pooling
-    "events",        # NATS JetStream
-    "observability", # Structured logging (default)
-    "governor",      # Advanced rate limiting
-    "openapi",       # Swagger/OpenAPI documentation
-    "cedar-authz",   # AWS Cedar policy-based authorization
+    "http",           # Axum HTTP framework (default)
+    "grpc",           # Tonic gRPC support
+    "graphql",        # async-graphql transport (versioned)
+    "graphql-cedar",  # Cedar resolver checks (implies graphql + cedar-authz)
+    "database",       # PostgreSQL via SQLx
+    "cache",          # Redis connection pooling
+    "events",         # NATS JetStream
+    "observability",  # Structured logging (default)
+    "governor",       # Advanced rate limiting
+    "openapi",        # Swagger/OpenAPI documentation
+    "cedar-authz",    # AWS Cedar policy-based authorization
 ] }
 ```
 
@@ -710,13 +794,14 @@ See the [Examples documentation](https://govcraft.github.io/acton-service/docs/e
 - **OpenAPI/Swagger Support**: Multiple UI options (Swagger UI, RapiDoc, ReDoc) with multi-version documentation
 - **CLI Scaffolding Tool**: Service generation with configurable features (database, cache, events, observability)
 - **gRPC Features**: Reflection service, health checks, interceptors, middleware parity with HTTP
+- **GraphQL Transport** (`graphql` feature): async-graphql + Axum integration, path-versioned schemas, GraphiQL, claims propagation, and optional Cedar resolver authorization (`graphql-cedar`)
 
 **In Progress** 🚧
 - Enhanced CLI commands (add endpoint, worker generation, deployment manifest creation)
 - Additional OpenAPI schema generation utilities
 
 **Planned** 📋
-- GraphQL support with versioning integration
+- GraphQL subscriptions over WebSocket
 - WebSocket support for real-time features
 - Service mesh integration (Istio, Linkerd)
 - Additional database backends (MySQL, MongoDB)
