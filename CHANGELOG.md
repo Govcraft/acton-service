@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.25.0] - 2026-05-15
+
+### Features
+
+- **graphql**: Add versioned GraphQL transport built on `async-graphql` +
+  `async-graphql-axum`. Schemas are bound to `ApiVersion` via
+  `VersionedGraphQLBuilder` and mounted at `/{base}/v{n}/graphql` under
+  the existing versioned Axum router, so they inherit the framework
+  middleware stack (auth, tracing, CORS, rate limiting, Cedar).
+  GraphiQL is served on `GET`. PASETO/JWT `Claims` placed in request
+  extensions propagate into the resolver `Context` automatically and are
+  reachable via the `GraphQLContextExt::claims` accessor. New
+  `graphql-cedar` feature adds `CedarResolverCheck` for resolver-level
+  Cedar policy authorization that shares the same `CedarAuthz` instance
+  the HTTP and gRPC middleware use. CLI scaffolding (`acton service new
+  --graphql`, `acton service add graphql`) and Swagger UI integration
+  (`openapi::graphql::add_paths_from_versioned`) round out the feature.
+
+### Refactor
+
+- **cedar**: Extract the policy-evaluation core out of the HTTP
+  middleware and gRPC layer into a public `CedarAuthz::authorize`
+  method, so all three transports (HTTP, gRPC, GraphQL) share one
+  decision path including `fail_open` handling and cache wiring.
+
 ## [acton-service-v0.24.0] - 2026-05-10
 
 ### Breaking changes
