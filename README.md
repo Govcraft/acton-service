@@ -450,6 +450,32 @@ Or use `full` to enable everything:
 acton-service = { version = "0.2", features = ["full"] }
 ```
 
+### Choosing a Crypto Provider
+
+acton-service uses `rustls` for all TLS, with `aws-lc-rs` as the default
+crypto provider. `aws-lc-rs` is FIPS 140-3 capable (via its `fips` feature),
+aligned with rustls 0.23+, tonic 0.14+, and sqlx 0.8+, and faster than `ring`
+on server hardware.
+
+To use `ring` instead — for example, in environments without a C toolchain
+that `aws-lc-rs` requires at build time:
+
+```toml
+[dependencies]
+acton-service = { version = "0.2", default-features = false, features = [
+    "http",
+    "observability",
+    "crypto-ring",
+] }
+```
+
+Exactly one of `crypto-aws-lc-rs` (default) or `crypto-ring` must be enabled;
+the build fails with a `compile_error!` otherwise. The chosen provider is
+installed automatically when the TLS listener starts. Binaries that drive
+`reqwest`, `sqlx`, or `tonic` TLS clients without using the framework's TLS
+listener should call `acton_service::crypto::ensure_default_crypto_provider()`
+once from `main`.
+
 ## Examples
 
 ### Minimal HTTP Service

@@ -82,6 +82,7 @@ export const navigation = [
     links: [
       { title: 'Examples', href: '/docs/examples' },
       { title: 'Feature Flags', href: '/docs/feature-flags' },
+      { title: 'Crypto Provider', href: '/docs/crypto-provider' },
       { title: 'Migration Guide (v0.8)', href: '/docs/migration-v0.8' },
       { title: 'Glossary', href: '/docs/glossary' },
       { title: 'Troubleshooting', href: '/docs/troubleshooting' },

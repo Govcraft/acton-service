@@ -7,7 +7,7 @@ default-members = ["acton-service", "acton-cli"]
 resolver = "2"
 
 [workspace.package]
-version = "0.25.0"
+version = "0.26.0"
 edition = "2021"
 authors = ["roland@govcraft.ai"]
 license = "MIT"
@@ -37,14 +37,14 @@ tower-http = { version = "0.6.6", features = [
 tower-otel-http-metrics = "0.16.0"
 
 # gRPC framework
-tonic = { version = "0.14.2", features = ["transport"] }
+tonic = { version = "0.14.2", default-features = false, features = ["transport", "codegen", "router", "server", "channel"] }
 tonic-prost = "0.14.2"
 prost = "0.14.1"
 tonic-build = "0.14.2"
 tonic-prost-build = "0.14.2"
 
 # Database
-sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "json", "uuid", "chrono"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "json", "uuid", "chrono", "macros", "migrate", "any"] }
 
 # Turso/libsql
 libsql = { version = "0.9", features = ["replication", "remote"] }
@@ -93,7 +93,7 @@ chrono = { version = "0.4.42", features = ["clock", "std", "serde"], default-fea
 uuid = { version = "1.18.1", features = ["v4", "v7", "serde"] }
 
 # HTTP client
-reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12.24", default-features = false, features = ["json"] }
 
 # Async utilities
 futures = "0.3.31"
@@ -106,5 +106,5 @@ http = "1.3.1"
 blake3 = "1"
 
 # TLS
-tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "tls12", "ring"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "tls12"] }
 rustls-pemfile = "2"

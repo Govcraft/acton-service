@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.26.0] - 2026-05-17
+
+### Breaking changes
+
+- **crypto**: `aws-lc-rs` is now the default rustls `CryptoProvider`, with
+  `ring` available as an opt-in alternative. Users building with
+  `--no-default-features` must now explicitly enable exactly one of the new
+  mutually-exclusive features `crypto-aws-lc-rs` or `crypto-ring`; the build
+  fails with a `compile_error!` otherwise. Existing builds using default
+  features get `crypto-aws-lc-rs` automatically and require no change.
+
+  - Migration to retain prior behavior: `acton-service = { version = "...",
+    default-features = false, features = ["http", "observability",
+    "crypto-ring", ...] }`.
+  - Migration to adopt the new default: no action; rebuild.
+  - Rationale: aws-lc-rs unlocks a FIPS 140-3 path via its `fips` feature
+    (ring has no FIPS validation), aligns with the rustls 0.23+, tonic 0.14+,
+    and sqlx 0.8+ ecosystem default, and provides faster AEAD throughput on
+    server hardware. See `acton-docs/docs/crypto-provider/` for details.
+
+### Fixes
+
+- **tls**: Eliminate a latent runtime panic in `load_server_config`. When
+  the workspace pulled both `ring` (via `tokio-rustls`) and `aws-lc-rs`
+  (transitively via `quinn-proto` and `jsonwebtoken`), `ServerConfig::
+  builder()` panicked because no default `CryptoProvider` was installed.
+  The new `acton_service::crypto::ensure_default_crypto_provider()` is
+  invoked automatically before any server-config builder call and is also
+  exposed for binaries that drive `reqwest`/`sqlx`/`tonic` TLS clients
+  without going through the framework's TLS listener.
+
+### Notes
+
+- `aws-lc-rs` may still appear in `cargo tree` for `crypto-ring` builds
+  because `quinn-proto` links it unconditionally. The *active* provider is
+  whichever feature is enabled; the other is dead-ish code.
+- `jsonwebtoken`'s `rust_crypto` feature pulls `aws-lc-rs` unconditionally.
+  Unchanged by this release.
+
 ## [acton-service-v0.25.0] - 2026-05-15
 
 ### Features

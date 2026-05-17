@@ -120,6 +120,11 @@ pub fn load_server_config(tls_config: &TlsConfig) -> Result<Arc<ServerConfig>> {
             crate::error::Error::Internal("TLS key file contains no private key".to_string())
         })?;
 
+    // Install the chosen rustls crypto provider before any builder call.
+    // Without this, `ServerConfig::builder()` panics when multiple providers
+    // are compiled into the binary (common via transitive deps).
+    crate::crypto::ensure_default_crypto_provider();
+
     // Build server config
     let config = ServerConfig::builder()
         .with_no_client_auth()

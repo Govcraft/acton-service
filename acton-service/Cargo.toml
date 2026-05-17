@@ -129,9 +129,32 @@ clickhouse = { version = "0.14.3", features = ["uuid"], optional = true }
 async-graphql = { version = "7.2.1", features = ["uuid", "chrono", "dataloader", "apollo_tracing", "tracing"], optional = true }
 async-graphql-axum = { version = "7.2.1", optional = true }
 bytes = { version = "1.11.1", optional = true }
+rustls = { version = "0.23.40", default-features = false, features = ["logging", "tls12", "std"], optional = true }
 
 [features]
-default = ["http", "observability"]
+default = ["http", "observability", "crypto-aws-lc-rs"]
+
+# Cryptographic provider selection for rustls. Exactly one must be enabled.
+# aws-lc-rs is the default: FIPS 140-3 capable, ecosystem-aligned with rustls 0.23+,
+# tonic 0.14+, and sqlx 0.8+. Ring is retained as an opt-in alternative for
+# build environments that cannot tolerate aws-lc-rs's C toolchain requirements.
+crypto-aws-lc-rs = [
+    "dep:rustls",
+    "rustls/aws-lc-rs",
+    "tokio-rustls?/aws_lc_rs",
+    "reqwest/rustls-tls-no-provider",
+    "reqwest/rustls-tls-webpki-roots-no-provider",
+    "sqlx?/tls-rustls-aws-lc-rs",
+    "tonic?/tls-aws-lc",
+]
+crypto-ring = [
+    "dep:rustls",
+    "rustls/ring",
+    "tokio-rustls?/ring",
+    "reqwest/rustls-tls",
+    "sqlx?/tls-rustls-ring-webpki",
+    "tonic?/tls-ring",
+]
 http = []
 grpc = ["dep:tonic", "dep:prost", "dep:tonic-prost", "dep:tonic-prost-build", "dep:tokio-stream", "dep:tonic-health", "dep:tonic-reflection"]
 database = ["dep:sqlx"]

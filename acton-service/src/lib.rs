@@ -66,7 +66,21 @@ compile_error!(
      Enable only one database backend."
 );
 
+// Ensure exactly one rustls crypto provider is selected.
+#[cfg(all(feature = "crypto-aws-lc-rs", feature = "crypto-ring"))]
+compile_error!(
+    "Features `crypto-aws-lc-rs` and `crypto-ring` are mutually exclusive. \
+     Enable exactly one rustls crypto provider."
+);
+
+#[cfg(not(any(feature = "crypto-aws-lc-rs", feature = "crypto-ring")))]
+compile_error!(
+    "A rustls crypto provider is required. \
+     Enable `crypto-aws-lc-rs` (default) or `crypto-ring`."
+);
+
 pub mod config;
+pub mod crypto;
 pub mod error;
 pub mod health;
 pub mod ids;

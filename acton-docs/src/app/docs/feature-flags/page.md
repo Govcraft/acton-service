@@ -741,6 +741,21 @@ tokio = { version = "1", features = ["full"] }
 
 ---
 
+## Cryptographic Provider
+
+acton-service uses `rustls` for all TLS, and you must select one — and only
+one — crypto provider:
+
+| Feature | Default? | Use when |
+|---------|----------|----------|
+| `crypto-aws-lc-rs` | Yes | Default; required for FIPS 140-3 paths |
+| `crypto-ring` | No | Build environment cannot tolerate `aws-lc-rs`'s C toolchain requirements |
+
+Enabling both fails at compile time. Enabling neither fails at compile time.
+See [Crypto Provider](/docs/crypto-provider) for the full story, including
+FIPS guidance and the `ensure_default_crypto_provider()` bootstrap for
+binaries that drive TLS clients without the framework's listener.
+
 ## Feature Dependencies
 
 Some features work better together:

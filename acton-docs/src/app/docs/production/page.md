@@ -21,7 +21,7 @@ This checklist covers security, observability, performance, and operational cons
 
 - [ ] Set explicit service name in configuration
 - [ ] Configure appropriate port binding (default: 8080)
-- [ ] Enable TLS/HTTPS for production traffic
+- [ ] Enable TLS/HTTPS for production traffic (see [Crypto Provider](/docs/crypto-provider))
 - [ ] Set connection timeout values appropriate for workload
 - [ ] Configure graceful shutdown timeout
 - [ ] Review and set request body size limits
@@ -61,6 +61,7 @@ This checklist covers security, observability, performance, and operational cons
 - [ ] Enable CORS with restrictive origins (not `*` in production)
 - [ ] Configure TLS with modern cipher suites
 - [ ] Use HTTPS-only in production
+- [ ] For FedRAMP/FISMA/DoD workloads, confirm the `aws-lc-rs` build is FIPS-enabled (see [Crypto Provider — FIPS 140-3](/docs/crypto-provider#fips-140-3))
 - [ ] Implement rate limiting (per-user and per-client)
 - [ ] Set up distributed rate limiting with Redis for multi-instance deployments
 - [ ] Configure firewall rules to restrict service access

@@ -1,0 +1,41 @@
+name: Build & Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  aws-lc-rs:
+    name: crypto-aws-lc-rs (default)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - name: Clippy
+        run: cargo clippy -p acton-service --all-targets --features full -- -D warnings
+      - name: Nextest
+        run: cargo nextest run -p acton-service --features full
+
+  ring:
+    name: crypto-ring (opt-in)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - name: Clippy
+        run: cargo clippy -p acton-service --all-targets --no-default-features --features "full,crypto-ring" -- -D warnings
+      - name: Nextest
+        run: cargo nextest run -p acton-service --no-default-features --features "full,crypto-ring"
