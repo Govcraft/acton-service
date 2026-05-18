@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.26.1] - 2026-05-18
+
+### Fixes
+
+- **surrealdb**: Derive `SurrealValue` on every struct read or bound through
+  the SurrealDB storage backends. surrealdb 3.0's `IndexedResults::take<R>`
+  requires `R: SurrealValue`, which broke 0.26.0 builds that combined
+  `acton-service/surrealdb` with `auth`, `audit`, or `accounts`. Affected
+  types: `AuditRecord`, `AuditRow`, `SigningKeyRecord`, `SigningKeyRow`,
+  `AccountRecord`, `AccountRow`, and the shared types `ApiKey`,
+  `RefreshTokenData`, `RefreshTokenMetadata` (the shared types are scoped
+  in private inner modules so the `SurrealValue` import does not collide
+  with `libsql::params::IntoValue::into_value` in the Turso storage
+  submodules). Fixes #9.
+
+### Internal
+
+- **ci**: Install `protoc` in the Build & Test workflow so the
+  `tonic-prost-build` step in `acton-service`'s build script succeeds on
+  `ubuntu-latest` runners.
+
 ## [acton-service-v0.26.0] - 2026-05-17
 
 ### Breaking changes
