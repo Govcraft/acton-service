@@ -15,6 +15,7 @@ release/
 
 # But allow specific hidden files if needed (uncomment as needed)
 !.github/
+!.cargo/
 # !.vscode/
 
 # Ignore all markdown files

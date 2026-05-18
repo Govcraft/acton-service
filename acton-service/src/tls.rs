@@ -77,25 +77,24 @@ impl axum::serve::Listener for TlsListener {
 /// Reads the certificate chain and private key from disk and constructs
 /// a server configuration with no client authentication required.
 pub fn load_server_config(tls_config: &TlsConfig) -> Result<Arc<ServerConfig>> {
-    use rustls_pemfile::{certs, private_key};
-    use std::fs::File;
-    use std::io::BufReader;
+    use rustls_pki_types::pem::PemObject;
+    use rustls_pki_types::{CertificateDer, PrivateKeyDer};
     use tokio_rustls::rustls;
 
     // Read certificate chain
-    let cert_file = File::open(&tls_config.cert_path).map_err(|e| {
-        crate::error::Error::Internal(format!(
-            "Failed to open TLS cert file '{}': {}",
-            tls_config.cert_path.display(),
-            e
-        ))
-    })?;
-    let mut cert_reader = BufReader::new(cert_file);
-    let cert_chain: Vec<rustls::pki_types::CertificateDer<'static>> = certs(&mut cert_reader)
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| {
-            crate::error::Error::Internal(format!("Failed to parse TLS certificates: {}", e))
-        })?;
+    let cert_chain: Vec<rustls::pki_types::CertificateDer<'static>> =
+        CertificateDer::pem_file_iter(&tls_config.cert_path)
+            .map_err(|e| {
+                crate::error::Error::Internal(format!(
+                    "Failed to open TLS cert file '{}': {}",
+                    tls_config.cert_path.display(),
+                    e
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| {
+                crate::error::Error::Internal(format!("Failed to parse TLS certificates: {}", e))
+            })?;
 
     if cert_chain.is_empty() {
         return Err(crate::error::Error::Internal(
@@ -103,22 +102,14 @@ pub fn load_server_config(tls_config: &TlsConfig) -> Result<Arc<ServerConfig>> {
         ));
     }
 
-    // Read private key
-    let key_file = File::open(&tls_config.key_path).map_err(|e| {
+    // Read private key (first PEM-encoded key found in the file)
+    let key = PrivateKeyDer::from_pem_file(&tls_config.key_path).map_err(|e| {
         crate::error::Error::Internal(format!(
-            "Failed to open TLS key file '{}': {}",
+            "Failed to parse TLS private key from '{}': {}",
             tls_config.key_path.display(),
             e
         ))
     })?;
-    let mut key_reader = BufReader::new(key_file);
-    let key = private_key(&mut key_reader)
-        .map_err(|e| {
-            crate::error::Error::Internal(format!("Failed to parse TLS private key: {}", e))
-        })?
-        .ok_or_else(|| {
-            crate::error::Error::Internal("TLS key file contains no private key".to_string())
-        })?;
 
     // Install the chosen rustls crypto provider before any builder call.
     // Without this, `ServerConfig::builder()` panics when multiple providers
