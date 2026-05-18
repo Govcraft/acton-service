@@ -5,58 +5,71 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 
-/// Refresh token metadata
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RefreshTokenMetadata {
-    /// User agent string from the request
-    pub user_agent: Option<String>,
+// Inner module isolates the `SurrealValue` trait import the derive needs.
+// Keeping it out of the parent scope prevents `into_value` ambiguity with
+// `libsql::params::IntoValue` in the Turso storage submodule.
+mod model {
+    use chrono::{DateTime, Utc};
+    use serde::{Deserialize, Serialize};
+    #[cfg(feature = "surrealdb")]
+    use surrealdb::types::SurrealValue;
 
-    /// Client IP address
-    pub ip_address: Option<String>,
+    /// Refresh token metadata
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[cfg_attr(feature = "surrealdb", derive(SurrealValue))]
+    pub struct RefreshTokenMetadata {
+        /// User agent string from the request
+        pub user_agent: Option<String>,
 
-    /// Device identifier (for mobile apps)
-    pub device_id: Option<String>,
+        /// Client IP address
+        pub ip_address: Option<String>,
 
-    /// When the token was created
-    pub created_at: DateTime<Utc>,
-}
+        /// Device identifier (for mobile apps)
+        pub device_id: Option<String>,
 
-impl Default for RefreshTokenMetadata {
-    fn default() -> Self {
-        Self {
-            user_agent: None,
-            ip_address: None,
-            device_id: None,
-            created_at: Utc::now(),
+        /// When the token was created
+        pub created_at: DateTime<Utc>,
+    }
+
+    impl Default for RefreshTokenMetadata {
+        fn default() -> Self {
+            Self {
+                user_agent: None,
+                ip_address: None,
+                device_id: None,
+                created_at: Utc::now(),
+            }
         }
+    }
+
+    /// Refresh token data stored in the backend
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[cfg_attr(feature = "surrealdb", derive(SurrealValue))]
+    pub struct RefreshTokenData {
+        /// Token ID (jti)
+        pub token_id: String,
+
+        /// User ID this token belongs to
+        pub user_id: String,
+
+        /// Token family ID for rotation tracking
+        pub family_id: String,
+
+        /// Whether this token has been revoked
+        pub is_revoked: bool,
+
+        /// When this token expires
+        pub expires_at: DateTime<Utc>,
+
+        /// Token metadata
+        pub metadata: RefreshTokenMetadata,
     }
 }
 
-/// Refresh token data stored in the backend
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RefreshTokenData {
-    /// Token ID (jti)
-    pub token_id: String,
-
-    /// User ID this token belongs to
-    pub user_id: String,
-
-    /// Token family ID for rotation tracking
-    pub family_id: String,
-
-    /// Whether this token has been revoked
-    pub is_revoked: bool,
-
-    /// When this token expires
-    pub expires_at: DateTime<Utc>,
-
-    /// Token metadata
-    pub metadata: RefreshTokenMetadata,
-}
+pub use model::{RefreshTokenData, RefreshTokenMetadata};
 
 /// Refresh token storage trait
 ///

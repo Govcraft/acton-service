@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use surrealdb::types::SurrealValue;
 
 use super::AuditStorage;
 use crate::audit::event::{AuditEvent, AuditEventKind, AuditSeverity, AuditSource};
@@ -65,7 +66,7 @@ impl SurrealAuditStorage {
 }
 
 /// Serializable record for SurrealDB insert
-#[derive(Serialize)]
+#[derive(Serialize, SurrealValue)]
 struct AuditRecord {
     id: String,
     timestamp: String,
@@ -87,7 +88,7 @@ struct AuditRecord {
 }
 
 /// Deserializable record from SurrealDB queries
-#[derive(Deserialize)]
+#[derive(Deserialize, SurrealValue)]
 struct AuditRow {
     id: serde_json::Value,
     timestamp: String,
@@ -114,7 +115,7 @@ impl From<AuditRow> for AuditEvent {
         let id_str = match &row.id {
             serde_json::Value::String(s) => {
                 // Handle "audit_events:uuid" format
-                s.split(':').last().unwrap_or(s).to_string()
+                s.split(':').next_back().unwrap_or(s).to_string()
             }
             serde_json::Value::Object(obj) => {
                 // Handle { "tb": "audit_events", "id": { "String": "uuid" } } format
@@ -298,7 +299,7 @@ impl AuditStorage for SurrealAuditStorage {
                 Error::Internal(format!("Failed to count audit events for purge: {}", e))
             })?;
 
-        #[derive(Deserialize)]
+        #[derive(Deserialize, SurrealValue)]
         struct CountRow {
             total: i64,
         }
