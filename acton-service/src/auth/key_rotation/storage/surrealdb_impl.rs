@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use surrealdb::types::SurrealValue;
 
 use super::KeyRotationStorage;
 use crate::auth::key_rotation::key_metadata::{KeyFormat, KeyStatus, SigningKeyMetadata};
@@ -28,7 +29,7 @@ impl SurrealKeyRotationStorage {
 }
 
 /// Serializable record for SurrealDB inserts
-#[derive(Serialize)]
+#[derive(Serialize, SurrealValue)]
 struct SigningKeyRecord {
     kid: String,
     format: String,
@@ -44,7 +45,7 @@ struct SigningKeyRecord {
 }
 
 /// Deserializable record from SurrealDB queries
-#[derive(Deserialize)]
+#[derive(Deserialize, SurrealValue)]
 struct SigningKeyRow {
     // SurrealDB may return `id` as a Thing or string; we ignore it and use `kid`
     #[allow(dead_code)]
@@ -313,7 +314,7 @@ impl KeyRotationStorage for SurrealKeyRotationStorage {
                 Error::Internal(format!("Failed to count expired draining keys: {}", e))
             })?;
 
-        #[derive(Deserialize)]
+        #[derive(Deserialize, SurrealValue)]
         struct CountRow {
             total: i64,
         }

@@ -21,50 +21,64 @@
 //! }
 //! ```
 
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use chrono::Utc;
+#[cfg(any(feature = "database", feature = "turso"))]
+use chrono::DateTime;
 
 use crate::auth::password::PasswordHasher;
 use crate::error::Error;
 
-/// API key structure
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApiKey {
-    /// Database ID
-    pub id: String,
+// Inner module isolates the `SurrealValue` trait import the derive needs.
+// Keeping it out of the parent scope prevents `into_value` ambiguity with
+// `libsql::params::IntoValue` in the Turso storage submodule below.
+mod model {
+    use chrono::{DateTime, Utc};
+    use serde::{Deserialize, Serialize};
+    #[cfg(feature = "surrealdb")]
+    use surrealdb::types::SurrealValue;
 
-    /// User/owner ID
-    pub user_id: String,
+    /// API key structure
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[cfg_attr(feature = "surrealdb", derive(SurrealValue))]
+    pub struct ApiKey {
+        /// Database ID
+        pub id: String,
 
-    /// User-provided name for the key
-    pub name: String,
+        /// User/owner ID
+        pub user_id: String,
 
-    /// Key prefix (e.g., "sk_live")
-    pub prefix: String,
+        /// User-provided name for the key
+        pub name: String,
 
-    /// Hashed key value (stored, not the actual key)
-    pub key_hash: String,
+        /// Key prefix (e.g., "sk_live")
+        pub prefix: String,
 
-    /// Allowed scopes/permissions
-    #[serde(default)]
-    pub scopes: Vec<String>,
+        /// Hashed key value (stored, not the actual key)
+        pub key_hash: String,
 
-    /// Rate limit (requests per minute, None = default)
-    pub rate_limit: Option<u32>,
+        /// Allowed scopes/permissions
+        #[serde(default)]
+        pub scopes: Vec<String>,
 
-    /// Whether this key has been revoked
-    #[serde(default)]
-    pub is_revoked: bool,
+        /// Rate limit (requests per minute, None = default)
+        pub rate_limit: Option<u32>,
 
-    /// When this key was last used
-    pub last_used_at: Option<DateTime<Utc>>,
+        /// Whether this key has been revoked
+        #[serde(default)]
+        pub is_revoked: bool,
 
-    /// When this key expires (None = never)
-    pub expires_at: Option<DateTime<Utc>>,
+        /// When this key was last used
+        pub last_used_at: Option<DateTime<Utc>>,
 
-    /// When this key was created
-    pub created_at: DateTime<Utc>,
+        /// When this key expires (None = never)
+        pub expires_at: Option<DateTime<Utc>>,
+
+        /// When this key was created
+        pub created_at: DateTime<Utc>,
+    }
 }
+
+pub use model::ApiKey;
 
 impl ApiKey {
     /// Check if the key is currently valid (not revoked, not expired)

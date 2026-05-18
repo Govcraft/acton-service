@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use surrealdb::types::SurrealValue;
 
 use super::AccountStorage;
 use crate::accounts::types::{Account, AccountId, AccountStatus};
@@ -57,7 +58,7 @@ impl SurrealDbAccountStorage {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, SurrealValue)]
 struct AccountRecord {
     email: String,
     username: Option<String>,
@@ -79,7 +80,7 @@ struct AccountRecord {
     updated_at: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, SurrealValue)]
 struct AccountRow {
     id: serde_json::Value,
     email: String,
@@ -118,7 +119,7 @@ fn extract_id(val: &serde_json::Value) -> String {
     match val {
         serde_json::Value::String(s) => {
             // "accounts:acct_xxx" -> "acct_xxx"
-            s.split(':').last().unwrap_or(s).to_string()
+            s.split(':').next_back().unwrap_or(s).to_string()
         }
         serde_json::Value::Object(obj) => obj
             .get("id")
@@ -350,7 +351,7 @@ impl AccountStorage for SurrealDbAccountStorage {
     }
 
     async fn count(&self, status_filter: Option<AccountStatus>) -> Result<u64, Error> {
-        #[derive(Deserialize)]
+        #[derive(Deserialize, SurrealValue)]
         struct CountRow {
             count: i64,
         }
