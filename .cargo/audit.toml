@@ -1,0 +1,23 @@
+# cargo-audit configuration
+# https://docs.rs/cargo-audit/latest/cargo_audit/config/index.html
+#
+# Keep this list in sync with the `advisories.ignore` list in deny.toml. Each
+# entry must carry a rationale comment and be revisited every release.
+
+[advisories]
+ignore = [
+    # rsa Marvin Attack — no fixed upstream release.
+    # Used transitively via sqlx-mysql (MySQL auth), openidconnect/jsonwebtoken
+    # (RSA signature verification), and surrealdb. No private-key operations
+    # against attacker-controlled timing channels in acton-service.
+    # Tracking: https://github.com/RustCrypto/RSA/issues/19
+    "RUSTSEC-2023-0071",
+    # rustls-webpki <0.103.x advisories — pulled in via libsql 0.9.30 ->
+    # hyper-rustls 0.25 -> rustls 0.22 -> rustls-webpki 0.102. libsql 0.9.30
+    # is the latest published release; remediation requires an upstream libsql
+    # release built on a newer rustls stack.
+    "RUSTSEC-2026-0049",
+    "RUSTSEC-2026-0098",
+    "RUSTSEC-2026-0099",
+    "RUSTSEC-2026-0104",
+]

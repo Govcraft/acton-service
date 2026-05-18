@@ -121,7 +121,6 @@ paginator-axum = { version = "0.2.2", optional = true }
 paginator-sqlx = { version = "0.2.2", optional = true }
 blake3 = { workspace = true, optional = true }
 tokio-rustls = { workspace = true, optional = true }
-rustls-pemfile = { workspace = true, optional = true }
 tracing-journald = { workspace = true, optional = true }
 # ClickHouse (optional)
 clickhouse = { version = "0.14.3", features = ["uuid"], optional = true }
@@ -130,6 +129,7 @@ async-graphql = { version = "7.2.1", features = ["uuid", "chrono", "dataloader",
 async-graphql-axum = { version = "7.2.1", optional = true }
 bytes = { version = "1.11.1", optional = true }
 rustls = { version = "0.23.40", default-features = false, features = ["logging", "tls12", "std"], optional = true }
+rustls-pki-types = { version = "1.14.1", features = ["std"], optional = true }
 
 [features]
 default = ["http", "observability", "crypto-aws-lc-rs"]
@@ -214,7 +214,7 @@ repository = []
 handlers = ["repository"]
 
 # TLS support (rustls-based HTTPS)
-tls = ["dep:tokio-rustls", "dep:rustls-pemfile"]
+tls = ["dep:tokio-rustls", "dep:rustls-pki-types"]
 
 # Audit logging with BLAKE3 hash chaining
 audit = ["dep:blake3"]
