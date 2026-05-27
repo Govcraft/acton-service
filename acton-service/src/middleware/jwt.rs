@@ -202,8 +202,8 @@ impl JwtAuth {
                     if logger.config().audit_auth_events {
                         logger
                             .log_auth(
-                                crate::audit::event::AuditEventKind::AuthLoginFailed,
-                                crate::audit::event::AuditSeverity::Warning,
+                                crate::audit::event::AuditEventKind::AuthTokenMissing,
+                                crate::audit::event::AuditSeverity::Informational,
                                 audit_source,
                             )
                             .await;
@@ -222,7 +222,7 @@ impl JwtAuth {
                     if logger.config().audit_auth_events {
                         logger
                             .log_auth(
-                                crate::audit::event::AuditEventKind::AuthLoginFailed,
+                                crate::audit::event::AuditEventKind::AuthTokenInvalid,
                                 crate::audit::event::AuditSeverity::Warning,
                                 audit_source,
                             )

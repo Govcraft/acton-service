@@ -101,7 +101,17 @@ pub enum AuditEventKind {
     /// Successful authentication
     AuthLoginSuccess,
     /// Failed authentication attempt
+    ///
+    /// Reserved for credential-submission failures from application login
+    /// handlers (e.g. `/auth/login`). The auth middleware no longer emits
+    /// this kind for missing or invalid bearer tokens on protected routes —
+    /// see [`Self::AuthTokenMissing`] and [`Self::AuthTokenInvalid`].
     AuthLoginFailed,
+    /// Protected route reached without a bearer token, or with one that was
+    /// malformed at extraction time
+    AuthTokenMissing,
+    /// Bearer token failed validation (bad signature, expired, malformed claims)
+    AuthTokenInvalid,
     /// User logout
     AuthLogout,
     /// Token refresh
@@ -171,6 +181,8 @@ impl std::fmt::Display for AuditEventKind {
         match self {
             Self::AuthLoginSuccess => write!(f, "auth.login.success"),
             Self::AuthLoginFailed => write!(f, "auth.login.failed"),
+            Self::AuthTokenMissing => write!(f, "auth.token.missing"),
+            Self::AuthTokenInvalid => write!(f, "auth.token.invalid"),
             Self::AuthLogout => write!(f, "auth.logout"),
             Self::AuthTokenRefresh => write!(f, "auth.token.refresh"),
             Self::AuthTokenRevoked => write!(f, "auth.token.revoked"),
