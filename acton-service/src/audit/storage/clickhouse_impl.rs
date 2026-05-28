@@ -150,6 +150,28 @@ impl From<AuditQueryRow> for AuditEvent {
             "auth.key.rotated" => AuditEventKind::AuthKeyRotated,
             "auth.key.retired" => AuditEventKind::AuthKeyRetired,
             "auth.key.rotation_failed" => AuditEventKind::AuthKeyRotationFailed,
+            #[cfg(feature = "login-lockout")]
+            "auth.account.locked" => AuditEventKind::AuthAccountLocked,
+            #[cfg(feature = "login-lockout")]
+            "auth.account.unlocked" => AuditEventKind::AuthAccountUnlocked,
+            #[cfg(feature = "accounts")]
+            "account.created" => AuditEventKind::AccountCreated,
+            #[cfg(feature = "accounts")]
+            "account.disabled" => AuditEventKind::AccountDisabled,
+            #[cfg(feature = "accounts")]
+            "account.enabled" => AuditEventKind::AccountEnabled,
+            #[cfg(feature = "accounts")]
+            "account.locked" => AuditEventKind::AccountLocked,
+            #[cfg(feature = "accounts")]
+            "account.unlocked" => AuditEventKind::AccountUnlocked,
+            #[cfg(feature = "accounts")]
+            "account.expired" => AuditEventKind::AccountExpired,
+            #[cfg(feature = "accounts")]
+            "account.deleted" => AuditEventKind::AccountDeleted,
+            #[cfg(feature = "accounts")]
+            "account.updated" => AuditEventKind::AccountUpdated,
+            "config.loaded" => AuditEventKind::ConfigLoaded,
+            "config.drift_detected" => AuditEventKind::ConfigDriftDetected,
             "http.request" => AuditEventKind::HttpRequest,
             "http.request.denied" => AuditEventKind::HttpRequestDenied,
             other => {
@@ -548,9 +570,33 @@ mod tests {
             ("auth.key.rotated", "auth.key.rotated"),
             ("auth.key.retired", "auth.key.retired"),
             ("auth.key.rotation_failed", "auth.key.rotation_failed"),
+            ("config.loaded", "config.loaded"),
+            ("config.drift_detected", "config.drift_detected"),
             ("http.request", "http.request"),
             ("http.request.denied", "http.request.denied"),
         ];
+
+        #[cfg(feature = "login-lockout")]
+        let kinds = {
+            let mut k = kinds;
+            k.push(("auth.account.locked", "auth.account.locked"));
+            k.push(("auth.account.unlocked", "auth.account.unlocked"));
+            k
+        };
+
+        #[cfg(feature = "accounts")]
+        let kinds = {
+            let mut k = kinds;
+            k.push(("account.created", "account.created"));
+            k.push(("account.disabled", "account.disabled"));
+            k.push(("account.enabled", "account.enabled"));
+            k.push(("account.locked", "account.locked"));
+            k.push(("account.unlocked", "account.unlocked"));
+            k.push(("account.expired", "account.expired"));
+            k.push(("account.deleted", "account.deleted"));
+            k.push(("account.updated", "account.updated"));
+            k
+        };
 
         for (db_kind, expected_display) in kinds {
             let row = AuditQueryRow {
