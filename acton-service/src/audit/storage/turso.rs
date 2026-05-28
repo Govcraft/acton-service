@@ -361,6 +361,8 @@ fn parse_event_kind(s: &str) -> AuditEventKind {
     match s {
         "auth.login.success" => AuditEventKind::AuthLoginSuccess,
         "auth.login.failed" => AuditEventKind::AuthLoginFailed,
+        "auth.token.missing" => AuditEventKind::AuthTokenMissing,
+        "auth.token.invalid" => AuditEventKind::AuthTokenInvalid,
         "auth.logout" => AuditEventKind::AuthLogout,
         "auth.token.refresh" => AuditEventKind::AuthTokenRefresh,
         "auth.token.revoked" => AuditEventKind::AuthTokenRevoked,
