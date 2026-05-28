@@ -332,6 +332,35 @@ impl CedarAuthz {
             })?
             .clone();
 
+        #[cfg(feature = "audit")]
+        let audit_logger = request
+            .extensions()
+            .get::<crate::audit::AuditLogger>()
+            .cloned();
+        #[cfg(feature = "audit")]
+        let audit_source = {
+            use crate::audit::event::AuditSource;
+            AuditSource {
+                ip: request
+                    .headers()
+                    .get("x-forwarded-for")
+                    .or_else(|| request.headers().get("x-real-ip"))
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.split(',').next().unwrap_or(s).trim().to_string()),
+                user_agent: request
+                    .headers()
+                    .get("user-agent")
+                    .and_then(|v| v.to_str().ok())
+                    .map(String::from),
+                subject: Some(claims.sub.clone()),
+                request_id: request
+                    .headers()
+                    .get("x-request-id")
+                    .and_then(|v| v.to_str().ok())
+                    .map(String::from),
+            }
+        };
+
         // Extract request information
         let method = request.method().clone();
 
@@ -346,7 +375,21 @@ impl CedarAuthz {
             .await?
         {
             Decision::Allow => Ok(next.run(request).await),
-            Decision::Deny => Err(Error::Forbidden("Access denied by policy".to_string())),
+            Decision::Deny => {
+                #[cfg(feature = "audit")]
+                if let Some(ref logger) = audit_logger {
+                    if logger.config().audit_auth_events {
+                        logger
+                            .log_auth(
+                                crate::audit::event::AuditEventKind::AuthPermissionDenied,
+                                crate::audit::event::AuditSeverity::Warning,
+                                audit_source,
+                            )
+                            .await;
+                    }
+                }
+                Err(Error::Forbidden("Access denied by policy".to_string()))
+            }
         }
     }
 
@@ -751,6 +794,12 @@ where
                 })?
                 .clone();
 
+            #[cfg(feature = "audit")]
+            let audit_logger = req
+                .extensions()
+                .get::<crate::audit::AuditLogger>()
+                .cloned();
+
             // Extract gRPC method path from metadata
             let method_path = req
                 .metadata()
@@ -786,6 +835,33 @@ where
                         method = %method_path,
                         "Cedar policy denied gRPC request"
                     );
+                    #[cfg(feature = "audit")]
+                    if let Some(ref logger) = audit_logger {
+                        if logger.config().audit_auth_events {
+                            use crate::audit::event::AuditSource;
+                            let source = AuditSource {
+                                ip: None,
+                                user_agent: req
+                                    .metadata()
+                                    .get("user-agent")
+                                    .and_then(|v| v.to_str().ok())
+                                    .map(String::from),
+                                subject: Some(claims.sub.clone()),
+                                request_id: req
+                                    .metadata()
+                                    .get("x-request-id")
+                                    .and_then(|v| v.to_str().ok())
+                                    .map(String::from),
+                            };
+                            logger
+                                .log_auth(
+                                    crate::audit::event::AuditEventKind::AuthPermissionDenied,
+                                    crate::audit::event::AuditSeverity::Warning,
+                                    source,
+                                )
+                                .await;
+                        }
+                    }
                     Err(Status::permission_denied("Access denied by policy"))
                 }
             }
