@@ -243,13 +243,14 @@ impl JwtAuth {
                         if logger.config().audit_auth_events {
                             let mut source = audit_source.clone();
                             source.subject = Some(claims.sub.clone());
-                            logger
-                                .log_auth(
-                                    crate::audit::event::AuditEventKind::AuthTokenRevoked,
-                                    crate::audit::event::AuditSeverity::Warning,
-                                    source,
-                                )
-                                .await;
+                            let event = crate::audit::event::AuditEvent::new(
+                                crate::audit::event::AuditEventKind::AuthTokenRevoked,
+                                crate::audit::event::AuditSeverity::Warning,
+                                logger.service_name().to_string(),
+                            )
+                            .with_source(source)
+                            .with_metadata(serde_json::json!({ "jti": jti }));
+                            logger.log(event).await;
                         }
                     }
                     return Err(Error::Unauthorized("Token has been revoked".to_string()));
