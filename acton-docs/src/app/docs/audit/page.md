@@ -134,9 +134,14 @@ When `audit_auth_events` is enabled (default), the PASETO and JWT middleware aut
 
 | Event Kind | When Emitted | Severity |
 |---|---|---|
-| `AuthLoginSuccess` | Token validated successfully | Informational |
-| `AuthLoginFailed` | Token missing, invalid, or expired | Warning |
-| `AuthTokenRevoked` | Revoked token presented | Warning |
+| `AuthLoginSuccess` | Token validated successfully | Notice |
+| `AuthTokenMissing` | Bearer token missing or malformed on a protected route | Informational |
+| `AuthTokenInvalid` | Bearer token failed validation (bad signature, expired, malformed claims) | Warning |
+| `AuthTokenRevoked` | Revoked token presented. Event metadata carries `jti` for SIEM correlation. | Warning |
+| `AuthPermissionDenied` | Cedar policy returned `Deny` (HTTP middleware and gRPC tower service) | Warning |
+| `HttpRequestDenied` | Rate-limit rejection (`Error::RateLimitExceeded`) | Warning |
+
+> `AuthLoginFailed` is no longer emitted by the auth middleware. It is reserved for application-level login handlers (e.g. `POST /auth/login`) where credentials are submitted. The middleware emits `AuthTokenMissing` or `AuthTokenInvalid` instead, so unauthenticated probes against protected routes (health checks, scanners) no longer drown out real failed-login signal. See the 0.27 release notes for the migration.
 
 No additional code is required. These events include the client IP, user agent, and authenticated subject.
 
@@ -248,7 +253,7 @@ The storage implementations create database rules/triggers that prevent any modi
 Audit events are automatically formatted as RFC 5424 syslog messages and sent via UDP or TCP:
 
 ```text
-<109>1 2026-01-15T10:30:00.000Z my-service acton-audit - - [audit@0 event_id="..." kind="AuthLoginSuccess" severity="Informational" sequence="42" hash="abc123..."] User login successful
+<109>1 2026-01-15T10:30:00.000Z my-service acton-audit - - [audit@0 event_id="..." kind="AuthLoginSuccess" severity="Notice" sequence="42" hash="abc123..."] User login successful
 ```
 
 ### Syslog Configuration
@@ -292,7 +297,7 @@ Events are emitted via `tracing::info!` with structured fields:
 ```text
 audit.event_id = "550e8400-..."
 audit.kind = "AuthLoginSuccess"
-audit.severity = "Informational"
+audit.severity = "Notice"
 audit.sequence = 42
 audit.hash = "abc123..."
 audit.service = "my-service"
@@ -338,7 +343,9 @@ Built-in event kinds for common operations:
 | Kind | Description |
 |---|---|
 | `AuthLoginSuccess` | Successful authentication |
-| `AuthLoginFailed` | Failed authentication attempt |
+| `AuthLoginFailed` | Failed credential-submission attempt (emit from app login handlers; the middleware no longer emits this) |
+| `AuthTokenMissing` | Bearer token missing on protected route (middleware-emitted) |
+| `AuthTokenInvalid` | Bearer token failed validation (middleware-emitted) |
 | `AuthLogout` | User logout |
 | `AuthTokenRefresh` | Token refresh |
 | `AuthTokenRevoked` | Revoked token used |

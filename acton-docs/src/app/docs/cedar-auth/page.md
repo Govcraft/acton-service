@@ -420,6 +420,20 @@ let authz = CedarAuthzLayer::builder()
 5. **Optimize policy order**: Put most common permits first
 6. **Use forbid sparingly**: Permit-based policies are typically faster
 
+## Audit Integration
+
+When the `audit` feature is enabled, the Cedar middleware automatically emits an `AuthPermissionDenied` audit event at `Warning` severity whenever a policy decision is `Deny`. Both the HTTP middleware and the gRPC tower service emit the event.
+
+The event records:
+
+- The authenticated subject (from JWT `sub`)
+- Client user-agent and request-id (HTTP picks these up from headers; gRPC picks them up from metadata)
+- Client IP (HTTP only; gRPC has no peer IP at this layer)
+
+No additional code is required — emission is on by default when `audit_auth_events: true` is set in the audit configuration (the default). See [Audit Logging](/docs/audit) for storage and SIEM export.
+
+Set `audit_auth_events: false` in your audit configuration if you want to suppress these events — for example, in environments where Cedar denies are expected and noisy and you'd rather route them through application logs instead of the audit chain.
+
 ## Security Best Practices
 
 1. **Always use fail-closed in production**: `fail_open = false`

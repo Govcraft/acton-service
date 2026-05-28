@@ -402,6 +402,21 @@ async fn logout(
 - **Permission Changes**: Force re-authentication when roles/permissions change
 - **Account Suspension**: Revoke all user tokens immediately
 
+## Audit Emission
+
+When the `audit` feature is enabled, the PASETO and JWT middleware automatically emit audit events for the request lifecycle they manage. By default (`audit_auth_events: true`), every protected request produces one of these:
+
+| Event Kind | When | Severity |
+|---|---|---|
+| `AuthLoginSuccess` | Token validated successfully | Notice |
+| `AuthTokenMissing` | No bearer token, or token header malformed | Informational |
+| `AuthTokenInvalid` | Bearer token present but failed validation | Warning |
+| `AuthTokenRevoked` | Validated token but the JTI is on the revocation list | Warning |
+
+`AuthTokenRevoked` includes the revoked token's `jti` in the event metadata. SIEM rules and forensic queries that ask "which requests presented this revoked token" can anchor on that field directly.
+
+The middleware no longer emits `AuthLoginFailed`. That event is reserved for application-level login handlers (typically `POST /auth/login`) where credentials are actually submitted. Emit it yourself from those handlers via `logger.log_auth(AuditEventKind::AuthLoginFailed, ...)`. Treating unauthenticated probes against protected routes as failed logins drowns out real signal — see the [audit docs](/docs/audit) for the rationale.
+
 ## gRPC Support
 
 Token authentication is available for gRPC services via interceptors:
