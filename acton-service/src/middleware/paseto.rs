@@ -283,7 +283,7 @@ impl PasetoAuth {
                 logger
                     .log_auth(
                         crate::audit::event::AuditEventKind::AuthLoginSuccess,
-                        crate::audit::event::AuditSeverity::Informational,
+                        crate::audit::event::AuditSeverity::Notice,
                         source,
                     )
                     .await;

@@ -695,7 +695,7 @@ mod audit_integration {
                 ),
                 AccountEvent::Expired { ref account_id } => (
                     AuditEventKind::AccountExpired,
-                    AuditSeverity::Notice,
+                    AuditSeverity::Warning,
                     serde_json::json!({ "account_id": account_id }),
                 ),
                 AccountEvent::Deleted { ref account_id } => (
