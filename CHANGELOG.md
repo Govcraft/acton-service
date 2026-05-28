@@ -7,6 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.27.0] - 2026-05-28
+
+### Breaking changes
+
+- **audit**: The PASETO and JWT auth middleware no longer emit
+  `AuthLoginFailed` (`auth.login.failed`) for unauthenticated or
+  malformed-token requests on protected routes. That event is now
+  reserved for application-level credential-submission failures (e.g.
+  a `POST /auth/login` handler). The middleware emits two new kinds
+  instead — `AuthTokenMissing` (`auth.token.missing`, Informational)
+  when no bearer token is presented, and `AuthTokenInvalid`
+  (`auth.token.invalid`, Warning) when a token fails validation.
+  Downstream SIEM rules keyed on `auth.login.failed` from the middleware
+  will go quiet for the unauthenticated-request case (the goal) and
+  must switch to the new kinds. Fixes #13.
+
+- **audit**: `AuditAccountNotification` now maps
+  `AccountEvent::PasswordChanged` to the dedicated
+  `AuthPasswordChanged` (`auth.password.changed`) kind at Notice
+  severity. Previously it emitted `AccountUpdated` with
+  `action: "password_changed"` metadata. SIEM rules that inspected the
+  metadata to detect password changes must switch to the new kind.
+
+- **audit**: `AuthLoginSuccess` now emits at Notice severity (was
+  Informational). Many production log pipelines suppress
+  Informational-level events by default, which silently dropped the
+  success counterpart of every failure-driven login alert. Closes #19.
+
+- **audit**: `AccountExpired` now emits at Warning severity (was
+  Notice), aligning with `AccountDeleted` and other terminal account
+  states. Closes #19.
+
+### New emissions
+
+- **audit/cedar**: The Cedar middleware now emits `AuthPermissionDenied`
+  (`auth.permission.denied`, Warning) whenever a policy returns
+  `Decision::Deny`. Both the HTTP middleware and the gRPC tower service
+  emit. Closes part of #16.
+
+- **audit/rate-limit**: The rate-limit middleware now emits
+  `HttpRequestDenied` (`http.request.denied`, Warning) when
+  `Error::RateLimitExceeded` fires. Other error variants (Redis
+  connection failures, etc.) do not emit. Closes part of #16.
+
+### Fixes
+
+- **audit/storage**: All four storage backends (Postgres, ClickHouse,
+  Turso, SurrealDB) now correctly round-trip every emitted event kind.
+  Previously, `config.loaded`, `config.drift_detected`, every
+  `account.*` kind (under the `accounts` feature), and the
+  `login-lockout` `auth.account.locked` / `auth.account.unlocked`
+  variants were silently downgraded to `AuditEventKind::Custom(...)` on
+  query. Rust consumers matching on the typed variant missed the
+  events; SIEM queries keyed on the stored string were unaffected.
+  Closes #15.
+
+- **audit**: `AuthTokenRevoked` events now carry `jti` in the event
+  metadata. SIEM correlation by JTI and forensic queries against
+  "every request that presented this revoked token" can anchor on the
+  audit event directly. Closes #18.
+
+- **audit/storage**: Storage parsers now emit a `tracing::warn!` when
+  the catch-all wraps an unknown framework-owned event-kind string
+  (`auth.*`, `http.*`, `account.*`, `config.*`) in `Custom`. Previously
+  the catch-all was silent, which masked version skew between a newer
+  emitter and an older reader — pattern matches on the typed variant
+  would miss without any operator-facing signal. Closes #20.
+
+### Documentation
+
+- Updated `audit/page.md` to reflect the new emission set,
+  severities, and `jti` metadata.
+- Added "Audit Integration" sections to `cedar-auth/page.md` and
+  `rate-limiting/page.md` describing the new automatic emissions.
+- Added "Audit Emission" section to `token-auth/page.md` covering
+  the middleware-emitted kinds and the `AuthLoginFailed` migration.
+
 ## [acton-service-v0.26.1] - 2026-05-18
 
 ### Fixes
