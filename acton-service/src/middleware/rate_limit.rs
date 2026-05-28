@@ -94,14 +94,63 @@ impl RateLimit {
     ) -> Result<Response, Error> {
         #[cfg(feature = "cache")]
         {
-            let method = request.method().as_str();
-            let path = request.uri().path();
+            let method = request.method().as_str().to_string();
+            let path = request.uri().path().to_string();
             let claims = request.extensions().get::<Claims>().cloned();
 
+            #[cfg(feature = "audit")]
+            let audit_logger = request
+                .extensions()
+                .get::<crate::audit::AuditLogger>()
+                .cloned();
+            #[cfg(feature = "audit")]
+            let audit_source = {
+                use crate::audit::event::AuditSource;
+                AuditSource {
+                    ip: request
+                        .headers()
+                        .get("x-forwarded-for")
+                        .or_else(|| request.headers().get("x-real-ip"))
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.split(',').next().unwrap_or(s).trim().to_string()),
+                    user_agent: request
+                        .headers()
+                        .get("user-agent")
+                        .and_then(|v| v.to_str().ok())
+                        .map(String::from),
+                    subject: claims.as_ref().map(|c| c.sub.clone()),
+                    request_id: request
+                        .headers()
+                        .get("x-request-id")
+                        .and_then(|v| v.to_str().ok())
+                        .map(String::from),
+                }
+            };
+
             // Check rate limit and get result for headers
-            let result = rate_limit
-                .check_rate_limit_with_route(method, path, claims.as_ref())
-                .await?;
+            let result = match rate_limit
+                .check_rate_limit_with_route(&method, &path, claims.as_ref())
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    #[cfg(feature = "audit")]
+                    if matches!(e, Error::RateLimitExceeded) {
+                        if let Some(ref logger) = audit_logger {
+                            if logger.config().audit_auth_events {
+                                logger
+                                    .log_auth(
+                                        crate::audit::event::AuditEventKind::HttpRequestDenied,
+                                        crate::audit::event::AuditSeverity::Warning,
+                                        audit_source,
+                                    )
+                                    .await;
+                            }
+                        }
+                    }
+                    return Err(e);
+                }
+            };
 
             // Run the request
             let mut response = next.run(request).await;

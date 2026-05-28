@@ -712,11 +712,10 @@ mod audit_integration {
                     }),
                 ),
                 AccountEvent::PasswordChanged { ref account_id } => (
-                    AuditEventKind::AccountUpdated,
-                    AuditSeverity::Informational,
+                    AuditEventKind::AuthPasswordChanged,
+                    AuditSeverity::Notice,
                     serde_json::json!({
                         "account_id": account_id,
-                        "action": "password_changed",
                     }),
                 ),
                 AccountEvent::RolesUpdated {
