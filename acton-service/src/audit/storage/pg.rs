@@ -305,10 +305,7 @@ impl From<AuditEventRow> for AuditEvent {
             "config.drift_detected" => AuditEventKind::ConfigDriftDetected,
             "http.request" => AuditEventKind::HttpRequest,
             "http.request.denied" => AuditEventKind::HttpRequestDenied,
-            other => {
-                let name = other.strip_prefix("custom.").unwrap_or(other);
-                AuditEventKind::Custom(name.to_string())
-            }
+            other => AuditEventKind::Custom(super::parse_custom_kind(other)),
         };
 
         let severity = match row.severity {
