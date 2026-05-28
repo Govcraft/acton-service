@@ -605,6 +605,19 @@ Retry-After: 45
 }
 ```
 
+## Audit Integration
+
+When the `audit` feature is enabled, the rate-limit middleware automatically emits an `HttpRequestDenied` audit event at `Warning` severity whenever a request is rejected because the configured limit was exceeded. Only the limit-exceeded path emits — Redis connection failures and other infrastructure errors do not, since they aren't security signal.
+
+The event records:
+
+- The authenticated subject (from JWT `sub`, if claims are present)
+- Client user-agent, request-id, and IP (from `X-Forwarded-For` / `X-Real-IP`)
+
+No additional code is required — emission is on by default when `audit_auth_events: true` is set in the audit configuration (the default). See [Audit Logging](/docs/audit) for storage and SIEM export.
+
+This event is well-suited to anomaly-detection rules: a sudden burst of `http.request.denied` events for a single subject is a strong abuse signal that an unauthenticated 429 response alone doesn't surface.
+
 ## Choosing the Right Limiter
 
 | Feature | Redis-Backed | Governor |
