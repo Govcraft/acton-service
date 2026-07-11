@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.27.1] - 2026-07-11
+
+### Fixes
+
+- **config**: `config.example.toml` shipped an uncommented nested
+  `[token.jwt]` table that fails deserialization with `missing field
+  'format'`. `TokenConfig` is internally tagged on `format`, so the only
+  parseable form is a flat `[token]` table with `format = "paseto" | "jwt"`
+  and the variant fields inline. Both token examples are now commented out
+  and rewritten in the flat form, and three regression tests lock the wire
+  format: the tagged form round-trips through Figment, the nested table
+  form is rejected, and `config.example.toml` itself must load under
+  default features. (#31)
+
+### Documentation
+
+- **readme**: Refreshed the crate README from its ~v0.2 state to the
+  current feature set: config-driven middleware, PASETO-first token
+  authentication, the full auth/session/audit stack, Turso/SurrealDB/
+  ClickHouse backends, the grouped feature-flag inventory, all bundled
+  examples, and the real CLI surface. crates.io now renders this README.
+  (#30)
+- **site**: Remediated a full staleness audit of all 54 documentation
+  pages against the v0.27 API: rewrote nine pages whose samples could not
+  compile, corrected inverted readiness semantics and fictional config
+  sections, added a SurrealDB page, and fixed two Markdoc rendering bugs
+  that truncated code fences and leaked version helper tags. (#31)
+
+### Internal
+
+- **metadata**: The `homepage` key for both `acton-service` and
+  `acton-cli` now points to the documentation site
+  (https://govcraft.github.io/acton-service/) instead of the GitHub
+  repository. `repository` is unchanged.
+
 ## [acton-service-v0.27.0] - 2026-05-28
 
 ### Breaking changes
