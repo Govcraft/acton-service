@@ -206,15 +206,17 @@ Production middleware is **applied automatically from configuration** — no man
 
 ```toml
 # config.toml — PASETO v4 token authentication (the default token format)
-[token.paseto]
+[token]
+format = "paseto"
 version = "v4"
 purpose = "public"                 # "local" (symmetric) or "public" (asymmetric)
 key_path = "./keys/paseto.key"
 issuer = "my-service"
 # public_paths = ["/public/"]      # Skip token auth for these prefixes
 
-# Or JWT instead (requires the `jwt` feature)
-# [token.jwt]
+# Or JWT instead (requires the `jwt` feature):
+# [token]
+# format = "jwt"
 # public_key_path = "./keys/jwt-public.pem"
 # algorithm = "RS256"              # RS256, ES256, HS256
 # issuer = "https://auth.mydomain.com"
