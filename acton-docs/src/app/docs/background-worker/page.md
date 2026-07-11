@@ -328,11 +328,10 @@ use tokio_util::sync::CancellationToken;
 
 worker.submit("long-task", || async {
     for i in 0..1000 {
-        // Check for cancellation periodically
-        if tokio::task::yield_now().await; {
-            // The worker handles cancellation via select!
-            // Your task just needs to be yield-point aware
-        }
+        // Yield periodically so the worker's select! can observe cancellation.
+        // Your task just needs to be yield-point aware - the worker handles
+        // the cancellation token for you.
+        tokio::task::yield_now().await;
 
         process_item(i).await?;
     }

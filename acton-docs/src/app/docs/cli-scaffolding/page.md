@@ -183,8 +183,14 @@ Perfect for:
   - Auto-generated from code
   - Serves Swagger UI
 
+### GraphQL
+- `--graphql` - Scaffold a versioned GraphQL transport (Axum + async-graphql)
+  - Adds a GraphQL schema module mounted under the versioned router
+  - Sits alongside HTTP and gRPC in the same middleware stack
+  - Can also be added later with `acton service add graphql`
+
 ### Additional Options
-- `--template <NAME>` - Use organization template (planned)
+- `--template <NAME>` - Organization template name. The flag is accepted, but the generator does not currently branch on it: templates are resolved from your XDG config directory. Run `acton setup templates` to initialize and customize them — edited templates are picked up automatically, and unmodified ones fall back to the embedded defaults.
 - `--path <DIR>` - Create service in specific directory
 - `--no-git` - Skip git initialization
 - `-i, --interactive` - Force interactive mode

@@ -56,9 +56,13 @@ ACTON_NATS_URL=nats://localhost:4222 cargo run
 
 NATS connection with automatic retry and reconnection:
 
-- **url**: NATS server URL (default: `nats://localhost:4222`)
-- **max_reconnects**: Maximum reconnection attempts (default: unlimited)
-- **reconnect_delay**: Delay between reconnect attempts (default: 1s)
+- **url**: NATS server URL (required)
+- **name**: Optional client connection name reported to the server
+- **max_reconnects**: Maximum reconnection attempts
+- **max_retries**: Maximum retry attempts for the *initial* connection
+- **retry_delay_secs**: Base delay between retry attempts, with exponential backoff
+- **optional**: Whether the service can start without NATS (default: `false`)
+- **lazy_init**: Establish the connection in the background after startup (default: `true`)
 
 ## Basic Usage
 
@@ -83,7 +87,7 @@ async fn main() -> Result<()> {
         .build()
         .await?;
 
-    let nats = state.nats().await.ok_or(Error::Internal("NATS not available"))?;
+    let nats = state.nats().await.ok_or_else(|| Error::Internal("NATS not available".into()))?;
     let mut subscriber = nats.subscribe("events.>").await?;
 
     while let Some(msg) = subscriber.next().await {
@@ -116,7 +120,7 @@ async fn create_user(
     State(state): State<AppState>,
     Json(request): Json<CreateUserRequest>,
 ) -> Result<Json<User>> {
-    let db = state.db().await.ok_or(Error::Internal("Database not available"))?;
+    let db = state.db().await.ok_or_else(|| Error::Internal("Database not available".into()))?;
 
     // Create user in database
     let user = sqlx::query_as!(
@@ -125,11 +129,11 @@ async fn create_user(
         request.name,
         request.email
     )
-    .fetch_one(db)
+    .fetch_one(&db)
     .await?;
 
     // Publish event
-    let nats = state.nats().await.ok_or(Error::Internal("NATS not available"))?;
+    let nats = state.nats().await.ok_or_else(|| Error::Internal("NATS not available".into()))?;
     let event = UserCreatedEvent {
         user_id: user.id,
         email: user.email.clone(),
@@ -151,7 +155,7 @@ Subscribe to subjects with wildcard support:
 
 ```rust
 async fn subscribe_user_events(state: AppState) -> Result<()> {
-    let nats = state.nats().await.ok_or(Error::Internal("NATS not available"))?;
+    let nats = state.nats().await.ok_or_else(|| Error::Internal("NATS not available".into()))?;
 
     // Subscribe to all user events
     let mut subscriber = nats.subscribe("users.*").await?;
@@ -179,7 +183,7 @@ JetStream provides guaranteed message delivery and stream processing:
 use async_nats::jetstream;
 
 async fn setup_jetstream(state: &AppState) -> Result<()> {
-    let nats = state.nats().await.ok_or(Error::Internal("NATS not available"))?;
+    let nats = state.nats().await.ok_or_else(|| Error::Internal("NATS not available".into()))?;
     let js = jetstream::new(nats.clone());
 
     // Create or update stream
@@ -202,7 +206,7 @@ Create durable consumers for reliable event processing:
 
 ```rust
 async fn consume_events(state: AppState) -> Result<()> {
-    let nats = state.nats().await.ok_or(Error::Internal("NATS not available"))?;
+    let nats = state.nats().await.ok_or_else(|| Error::Internal("NATS not available".into()))?;
     let js = jetstream::new(nats.clone());
 
     // Create durable consumer
@@ -249,11 +253,11 @@ async fn create_order(
     State(state): State<AppState>,
     Json(order): Json<CreateOrderRequest>,
 ) -> Result<Json<Order>> {
-    let db = state.db().await.ok_or(Error::Internal("Database not available"))?;
-    let nats = state.nats().await.ok_or(Error::Internal("NATS not available"))?;
+    let db = state.db().await.ok_or_else(|| Error::Internal("Database not available".into()))?;
+    let nats = state.nats().await.ok_or_else(|| Error::Internal("NATS not available".into()))?;
 
     // Create order
-    let order = insert_order(db, order).await?;
+    let order = insert_order(&db, order).await?;
 
     // Publish event - other services react independently
     let event = OrderCreatedEvent {
@@ -270,7 +274,7 @@ async fn create_order(
 
 // Email Service - consumes events
 async fn email_worker(state: AppState) -> Result<()> {
-    let nats = state.nats().await.ok_or(Error::Internal("NATS not available"))?;
+    let nats = state.nats().await.ok_or_else(|| Error::Internal("NATS not available".into()))?;
     let mut subscriber = nats.subscribe("orders.created").await?;
 
     while let Some(msg) = subscriber.next().await {
@@ -292,7 +296,7 @@ async fn get_user_info(
     State(state): State<AppState>,
     Path(user_id): Path<i64>,
 ) -> Result<Json<UserInfo>> {
-    let nats = state.nats().await.ok_or(Error::Internal("NATS not available"))?;
+    let nats = state.nats().await.ok_or_else(|| Error::Internal("NATS not available".into()))?;
 
     let request = serde_json::to_vec(&UserInfoRequest { user_id })?;
 
@@ -300,7 +304,7 @@ async fn get_user_info(
     let reply = nats
         .request("users.info", request.into())
         .await
-        .map_err(|e| Error::ServiceError(format!("User service unavailable: {}", e)))?;
+        .map_err(|e| Error::External(format!("User service unavailable: {}", e)))?;
 
     let info: UserInfo = serde_json::from_slice(&reply.payload)?;
     Ok(Json(info))
@@ -308,7 +312,7 @@ async fn get_user_info(
 
 // Service B - handles requests
 async fn handle_user_info_requests(state: AppState) -> Result<()> {
-    let nats = state.nats().await.ok_or(Error::Internal("NATS not available"))?;
+    let nats = state.nats().await.ok_or_else(|| Error::Internal("NATS not available".into()))?;
     let mut subscriber = nats.subscribe("users.info").await?;
 
     while let Some(msg) = subscriber.next().await {
@@ -490,15 +494,25 @@ env:
 
 ### TLS/Authentication
 
-Secure NATS connections:
+Credentials and TLS are carried on the connection URL - the `[nats]` section takes no separate certificate
+keys:
 
 ```toml
 [nats]
+# Username/password in the URL
 url = "nats://user:password@nats.prod.example.com:4222"
-# Or use TLS certificates
-tls_cert = "/path/to/client-cert.pem"
-tls_key = "/path/to/client-key.pem"
-tls_ca = "/path/to/ca-cert.pem"
+```
+
+```toml
+[nats]
+# TLS via the tls:// scheme
+url = "tls://nats.prod.example.com:4222"
+```
+
+Supply the URL from a secret in production rather than committing it:
+
+```bash
+export ACTON_NATS_URL="tls://user:$(cat /run/secrets/nats_password)@nats.prod.example.com:4222"
 ```
 
 ## Related Features

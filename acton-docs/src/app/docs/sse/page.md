@@ -34,13 +34,13 @@ For HTMX applications, SSE is usually the better choice—HTMX already handles c
 
 ```toml
 [dependencies]
-acton-service = { version = "{{version}}", features = ["sse"] }
+acton-service = { version = "{% version() %}", features = ["sse"] }
 ```
 
 Or include it with other HTMX features:
 
 ```toml
-acton-service = { version = "{{version}}", features = ["htmx-full"] }
+acton-service = { version = "{% version() %}", features = ["htmx-full"] }
 ```
 
 ### 2. Create a Broadcaster and Routes

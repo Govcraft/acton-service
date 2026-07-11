@@ -53,9 +53,10 @@ Features:
 - `--resilience` - Enable circuit breaker, retry patterns
 - `--rate-limit` - Enable rate limiting
 - `--openapi` - Generate OpenAPI/Swagger
+- `--graphql` - Scaffold a versioned GraphQL transport (Axum + async-graphql)
 
 Project Options:
-- `--template <NAME>` - Use organization template
+- `--template <NAME>` - Organization template name. Accepted, but service generation currently resolves templates from your XDG config directory — see `acton setup templates`.
 - `--path <DIR>` - Create in specific directory
 - `--no-git` - Skip git initialization
 
@@ -104,15 +105,24 @@ acton service add endpoint <METHOD> <PATH> [OPTIONS]
 
 **Arguments:**
 - `<METHOD>` - HTTP method (GET, POST, PUT, DELETE, PATCH)
-- `<PATH>` - Route path (e.g., `/users`, `/users/:id`)
+- `<PATH>` - Route path (e.g., `/users`, `/users/{id}`)
 
 **Options:**
+- `--version <VERSION>` - API version (default: `v1`)
 - `--handler <NAME>` - Handler function name
-- `--version <VERSION>` - API version (e.g., v1, v2)
-- `--model <TYPE>` - Request/response model type
+- `--auth <TYPE>` - Require authentication
+- `--rate-limit <LIMIT>` - Rate limit (requests per minute)
+- `--model <NAME>` - Generate associated model struct
 - `--validate` - Add request validation
-- `--openapi` - Add OpenAPI documentation
+- `--response <TYPE>` - Response type (default: `json`)
+- `--cache` - Add caching layer
+- `--event <NAME>` - Publish event after success
+- `--openapi` - Add OpenAPI annotations
 - `--dry-run` - Preview without creating
+
+{% callout type="note" title="axum 0.8 path syntax" %}
+Path parameters use braces: `/users/{id}`. The older colon form (`/users/:id`) is not valid in axum 0.8.
+{% /callout %}
 
 **Examples:**
 
@@ -132,14 +142,22 @@ acton service add endpoint POST /users \
 
 Add endpoint with path parameters:
 ```bash
-acton service add endpoint GET /users/:id \
+acton service add endpoint GET /users/{id} \
     --handler get_user_by_id \
     --version v1
 ```
 
+Add an authenticated, rate-limited endpoint:
+```bash
+acton service add endpoint DELETE /users/{id} \
+    --handler delete_user \
+    --auth jwt \
+    --rate-limit 60
+```
+
 Preview endpoint generation:
 ```bash
-acton service add endpoint GET /users/:id --dry-run
+acton service add endpoint GET /users/{id} --dry-run
 ```
 
 **What It Generates:**
@@ -163,10 +181,9 @@ acton service add worker <worker-name> [OPTIONS]
 - `<worker-name>` - Name of the worker
 
 **Options:**
-- `--source <TYPE>` - Event source (nats, redis-stream)
-- `--stream <NAME>` - Stream name
-- `--subject <PATTERN>` - NATS subject pattern (for NATS)
-- `--group <NAME>` - Consumer group name
+- `--source <SOURCE>` - Event source (**required**)
+- `--stream <NAME>` - Stream name (**required**)
+- `--subject <PATTERN>` - NATS subject pattern
 - `--dry-run` - Preview without creating
 
 **Examples:**
@@ -179,20 +196,12 @@ acton service add worker email-worker \
     --subject "emails.>"
 ```
 
-Add a Redis Stream worker:
-```bash
-acton service add worker notification-worker \
-    --source redis-stream \
-    --stream notifications
-```
-
-Add worker with consumer group:
+Add a worker with a wildcard subject:
 ```bash
 acton service add worker order-processor \
     --source nats \
     --stream orders \
-    --subject "orders.*" \
-    --group order-processors
+    --subject "orders.*"
 ```
 
 Preview worker generation:
@@ -223,22 +232,24 @@ acton service generate deployment [OPTIONS]
 **Options:**
 
 Kubernetes:
-- `--namespace <NAME>` - Kubernetes namespace (default: default)
-- `--replicas <N>` - Number of replicas (default: 1)
-- `--hpa` - Enable Horizontal Pod Autoscaler
-- `--monitoring` - Enable monitoring (ServiceMonitor)
+- `--namespace <NAME>` - Kubernetes namespace
+- `--replicas <N>` - Number of replicas (default: 3)
+- `--hpa` - Enable HorizontalPodAutoscaler
+- `--monitoring` - Generate ServiceMonitor for Prometheus
 - `--ingress` - Generate Ingress resource
-- `--tls` - Enable TLS for Ingress
+- `--tls` - Enable TLS/HTTPS
 
 Resource Limits:
-- `--memory <AMOUNT>` - Memory limit (e.g., 512Mi, 1Gi)
-- `--cpu <AMOUNT>` - CPU limit (e.g., 500m, 1)
+- `--memory <SIZE>` - Memory limit (default: `512Mi`)
+- `--cpu <MILLICORES>` - CPU limit (default: `500m`)
 
 Container Registry:
 - `--registry <URL>` - Container registry (e.g., gcr.io/myproject)
-- `--image-tag <TAG>` - Image tag (default: latest)
+- `--image-tag <TAG>` - Image tag (default: `latest`)
 
 Options:
+- `--env <STAGE>` - Environment stage
+- `--output <DIR>` - Output directory (default: `./deployment`)
 - `--dry-run` - Preview without creating files
 
 **Examples:**
@@ -277,100 +288,281 @@ acton service generate deployment --dry-run
 
 **What It Generates:**
 
-- `k8s/deployment.yaml` - Deployment resource
-- `k8s/service.yaml` - Service resource
-- `k8s/hpa.yaml` - HorizontalPodAutoscaler (if `--hpa`)
-- `k8s/ingress.yaml` - Ingress resource (if `--ingress`)
-- `k8s/servicemonitor.yaml` - ServiceMonitor (if `--monitoring`)
-- `Dockerfile` - Multi-stage build (if not exists)
-- `.dockerignore` - Docker ignore rules
+Files are written to the `--output` directory (default `./deployment`):
 
-## Planned Commands
+- `deployment.yaml` - Deployment resource
+- `service.yaml` - Service resource
+- `hpa.yaml` - HorizontalPodAutoscaler (if `--hpa`)
+- `ingress.yaml` - Ingress resource (if `--ingress`)
+- `servicemonitor.yaml` - ServiceMonitor (if `--monitoring`)
 
-These commands are planned for future releases:
+The `Dockerfile` and `.dockerignore` are generated by `acton service new`, not by this command.
 
 ### acton service add grpc
 
 Add a gRPC service definition and implementation.
 
-**Planned Syntax:**
+**Syntax:**
 ```bash
-acton service add grpc <service-name> \
-    --method <MethodName> \
-    --request <RequestType> \
-    --response <ResponseType>
+acton service add grpc <SERVICE_NAME> [OPTIONS]
+```
+
+**Arguments:**
+- `<SERVICE_NAME>` - Service name (PascalCase)
+
+**Options:**
+- `--package <NAME>` - Proto package
+- `--method <NAME>` - Add RPC method
+- `--request <TYPE>` - Request message type
+- `--response <TYPE>` - Response message type
+- `--health` - Enable health checks (default: true)
+- `--reflection` - Enable server reflection (default: true)
+- `--streaming` - Add streaming support
+- `--handler` - Generate handler implementation
+- `--client` - Generate client code
+- `--interceptor <TYPE>` - Add interceptor
+- `--dry-run` - Preview without creating
+
+**Examples:**
+
+```bash
+acton service add grpc UserService \
+    --package users.v1 \
+    --method GetUser \
+    --request GetUserRequest \
+    --response GetUserResponse \
+    --handler
+```
+
+### acton service add graphql
+
+Add a versioned GraphQL transport (Axum + async-graphql) to an existing service.
+
+**Syntax:**
+```bash
+acton service add graphql [OPTIONS]
+```
+
+**Options:**
+- `--version <VERSION>` - API version to scaffold the schema under (default: `v1`)
+- `--cedar` - Enable Cedar resolver authorization (requires the `cedar-authz` feature)
+- `--dry-run` - Preview without creating
+
+**Examples:**
+
+```bash
+acton service add graphql --version v1
+acton service add graphql --version v2 --cedar
 ```
 
 ### acton service add middleware
 
-Add custom middleware to the HTTP stack.
+Show how to wire a given middleware type into the service stack.
 
-**Planned Syntax:**
+**Syntax:**
 ```bash
-acton service add middleware <name> \
-    --type <auth|logging|metrics|custom>
+acton service add middleware <TYPE> [OPTIONS]
+```
+
+**Arguments:**
+- `<TYPE>` - Middleware type. One of:
+  - `jwt`, `auth`, `authentication`
+  - `resilience`, `circuit-breaker`, `retry`
+  - `metrics`, `otel`, `opentelemetry`
+  - `governor`, `rate-limit`, `ratelimit`
+  - `cors`
+  - `compression`
+  - `panic`, `catch-panic`
+  - `request-tracking`, `request-id`
+  - `timeout`
+  - `all`, `list` - show every available middleware
+
+**Options:**
+- `--dry-run` - Preview without creating
+
+**Examples:**
+
+```bash
+acton service add middleware list      # See every supported type
+acton service add middleware cors
+acton service add middleware rate-limit
 ```
 
 ### acton service add version
 
 Add a new API version to the service.
 
-**Planned Syntax:**
+**Syntax:**
 ```bash
-acton service add version <version> \
-    --from <existing-version>
+acton service add version <VERSION> [OPTIONS]
+```
+
+**Arguments:**
+- `<VERSION>` - Version name (e.g., `v2`)
+
+**Options:**
+- `--from <FROM>` - Copy routes from an existing version
+- `--dry-run` - Preview without creating
+
+**Examples:**
+
+```bash
+acton service add version v2
+acton service add version v2 --from v1
 ```
 
 ### acton service validate
 
-Validate service quality and best practices.
+Validate a service against best practices and score it.
 
-**Planned Syntax:**
+**Syntax:**
 ```bash
-acton service validate [OPTIONS]
+acton service validate [PATH] [OPTIONS]
 ```
 
-Will check:
-- Code quality and linting
-- Test coverage
-- Configuration completeness
-- Security best practices
-- Documentation
+**Arguments:**
+- `[PATH]` - Path to the service directory (default: `.`)
+
+**Options:**
+- `--check <TYPE>` - Run a specific check
+- `--all` - Run all checks
+- `--deployment` - Focus on deployment readiness
+- `--security` - Focus on security checks
+- `--format <FORMAT>` - Output format (default: `text`)
+- `-v, --verbose` - Show detailed output
+- `-q, --quiet` - Only show errors and score
+- `--ci` - CI-friendly output
+- `--min-score <SCORE>` - Minimum passing score (default: `8.0`)
+- `--strict` - Treat warnings as errors
+- `--fix` - Auto-fix issues where possible
+- `--report <FILE>` - Write report to file
+
+**Examples:**
+
+```bash
+acton service validate
+acton service validate --all --verbose
+acton service validate --ci --min-score 9.0 --strict
+acton service validate --security --report security-report.txt
+```
 
 ### acton service generate config
 
-Generate configuration files for different environments.
+Generate a configuration file for the service.
 
-**Planned Syntax:**
+**Syntax:**
 ```bash
-acton service generate config \
-    --env <dev|staging|production>
+acton service generate config [OPTIONS]
+```
+
+**Options:**
+- `--output <PATH>` - Output path
+- `--examples` - Include examples
+- `--dry-run` - Preview without creating
+
+**Examples:**
+
+```bash
+acton service generate config --examples
 ```
 
 ### acton service generate proto
 
-Generate gRPC proto files from service definition.
+Generate a proto file for a gRPC service.
 
-**Planned Syntax:**
+**Syntax:**
 ```bash
-acton service generate proto \
-    --service <ServiceName>
+acton service generate proto <SERVICE> [OPTIONS]
+```
+
+**Arguments:**
+- `<SERVICE>` - Service name
+
+**Options:**
+- `--output <PATH>` - Output path
+- `--dry-run` - Preview without creating
+
+**Examples:**
+
+```bash
+acton service generate proto UserService
 ```
 
 ### acton service dev
 
-Development tools for running and testing services.
+Development tools for running and inspecting services.
 
-**Planned Syntax:**
+**Syntax:**
 ```bash
-# Run development server with hot reload
-acton service dev run
+acton service dev run [--watch] [--port <PORT>]
+acton service dev health [--verbose] [--url <URL>]
+acton service dev logs [-f, --follow] [--level <LEVEL>] [--filter <PATTERN>]
+```
 
-# Check service health
-acton service dev health
+**`dev run` options:**
+- `--watch` - Watch for changes and reload
+- `--port <PORT>` - Port to listen on
 
-# View service logs
-acton service dev logs
+**`dev health` options:**
+- `--verbose` - Show detailed output
+- `--url <URL>` - Service URL (default: `http://localhost:8080`)
+
+**`dev logs` options:**
+- `-f, --follow` - Follow log output
+- `--level <LEVEL>` - Filter by log level
+- `--filter <PATTERN>` - Filter by pattern
+
+**Examples:**
+
+```bash
+acton service dev run --watch --port 3000
+acton service dev health --verbose
+acton service dev logs --follow --level info
+```
+
+## Setup Commands
+
+### acton setup completions
+
+Generate and install shell completions.
+
+**Syntax:**
+```bash
+acton setup completions [OPTIONS]
+```
+
+**Options:**
+- `-s, --shell <SHELL>` - Shell to generate completions for (auto-detected from `$SHELL` if omitted). Supported: `bash`, `zsh`, `fish`, `powershell`, `elvish`.
+- `--stdout` - Write to stdout instead of installing
+- `--show-instructions` - Show installation instructions only
+
+**Examples:**
+
+```bash
+acton setup completions                        # Auto-detect and install
+acton setup completions --shell zsh
+acton setup completions --shell bash --stdout > ~/.local/share/bash-completion/completions/acton
+```
+
+### acton setup templates
+
+Initialize and manage user-customizable code-generation templates in your XDG config directory. Templates you don't modify fall back to the embedded defaults.
+
+**Syntax:**
+```bash
+acton setup templates [OPTIONS]
+```
+
+**Options:**
+- `--list` - List all available templates
+- `--show-path` - Show the templates directory path
+
+**Examples:**
+
+```bash
+acton setup templates              # Initialize user templates
+acton setup templates --list
+acton setup templates --show-path
 ```
 
 ## Global Options
@@ -379,8 +571,10 @@ These options work with all commands:
 
 - `-h, --help` - Show help information
 - `-V, --version` - Show version information
-- `-v, --verbose` - Enable verbose output
-- `-q, --quiet` - Suppress output
+
+{% callout type="note" title="No global verbose/quiet flags" %}
+`-v/--verbose` and `-q/--quiet` are **not** global. They are specific to `acton service validate` (and `dev health` / `dev logs` have their own flags). Passing them to other commands is an error.
+{% /callout %}
 
 **Examples:**
 
@@ -394,9 +588,9 @@ Show CLI version:
 acton --version
 ```
 
-Verbose output:
+Verbose validation output:
 ```bash
-acton service new my-api --yes --verbose
+acton service validate --verbose
 ```
 
 ## Command Chaining
@@ -418,7 +612,7 @@ cd user-service
 # Add endpoints
 acton service add endpoint GET /users --version v1
 acton service add endpoint POST /users --handler create_user
-acton service add endpoint GET /users/:id --handler get_user
+acton service add endpoint GET /users/{id} --handler get_user
 
 # Add worker
 acton service add worker user-events \
@@ -449,7 +643,7 @@ cd payment-service
 
 # Add payment endpoints
 acton service add endpoint POST /payments --handler create_payment
-acton service add endpoint GET /payments/:id --handler get_payment
+acton service add endpoint GET /payments/{id} --handler get_payment
 
 # Add payment processor worker
 acton service add worker payment-processor \
@@ -479,16 +673,13 @@ The CLI uses standard exit codes:
 
 ## Environment Variables
 
-Some commands respect environment variables:
+- `SHELL` - Used by `acton setup completions` to auto-detect your shell when `--shell` is omitted
+- `NO_COLOR` - Disables colored output
 
-- `ACTON_TEMPLATE_PATH` - Custom template directory
-- `ACTON_CONFIG_PATH` - Default config location
-- `NO_COLOR` - Disable colored output
+Custom templates are not configured via an environment variable. They live in your XDG config directory:
 
-**Example:**
 ```bash
-export ACTON_TEMPLATE_PATH=/path/to/custom/templates
-acton service new my-service --yes
+acton setup templates --show-path   # Print the templates directory
 ```
 
 ## Getting Help
@@ -499,10 +690,11 @@ For detailed help on any command:
 acton --help                      # Top-level help
 acton service --help              # Service commands help
 acton service new --help          # Specific command help
+acton setup --help                # Setup commands help
 ```
 
 ## Next Steps
 
 - See [CLI Overview](/docs/cli-overview) for design philosophy
 - Learn [Service Scaffolding](/docs/cli-scaffolding) patterns
-- Review [Getting Started](/docs/getting-started) for complete examples
+- Review the [Quickstart](/docs/quickstart) for complete examples

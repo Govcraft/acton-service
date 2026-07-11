@@ -58,7 +58,7 @@ async fn main() -> Result<()> {
         .add_version(ApiVersion::V1, |router| {
             router
                 .route("/users", get(list_users).post(create_user))
-                .route("/users/:id", get(get_user).put(update_user).delete(delete_user))
+                .route("/users/{id}", get(get_user).put(update_user).delete(delete_user))
         })
         .build_routes();  // Returns VersionedRoutes (opaque type)
 
@@ -76,9 +76,9 @@ This creates routes at:
 - `GET  /ready` (automatic from ServiceBuilder)
 - `GET  /api/v1/users`
 - `POST /api/v1/users`
-- `GET  /api/v1/users/:id`
-- `PUT  /api/v1/users/:id`
-- `DELETE /api/v1/users/:id`
+- `GET  /api/v1/users/{id}`
+- `PUT  /api/v1/users/{id}`
+- `DELETE /api/v1/users/{id}`
 
 ### Multiple Versions
 
@@ -461,13 +461,13 @@ let routes = VersionedApiBuilder::new()
     .with_base_path("/api")
     .add_version_deprecated(
         ApiVersion::V2,
-        |router| router.route("/users/:id", get(get_user_v2)),
+        |router| router.route("/users/{id}", get(get_user_v2)),
         DeprecationInfo::new(ApiVersion::V2, ApiVersion::V3)
             .with_sunset_date("2026-06-30T23:59:59Z")
             .with_message("V3 uses UUID strings for better scalability")
     )
     .add_version(ApiVersion::V3, |router| {
-        router.route("/users/:id", get(get_user_v3))
+        router.route("/users/{id}", get(get_user_v3))
     })
     .build_routes();
 ```
@@ -543,7 +543,7 @@ DeprecationInfo::new(ApiVersion::V1, ApiVersion::V2)
 
 {% callout type="note" title="Why Not Enforced?" %}
 Unlike API versioning (which the type system enforces), sunset dates are `Option<String>` because:
-- **RFC 9745** makes the Sunset header optional: "can be used in addition"
+- **RFC 8594** makes the Sunset header optional: "can be used in addition"
 - Sometimes deprecation is announced before a removal date is known
 - Allows gradual rollout: deprecate first, announce sunset date later
 

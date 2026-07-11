@@ -519,7 +519,7 @@ async fn check_feature(
 async fn main() -> Result<()> {
     let routes = VersionedApiBuilder::new()
         .add_version(ApiVersion::V1, |router| {
-            router.route("/features/:feature", get(check_feature))
+            router.route("/features/{feature}", get(check_feature))
         })
         .build_routes();
 
@@ -654,31 +654,31 @@ lazy_init = false → Service waits for connection before binding port
 
 **When connection fails:**
 ```rust
-optional = true  → Service continues running (degraded state)
+optional = true  → Service continues running
                    `/health` → 200 (alive)
-                   `/ready` → 503 (not ready)
+                   `/ready`  → 200 (still ready — an optional dependency
+                               never blocks readiness; it is simply
+                               reported as unhealthy in the response body)
 
 optional = false → Depends on lazy_init:
-                   lazy_init=true  → Service runs but reports degraded
+                   lazy_init=true  → Service runs, but `/ready` → 503
                    lazy_init=false → Service fails to start
 ```
 
-{% callout type="warning" title="What is Degraded State?" %}
-**Degraded state** means the service is alive and running, but one or more dependencies are unavailable. The service can handle some requests but not all:
+{% callout type="warning" title="`optional` decides whether a dependency can fail readiness" %}
+`optional` is the switch that determines whether an unhealthy dependency takes the service out of the load balancer:
 
-- **`/health`** returns `200 OK` (service process is alive)
-- **`/ready`** returns `503 Service Unavailable` (dependencies are down)
-- **Kubernetes behavior**: Pod stays running but is removed from load balancer
-- **Requests requiring the dependency**: Return `503` with error message
-- **Requests not requiring the dependency**: Work normally
+- **`optional = true`** — the dependency is reported as `"healthy": false` in the `/ready` body, but **`/ready` still returns `200 OK`**. Kubernetes keeps sending traffic. Use this only when the service genuinely delivers value without the dependency.
+- **`optional = false`** (the default) — an unhealthy dependency sets `ready: false` and **`/ready` returns `503 Service Unavailable`**. Kubernetes removes the pod from the load balancer until the dependency recovers.
 
-**Example:** Database is down, but service is degraded (not dead):
+`/health` (liveness) is unaffected by dependencies in either case: it returns `200 OK` as long as the process is alive, so Kubernetes will not restart the pod just because a backend is down.
+
+**Example:** Redis is configured with `optional = true` and is down, while the database (`optional = false`) is healthy:
 - `GET /health` → `200 OK` (service alive)
-- `GET /ready` → `503` (database unavailable)
-- `GET /api/v1/users` → `503` (needs database)
-- `GET /api/v1/version` → `200 OK` (doesn't need database)
+- `GET /ready` → `200 OK`, body reports `"redis": { "healthy": false, ... }` — traffic keeps flowing
+- Requests that need Redis may still fail; requests that don't work normally
 
-Once the dependency recovers, the service automatically transitions from degraded to fully healthy, and Kubernetes adds it back to the load balancer.
+Flip Redis to `optional = false` and the same outage turns `/ready` into a `503`, pulling the pod out of the load balancer until Redis returns.
 {% /callout %}
 
 **`max_retries`** - Maximum connection attempts (default: `5`)
@@ -717,8 +717,8 @@ This exponential backoff prevents overwhelming a recovering service with constan
 
 | `lazy_init` | `optional` | Startup Behavior | Connection Failure | `/health` | `/ready` | Use Case |
 |-------------|-----------|------------------|-------------------|-----------|----------|----------|
-| `true` | `true` | ✅ Starts immediately | Continues running | 200 OK | 503 Degraded | **Production HA** |
-| `true` | `false` | ✅ Starts immediately | Reports degraded | 200 OK | 503 Degraded | Production with dependencies |
+| `true` | `true` | ✅ Starts immediately | Continues running | 200 OK | 200 OK (dep reported unhealthy) | **Production HA** |
+| `true` | `false` | ✅ Starts immediately | Reports not ready | 200 OK | 503 Not Ready | Production with required dependencies |
 | `false` | `true` | ⏸️ Waits, then continues | Continues running | 200 OK | 200 OK | Eager connection, graceful fallback |
 | `false` | `false` | ⏸️ Waits or fails | Startup fails | - | - | **Strict mode** (dev/testing) |
 
@@ -793,29 +793,29 @@ Service never starts if database is unavailable.
 lazy_init = true
 optional = false    # Database required
 
-[cache]
+[redis]
 lazy_init = true
-optional = true     # Cache optional (can continue without it)
+optional = true     # Redis optional (can continue without it)
 
-[events]
+[nats]
 lazy_init = false
-optional = false    # Events required, must connect at startup
+optional = false    # NATS required, must connect at startup
 ```
 
 **Timeline:**
 ```
 00:00 - Service starting...
-00:00 - Events: Waiting for connection... (blocks startup)
-00:02 - Events: Connected
+00:00 - NATS: Waiting for connection... (blocks startup)
+00:02 - NATS: Connected
 00:02 - Service starts, binds port
 00:02 - Database: Connecting in background
-00:02 - Cache: Connecting in background
+00:02 - Redis: Connecting in background
 00:02 - /health → 200 OK
-00:02 - /ready → 503 (database and cache not ready)
+00:02 - /ready → 503 (database not connected, and it is required)
 00:05 - Database: Connected
-00:05 - /ready → 503 (cache still connecting)
-00:08 - Cache: Connection failed (optional=true, continues)
-00:08 - /ready → 200 OK (database ready, cache optional)
+00:05 - /ready → 200 OK (Redis is optional, so it never blocks readiness)
+00:08 - Redis: Connection failed (optional=true, service continues)
+00:08 - /ready → 200 OK, body reports "redis": { "healthy": false, ... }
 ```
 
 ### What You See in Logs

@@ -35,7 +35,7 @@ The `htmx-full` convenience feature includes all HTMX-related features plus `ses
 
 ```toml
 [dependencies]
-acton-service = { version = "{{version}}", features = ["htmx-full"] }
+acton-service = { version = "{% version() %}", features = ["htmx-full"] }
 ```
 
 See [Feature Flags](/docs/feature-flags#htmx-features) for detailed descriptions of each feature.
@@ -290,14 +290,14 @@ For development, use `htmx-full` which includes everything:
 
 ```toml
 [dependencies]
-acton-service = { version = "{{version}}", features = ["htmx-full"] }
+acton-service = { version = "{% version() %}", features = ["htmx-full"] }
 tokio = { version = "1", features = ["full"] }
 ```
 
 For production with Redis sessions:
 
 ```toml
-acton-service = { version = "{{version}}", features = [
+acton-service = { version = "{% version() %}", features = [
     "htmx", "askama", "sse", "session-redis"
 ] }
 ```
@@ -324,7 +324,7 @@ HTMX features work alongside acton-service's other capabilities:
 |---------|-------------|
 | **Session** | `session-memory` for dev, `session-redis` for production. Provides flash messages, CSRF tokens, and auth state. |
 | **Auth** | Use `auth` feature for password hashing. Sessions store authentication state. |
-| **Database** | `database` (PostgreSQL) or `turso` (SQLite) for persistent storage. |
+| **Database** | `database` (PostgreSQL), `turso` (SQLite/libsql), or `surrealdb` for persistent storage. Enable exactly one - they are mutually exclusive. |
 | **Observability** | Full tracing support. Template rendering and HTMX requests are traced automatically. |
 
 **Hybrid architectures** are supported: use sessions + HTMX for your admin UI while exposing a JWT-authenticated API for mobile clients or third-party integrations.

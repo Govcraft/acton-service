@@ -314,7 +314,54 @@ cache_ttl_secs = 300                # Cache TTL in seconds
 fail_open = false                   # true = allow on errors, false = deny on errors
 ```
 
-**Note**: Automatic hot-reload is currently in progress. Use the manual reload endpoint (`POST /admin/reload-policies`) to reload policies without restarting the service.
+**Note**: Automatic hot-reload is currently in progress. To reload policies without restarting
+the service, call `CedarAuthz::reload_policies()` from a route you expose yourself — see
+[Reloading Policies at Runtime](#reloading-policies-at-runtime).
+
+### Reloading Policies at Runtime
+
+acton-service does **not** ship a built-in reload endpoint. It exposes the
+`CedarAuthz::reload_policies()` method, which re-reads and re-parses the policy file at
+`policy_path` and atomically swaps in the new policy set. Wire it to a route you own, so you
+control the path, the auth requirements, and the response shape:
+
+```rust
+use std::sync::Arc;
+
+use acton_service::prelude::*;
+use acton_service::middleware::CedarAuthz;
+use axum::{Extension, extract::State, routing::post, Router};
+
+async fn reload_policies(
+    State(cedar): State<Arc<CedarAuthz>>,
+    Extension(claims): Extension<Claims>,
+) -> Result<&'static str, Error> {
+    // Protect the route: only admins may reload policies.
+    if !claims.has_role("admin") {
+        return Err(Error::Forbidden("admin role required".to_string()));
+    }
+
+    cedar.reload_policies().await?;
+    Ok("policies reloaded")
+}
+
+let cedar = CedarAuthz::builder(config.cedar.clone()).build().await?;
+let cedar = Arc::new(cedar);
+
+let routes = Router::new()
+    .route("/admin/reload-policies", post(reload_policies))
+    .with_state(cedar.clone());
+
+let service = ServiceBuilder::new()
+    .with_config(config)
+    .with_routes(routes)
+    .with_cedar((*cedar).clone())
+    .build();
+```
+
+Because the route is yours, you can equally protect it with a Cedar policy instead of the
+inline role check, restrict it to an internal listener, or omit it entirely and reload by
+restarting the service.
 
 ### Fail-Open vs Fail-Closed
 
@@ -344,17 +391,50 @@ fail_open = true
 
 acton-service supports customizable path normalization to handle various ID formats:
 
-```rust
-use acton_service::middleware::CedarAuthzLayer;
+A path normalizer is a plain `fn(&str) -> String`. It receives the request path and returns
+the normalized form used to build the Cedar resource. For most services, register it directly
+on the `ServiceBuilder` — Cedar is auto-configured from `[cedar]` in your config, and the
+policy file comes from `policy_path`:
 
-let authz = CedarAuthzLayer::builder()
-    .policy_path("policies.cedar")
-    .path_normalizer(|path, method| {
-        // Custom normalization for alphanumeric IDs
-        let normalized = path
-            .replace(|c: char| c.is_alphanumeric(), "{id}");
-        format!("{} {}", method, normalized)
-    })
+```rust
+use acton_service::prelude::*;
+
+// Normalizes alphanumeric document IDs:
+// /api/v1/documents/user123/doc1 -> /api/v1/documents/{user_id}/{doc_id}
+fn normalize_document_paths(path: &str) -> String {
+    let pattern = regex::Regex::new(
+        r"^(/api/v[0-9]+/documents/)([a-zA-Z0-9_-]+)/([a-zA-Z0-9_-]+)$"
+    ).unwrap();
+
+    if let Some(caps) = pattern.captures(path) {
+        return format!("{}{{user_id}}/{{doc_id}}", &caps[1]);
+    }
+    path.to_string()
+}
+
+let service = ServiceBuilder::new()
+    .with_config(config)
+    .with_routes(routes)
+    .with_cedar_path_normalizer(normalize_document_paths)
+    .build();
+```
+
+If you need to construct the `CedarAuthz` instance yourself — for example to attach a policy
+cache — build it from your `CedarConfig` and hand it to the builder. Note that `build()` is
+async, since it reads the policy file from `policy_path`:
+
+```rust
+use acton_service::middleware::CedarAuthz;
+
+let cedar = CedarAuthz::builder(config.cedar.clone())
+    .with_path_normalizer(normalize_document_paths)
+    .build()
+    .await?;
+
+let service = ServiceBuilder::new()
+    .with_config(config)
+    .with_routes(routes)
+    .with_cedar(cedar)
     .build();
 ```
 
@@ -405,9 +485,10 @@ let authz = CedarAuthzLayer::builder()
 **Current Status**: Automatic hot-reload is in progress. Policies must be reloaded manually.
 
 **Solutions:**
-- Use the manual reload endpoint: `POST /admin/reload-policies` (requires admin role)
 - Restart the service to load updated policies
+- Or expose your own admin-only route that calls `CedarAuthz::reload_policies()` — see [Reloading Policies at Runtime](#reloading-policies-at-runtime)
 - Check file permissions on policy file (must be readable)
+- Confirm `policy_path` points at the file you are editing
 
 **Future**: Automatic file watching and hot-reload will be implemented soon.
 
@@ -441,7 +522,7 @@ Set `audit_auth_events: false` in your audit configuration if you want to suppre
 3. **Principle of least privilege**: Only grant necessary permissions
 4. **Audit policies regularly**: Review and update policies quarterly
 5. **Use forbid for sensitive operations**: Explicit denials are safer than implicit
-6. **Secure policy reload endpoint**: Protect `/admin/reload-policies` with admin-only access
+6. **Secure any policy reload route**: If you expose a route that calls `CedarAuthz::reload_policies()`, restrict it to admin-only access
 7. **Secure policy files**: Restrict file permissions (automatic hot-reload in progress)
 8. **Test policy changes**: Validate in staging before production deployment
 9. **Monitor authorization decisions**: Track allow/deny rates and investigate anomalies
@@ -470,15 +551,25 @@ Token authentication provides authentication (who you are), Cedar provides autho
 
 ### gRPC Support
 
-Cedar works identically for gRPC services:
+With the `grpc` feature, Cedar is available as a tower layer for tonic
+services: `CedarAuthzLayer` wraps a service in `CedarAuthzService`, which
+authorizes each request from the `Claims` that the PASETO/JWT interceptor
+placed in request extensions.
+
+`CedarAuthzLayer::new` takes a built `CedarAuthz` instance (not a
+`CedarConfig`), so construct the authorizer first and apply the layer where
+you compose your tonic service stack:
 
 ```rust
-ServiceBuilder::new()
-    .with_grpc_services(grpc_services)
-    .with_middleware(|router| {
-        router.layer(CedarAuthzLayer::new(config))
-    })
+use acton_service::middleware::{CedarAuthz, CedarAuthzLayer};
+
+let cedar = CedarAuthz::builder(config.cedar.clone())
     .build()
+    .await?;
+
+// A tower layer over tonic services — apply it when composing a tonic
+// stack manually (e.g. tonic's Server::builder().layer(...)).
+let cedar_layer = CedarAuthzLayer::new(cedar);
 ```
 
 Path normalization handles gRPC method names automatically.

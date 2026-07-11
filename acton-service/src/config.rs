@@ -1860,4 +1860,68 @@ mod tests {
         );
         assert_eq!(config.custom.feature_flags.get("analytics"), Some(&true));
     }
+
+    #[test]
+    fn test_token_config_parses_from_tagged_toml() {
+        // TokenConfig is internally tagged on `format`; this is the wire
+        // format documented in config.example.toml, the README, and the docs
+        // site. Round-trip through Figment (the real load path) so docs and
+        // code cannot silently drift apart again.
+        let toml = r#"
+[token]
+format = "paseto"
+version = "v4"
+purpose = "local"
+key_path = "./keys/paseto.key"
+issuer = "my-service"
+"#;
+        let config: Config<()> = Figment::new()
+            .merge(Serialized::defaults(Config::<()>::default()))
+            .merge(Toml::string(toml))
+            .extract()
+            .expect("[token] with format = \"paseto\" must deserialize");
+
+        match config.token {
+            Some(TokenConfig::Paseto(paseto)) => {
+                assert_eq!(paseto.version, "v4");
+                assert_eq!(paseto.purpose, "local");
+                assert_eq!(paseto.key_path, PathBuf::from("./keys/paseto.key"));
+                assert_eq!(paseto.issuer.as_deref(), Some("my-service"));
+            }
+            other => panic!("expected PASETO token config, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_token_config_rejects_nested_table_form() {
+        // `[token.paseto]` produces `{ token: { paseto: {...} } }`, which has
+        // no `format` tag and must be rejected — it is not a silently-ignored
+        // alternate spelling.
+        let toml = r#"
+[token.paseto]
+version = "v4"
+purpose = "local"
+key_path = "./keys/paseto.key"
+"#;
+        let result: std::result::Result<Config<()>, _> = Figment::new()
+            .merge(Serialized::defaults(Config::<()>::default()))
+            .merge(Toml::string(toml))
+            .extract();
+
+        assert!(
+            result.is_err(),
+            "nested [token.paseto] must fail: the wire format is [token] with format = \"paseto\""
+        );
+    }
+
+    #[test]
+    fn test_config_example_toml_loads() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../config.example.toml");
+        let config = Config::<()>::load_from(path)
+            .expect("config.example.toml must load under default features");
+        assert!(
+            config.token.is_none(),
+            "token sections in config.example.toml must stay commented (JWT needs the `jwt` feature)"
+        );
+    }
 }

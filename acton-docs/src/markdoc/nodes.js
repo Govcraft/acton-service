@@ -62,15 +62,57 @@ const nodes = {
     },
     transform(node, config) {
       const attributes = node.transformAttributes(config)
-      const children = node.children[0]
 
-      // Get the fence content
-      let content = children?.attributes?.content || ''
+      // Use the fence's full raw body. Markdoc splits fence content into
+      // several children as soon as it encounters a `{% ... %}` tag, so
+      // reading `node.children[0]` would silently drop everything from the
+      // first tag onward -- e.g. a ```toml fence containing
+      // `acton-service = { version = "{% version() %}", features = [...] }`
+      // used to render truncated at the opening quote.
+      let content = node.attributes?.content ?? ''
 
-      // Simple variable substitution for version
-      if (config.variables?.version?.acton) {
-        content = content.replace(/\{\{version\}\}/g, config.variables.version.acton)
+      // Markdoc does not evaluate tags, variables, or functions inside fenced
+      // code blocks -- their content is literal text. Code samples still need
+      // the current crate version and dependency snippets, so interpolate the
+      // supported forms here by hand.
+      const version = config.variables?.version?.acton
+      const deps = config.variables?.dep ?? {}
+
+      if (version) {
+        // Legacy handlebars form, kept for backwards compatibility.
+        content = content.replace(/\{\{version\}\}/g, version)
+        // {% version() %} and {% $version.acton %}
+        content = content.replace(/\{%\s*version\(\)\s*%\}/g, version)
+        content = content.replace(/\{%\s*\$version\.acton\s*%\}/g, version)
       }
+
+      // {% $dep.<alias> %} -- variable form
+      content = content.replace(
+        /\{%\s*\$dep\.([A-Za-z0-9_]+)\s*%\}/g,
+        (match, alias) => deps[alias] ?? match,
+      )
+
+      // {% dep("<alias>") %} -- function form, single alias
+      content = content.replace(
+        /\{%\s*dep\(\s*["']([A-Za-z0-9_-]+)["']\s*\)\s*%\}/g,
+        (match, alias) => deps[alias] ?? match,
+      )
+
+      // {% dep(["<feature>", "<feature>"]) %} -- function form, literal
+      // feature list (mirrors the array branch of `dep` in config.js).
+      content = content.replace(
+        /\{%\s*dep\(\s*\[([^\]]*)\]\s*\)\s*%\}/g,
+        (match, list) => {
+          if (!version) return match
+          const features = list
+            .split(',')
+            .map((f) => f.trim().replace(/^["']|["']$/g, ''))
+            .filter(Boolean)
+          if (!features.length) return match
+          const rendered = features.map((f) => `"${f}"`).join(', ')
+          return `acton-service = { version = "${version}", features = [${rendered}] }`
+        },
+      )
 
       return new Tag(this.render, attributes, [content])
     },

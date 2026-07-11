@@ -44,7 +44,11 @@ let config = OAuthProviderConfig {
     client_secret: "your-client-secret".to_string(),
     redirect_uri: "https://example.com/auth/google/callback".to_string(),
     scopes: vec![], // Use defaults: openid, email, profile
-    ..Default::default()
+    // Endpoints are only set for custom OIDC providers; built-in
+    // providers like Google supply their own.
+    authorization_endpoint: None,
+    token_endpoint: None,
+    userinfo_endpoint: None,
 };
 
 let provider = GoogleProvider::new(&config)?;
@@ -109,7 +113,9 @@ let config = OAuthProviderConfig {
     client_secret: env::var("GOOGLE_CLIENT_SECRET")?,
     redirect_uri: "https://example.com/auth/google/callback".to_string(),
     scopes: vec![], // Defaults: openid, email, profile
-    ..Default::default()
+    authorization_endpoint: None,
+    token_endpoint: None,
+    userinfo_endpoint: None,
 };
 
 let provider = GoogleProvider::new(&config)?;
@@ -135,7 +141,9 @@ let config = OAuthProviderConfig {
     client_secret: env::var("GITHUB_CLIENT_SECRET")?,
     redirect_uri: "https://example.com/auth/github/callback".to_string(),
     scopes: vec![], // Defaults: read:user, user:email
-    ..Default::default()
+    authorization_endpoint: None,
+    token_endpoint: None,
+    userinfo_endpoint: None,
 };
 
 let provider = GitHubProvider::new(&config)?;

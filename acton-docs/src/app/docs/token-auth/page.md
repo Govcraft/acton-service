@@ -139,7 +139,8 @@ exp: now + Duration::hours(24),
 ### Configuration-Based Protection
 
 ```toml
-[token.paseto]
+[token]
+format = "paseto"
 version = "v4"
 purpose = "local"
 key_path = "./keys/paseto.key"
@@ -161,7 +162,7 @@ Routes listed in `public_paths` use prefix matching — `/admin/` matches `/admi
 ### Health Checks and Token Auth
 
 {% callout type="note" title="Health Endpoints Always Public" %}
-The `/health` and `/ready` endpoints are **automatically excluded** from token authentication, even if not in your `exclude_paths`. They must remain public for Kubernetes liveness/readiness probes to work.
+The `/health` and `/ready` endpoints are **automatically excluded** from token authentication, even if not in your `public_paths`. They must remain public for Kubernetes liveness/readiness probes to work.
 {% /callout %}
 
 ## PASETO Configuration
@@ -465,7 +466,7 @@ key_path = "./keys/paseto.key"
 
 [cedar]
 enabled = true
-policies_path = "/path/to/policies"
+policy_path = "/path/to/policies.cedar"
 ```
 
 **How it works:**

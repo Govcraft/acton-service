@@ -189,7 +189,7 @@ If you see errors about missing features, verify your `Cargo.toml` includes the 
 
 ```toml
 # ❌ Missing features
-acton-service = "0.2"
+acton-service = { version = "{% version() %}" }
 
 # ✅ With required features
 {% $dep.httpOnly %}
@@ -204,7 +204,7 @@ If `cargo install acton-cli` fails, try:
 cargo install --locked acton-cli
 
 # Or install from git
-cargo install --git https://github.com/your-org/acton-cli
+cargo install --git https://github.com/Govcraft/acton-service acton-cli
 ```
 
-For more help, see the [Troubleshooting guide](/docs/troubleshooting) or [open an issue](https://github.com/your-org/acton-service/issues).
+For more help, see the [Troubleshooting guide](/docs/troubleshooting) or [open an issue](https://github.com/Govcraft/acton-service/issues).

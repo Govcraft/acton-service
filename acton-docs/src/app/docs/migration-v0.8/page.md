@@ -119,13 +119,14 @@ The pool access methods are now async and return `Option`:
 ```rust
 // v0.7 pattern (still works)
 async fn handler(State(state): State<AppState>) -> Result<Json<Data>> {
-    let db = state.db().await.ok_or(Error::Internal("DB unavailable"))?;
+    let db = state.db().await
+        .ok_or_else(|| Error::Internal("DB unavailable".into()))?;
     // ...
 }
 
 // v0.8 preferred pattern (identical, but clearer intent)
 async fn handler(State(state): State<AppState>) -> Result<Json<Data>> {
-    let db = state.db()
+    let db = state.db().await
         .ok_or_else(|| Error::Internal("Database unavailable".into()))?;
     // ...
 }

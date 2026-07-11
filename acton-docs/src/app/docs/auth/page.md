@@ -49,10 +49,13 @@ acton-service = { version = "{% version() %}", features = ["auth"] }
 
 ```rust
 use acton_service::auth::{PasetoGenerator, TokenGenerator};
-use acton_service::middleware::Claims;
+use acton_service::auth::tokens::ClaimsBuilder;
 
 let generator = PasetoGenerator::new(&paseto_config, &token_config)?;
-let claims = Claims { sub: "user:123".to_string(), ..Default::default() };
+
+// `.user("123")` sets sub to "user:123". `exp`, `iat`, and `jti`
+// are filled in by the generator.
+let claims = ClaimsBuilder::new().user("123").build()?;
 let token = generator.generate_token(&claims)?;
 ```
 
@@ -241,7 +244,10 @@ Real applications often combine multiple authentication types. The framework's c
 use acton_service::auth::{
     PasswordHasher, PasetoGenerator, RedisRefreshStorage,
     ApiKeyGenerator, TokenGenerator,
+    RefreshTokenMetadata, RefreshTokenStorage,
 };
+use chrono::{Duration, Utc};
+use uuid::Uuid;
 
 // Registration: hash password
 let hasher = PasswordHasher::default();
@@ -250,17 +256,35 @@ let password_hash = hasher.hash(&password)?;
 // Login: verify password, generate tokens
 let is_valid = hasher.verify(&password, &stored_hash)?;
 let access_token = generator.generate_token(&claims)?;
-let refresh_token = storage.create_refresh_token(&user_id, &session_id, ttl).await?;
+
+// Persist the refresh token. You supply the token ID and the family ID —
+// the family ID ties together every rotation of this login, so reuse of a
+// stale token can revoke the whole family.
+let token_id = Uuid::new_v4().to_string();
+let family_id = Uuid::new_v4().to_string();
+
+storage
+    .store(
+        &token_id,
+        &user_id,
+        &family_id,
+        Utc::now() + Duration::days(7),
+        &RefreshTokenMetadata::default(),
+    )
+    .await?;
 
 // API access: generate API key for developers
 let (key, key_hash) = api_generator.generate();
 ```
 
+On subsequent refreshes, use `storage.rotate(&old_token_id, &new_token_id, ...)` rather than
+`store` — it atomically revokes the old token and records the new one in the same family.
+
 **Key patterns:**
 
 - Password hashing stands alone (no dependency on tokens or sessions)
 - Token generation accepts `Claims` from any source
-- Refresh tokens store user_id and session_id, decoupled from authentication method
+- Refresh tokens store `user_id` and `family_id`, decoupled from authentication method
 - API keys integrate with the same `Claims` extraction middleware as tokens
 
 ---

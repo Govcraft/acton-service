@@ -6,6 +6,47 @@ import { siteConfig } from '../lib/config'
 // This should be kept in sync with the workspace version
 const ACTON_VERSION = '0.27.0'
 
+// Single source of truth mapping camelCase aliases to the real Cargo feature
+// lists. Used by both the `dep()` function and the `$dep.*` variables so a
+// `{% dep("grpcOnly") %}` call can never emit a feature name that does not
+// exist in acton-service/Cargo.toml.
+const DEP_FEATURES = {
+  http: ['http', 'observability'],
+  database: ['http', 'observability', 'database'],
+  cache: ['cache', 'http', 'observability'],
+  events: ['events', 'http', 'observability'],
+  grpc: ['grpc'],
+  openapi: ['openapi', 'http', 'observability'],
+  metrics: ['otel-metrics'],
+  full: ['full'],
+  httpOnly: ['http'],
+  observability: ['observability'],
+  grpcOnly: ['grpc'],
+  databaseOnly: ['database'],
+  cacheOnly: ['cache'],
+  eventsOnly: ['events'],
+  cedarAuthz: ['cedar-authz', 'cache'],
+  resilience: ['resilience'],
+  governor: ['governor'],
+  otelMetrics: ['otel-metrics'],
+  openapiOnly: ['openapi'],
+  databaseCache: ['database', 'cache'],
+  jwtOnly: ['jwt'],
+  websocketOnly: ['websocket'],
+  tursoOnly: ['turso'],
+  surrealdbOnly: ['surrealdb'],
+  clickhouse: ['clickhouse', 'http', 'observability'],
+  clickhouseOnly: ['clickhouse'],
+  clickhouseDatabase: ['clickhouse', 'database', 'http', 'observability'],
+  clickhouseAudit: ['clickhouse', 'audit', 'http', 'observability'],
+  audit: ['audit', 'http', 'observability'],
+  auditOnly: ['audit'],
+  auditDatabase: ['audit', 'database', 'http', 'observability'],
+  loginLockout: ['login-lockout', 'http', 'observability'],
+  journald: ['journald', 'http', 'observability'],
+  journaldOnly: ['journald'],
+}
+
 // Helper function to build dependency string
 function buildDep(features) {
   return `acton-service = { version = "${ACTON_VERSION}", features = [${features.map(f => `"${f}"`).join(', ')}] }`
@@ -15,14 +56,22 @@ const config = {
   nodes,
   tags,
   functions: {
-    // Markdoc function to build cargo dependency with current version
+    // Markdoc function to build cargo dependency with current version.
+    // Accepts an alias from DEP_FEATURES, a literal feature name, or an
+    // array of literal feature names.
     dep: {
       transform(parameters) {
-        const features = parameters[0] || []
-        if (typeof features === 'string') {
-          return `acton-service = { version = "${ACTON_VERSION}", features = ["${features}"] }`
+        const arg = parameters[0] || []
+        if (typeof arg === 'string') {
+          return buildDep(DEP_FEATURES[arg] || [arg])
         }
-        return buildDep(features)
+        return buildDep(arg)
+      }
+    },
+    // Current acton-service version, e.g. {% version() %}
+    version: {
+      transform() {
+        return ACTON_VERSION
       }
     },
     // Function to build GitHub URLs
@@ -41,41 +90,9 @@ const config = {
       repositoryUrl: siteConfig.repositoryUrl,
       repositoryName: siteConfig.repositoryName,
     },
-    dep: {
-      http: `acton-service = { version = "${ACTON_VERSION}", features = ["http", "observability"] }`,
-      database: `acton-service = { version = "${ACTON_VERSION}", features = ["http", "observability", "database"] }`,
-      cache: `acton-service = { version = "${ACTON_VERSION}", features = ["cache", "http", "observability"] }`,
-      events: `acton-service = { version = "${ACTON_VERSION}", features = ["events", "http", "observability"] }`,
-      grpc: `acton-service = { version = "${ACTON_VERSION}", features = ["grpc"] }`,
-      openapi: `acton-service = { version = "${ACTON_VERSION}", features = ["openapi", "http", "observability"] }`,
-      metrics: `acton-service = { version = "${ACTON_VERSION}", features = ["otel-metrics"] }`,
-      full: `acton-service = { version = "${ACTON_VERSION}", features = ["full"] }`,
-      httpOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["http"] }`,
-      observability: `acton-service = { version = "${ACTON_VERSION}", features = ["observability"] }`,
-      grpcOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["grpc"] }`,
-      databaseOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["database"] }`,
-      cacheOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["cache"] }`,
-      eventsOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["events"] }`,
-      cedarAuthz: `acton-service = { version = "${ACTON_VERSION}", features = ["cedar-authz", "cache"] }`,
-      resilience: `acton-service = { version = "${ACTON_VERSION}", features = ["resilience"] }`,
-      governor: `acton-service = { version = "${ACTON_VERSION}", features = ["governor"] }`,
-      otelMetrics: `acton-service = { version = "${ACTON_VERSION}", features = ["otel-metrics"] }`,
-      openapiOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["openapi"] }`,
-      databaseCache: `acton-service = { version = "${ACTON_VERSION}", features = ["database", "cache"] }`,
-      jwtOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["jwt"] }`,
-      websocketOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["websocket"] }`,
-      tursoOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["turso"] }`,
-      clickhouse: `acton-service = { version = "${ACTON_VERSION}", features = ["clickhouse", "http", "observability"] }`,
-      clickhouseOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["clickhouse"] }`,
-      clickhouseDatabase: `acton-service = { version = "${ACTON_VERSION}", features = ["clickhouse", "database", "http", "observability"] }`,
-      clickhouseAudit: `acton-service = { version = "${ACTON_VERSION}", features = ["clickhouse", "audit", "http", "observability"] }`,
-      audit: `acton-service = { version = "${ACTON_VERSION}", features = ["audit", "http", "observability"] }`,
-      auditOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["audit"] }`,
-      auditDatabase: `acton-service = { version = "${ACTON_VERSION}", features = ["audit", "database", "http", "observability"] }`,
-      loginLockout: `acton-service = { version = "${ACTON_VERSION}", features = ["login-lockout", "http", "observability"] }`,
-      journald: `acton-service = { version = "${ACTON_VERSION}", features = ["journald", "http", "observability"] }`,
-      journaldOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["journald"] }`,
-    },
+    dep: Object.fromEntries(
+      Object.entries(DEP_FEATURES).map(([alias, features]) => [alias, buildDep(features)])
+    ),
   },
 }
 

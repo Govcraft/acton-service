@@ -32,30 +32,31 @@ Enable the OpenAPI feature:
 
 ## Configuration
 
-Configure OpenAPI documentation in your service configuration:
+{% callout type="note" title="OpenAPI is configured in code, not TOML" %}
+There is no `[openapi]` section in `config.toml` and no `ACTON_OPENAPI_*` environment variables. OpenAPI documentation is assembled entirely in Rust: you describe the spec with `utoipa`, refine its metadata with `OpenApiBuilder`, and mount whichever UI you want onto your `Router`. Nothing is auto-served — if you don't mount a UI route, no documentation endpoint exists.
+{% /callout %}
 
-```toml
-# ~/.config/acton-service/my-service/config.toml
-[openapi]
-enabled = true
-title = "My Service API"
-version = "1.0.0"
-description = "Production API service"
-contact_name = "API Team"
-contact_email = "api@example.com"
-license_name = "MIT"
+Use `OpenApiBuilder` to set the API metadata (title, version, description, contact, license, servers) on a spec produced by the `#[derive(OpenApi)]` macro:
 
-# UI preferences
-ui = "swagger"  # Options: swagger, rapidoc, redoc, all
-serve_spec = true  # Serve OpenAPI JSON at /openapi.json
+```rust
+use acton_service::openapi::OpenApiBuilder;
+use utoipa::OpenApi;
+
+#[derive(OpenApi)]
+#[openapi(paths(list_users, create_user), components(schemas(User)))]
+struct ApiDoc;
+
+let spec = OpenApiBuilder::new(ApiDoc::openapi())
+    .title("My Service API")
+    .version("1.0.0")
+    .description("Production API service")
+    .contact("API Team", "api@example.com")
+    .license("MIT", Some("https://opensource.org/licenses/MIT".to_string()))
+    .server("https://api.example.com", Some("Production".to_string()))
+    .build();
 ```
 
-### Environment Variables
-
-```bash
-ACTON_OPENAPI_ENABLED=true
-ACTON_OPENAPI_UI=swagger
-```
+`build()` returns a `utoipa::openapi::OpenApi` that you hand to one of the UI helpers below.
 
 ## Basic Usage
 
@@ -90,9 +91,12 @@ struct CreateUserRequest {
 async fn list_users(
     State(state): State<AppState>
 ) -> Result<Json<Vec<User>>> {
-    let db = state.database()?;
+    let db = state
+        .db()
+        .await
+        .ok_or_else(|| Error::Internal("database unavailable".into()))?;
     let users = sqlx::query_as!(User, "SELECT id, name, email FROM users")
-        .fetch_all(db)
+        .fetch_all(&db)
         .await?;
     Ok(Json(users))
 }
@@ -112,14 +116,17 @@ async fn create_user(
     State(state): State<AppState>,
     Json(request): Json<CreateUserRequest>,
 ) -> Result<(StatusCode, Json<User>)> {
-    let db = state.database()?;
+    let db = state
+        .db()
+        .await
+        .ok_or_else(|| Error::Internal("database unavailable".into()))?;
     let user = sqlx::query_as!(
         User,
         "INSERT INTO users (name, email) VALUES ($1, $2) RETURNING *",
         request.name,
         request.email
     )
-    .fetch_one(db)
+    .fetch_one(&db)
     .await?;
 
     Ok((StatusCode::CREATED, Json(user)))
@@ -157,33 +164,42 @@ async fn main() -> Result<()> {
 }
 ```
 
-Access the documentation:
+`SwaggerUI::with_spec(path, spec)` registers two things: the UI itself at `path`, and the raw specification at `/api-docs/openapi.json`. Both are relative to wherever you merge the returned `Router` — in the example above they are merged inside the `V1` version router, so they land under the `/api/v1` prefix:
 
 ```bash
 # Swagger UI
-http://localhost:8080/swagger-ui
+http://localhost:8080/api/v1/swagger-ui
 
-# OpenAPI specification
-http://localhost:8080/openapi.json
+# OpenAPI specification (the URL SwaggerUI registers for the spec)
+http://localhost:8080/api/v1/api-docs/openapi.json
 ```
+
+Merge it into a top-level `Router` instead and the same routes appear at `/swagger-ui` and `/api-docs/openapi.json`.
 
 > **Note on OpenAPI Integration**: OpenAPI/Swagger UI integration is handled via the `Router::merge()` method combined with `SwaggerUI::with_spec()`, not through `ServiceBuilder` methods. This allows you to flexibly place OpenAPI documentation routes within your versioned API structure. The `SwaggerUI` router can be merged into any `Router` instance during the version building phase.
 
 ## Multiple UI Options
 
-acton-service supports three popular OpenAPI UI frameworks:
+The `openapi` module exports three UI helpers, but they are **not** interchangeable, and none of them is mounted for you:
+
+| Helper | Signature | Returns | You must |
+| --- | --- | --- | --- |
+| `SwaggerUI` | `with_spec(path, spec)` / `with_versions(path, versions)` | `Router` | `merge()` it into your router |
+| `RapiDoc` | `html(spec_url)` | `String` (HTML) | Add your own route that returns it |
+| `ReDoc` | `html(spec_url)` | `String` (HTML) | Add your own route that returns it |
+
+There is no configuration switch that turns these on. If you want a UI, you wire its route yourself.
 
 ### Swagger UI
 
-The traditional, feature-rich OpenAPI UI:
+The only helper that produces a mountable `Router`. `with_spec()` serves the UI **and** the spec:
 
-```toml
-[openapi]
-ui = "swagger"
-```
+```rust
+use acton_service::openapi::SwaggerUI;
 
-```bash
-http://localhost:8080/swagger-ui
+let router = Router::new()
+    .route("/users", get(list_users))
+    .merge(SwaggerUI::with_spec("/swagger-ui", ApiDoc::openapi()));
 ```
 
 **Features:**
@@ -194,15 +210,21 @@ http://localhost:8080/swagger-ui
 
 ### RapiDoc
 
-Modern, customizable API documentation:
+`RapiDoc::html(spec_url)` returns an HTML **string** pointing at a spec URL you already serve. Wire it to a route yourself:
 
-```toml
-[openapi]
-ui = "rapidoc"
-```
+```rust
+use acton_service::openapi::{RapiDoc, SwaggerUI};
+use axum::response::Html;
 
-```bash
-http://localhost:8080/rapidoc
+let router = Router::new()
+    .route("/users", get(list_users))
+    // SwaggerUI::with_spec also publishes the spec at /api-docs/openapi.json,
+    // which is what RapiDoc renders below.
+    .merge(SwaggerUI::with_spec("/swagger-ui", ApiDoc::openapi()))
+    .route(
+        "/rapidoc",
+        get(|| async { Html(RapiDoc::html("/api-docs/openapi.json")) }),
+    );
 ```
 
 **Features:**
@@ -213,15 +235,19 @@ http://localhost:8080/rapidoc
 
 ### ReDoc
 
-Clean, three-panel documentation:
+`ReDoc::html(spec_url)` works exactly the same way — an HTML string you serve from a route of your choosing:
 
-```toml
-[openapi]
-ui = "redoc"
-```
+```rust
+use acton_service::openapi::{ReDoc, SwaggerUI};
+use axum::response::Html;
 
-```bash
-http://localhost:8080/redoc
+let router = Router::new()
+    .route("/users", get(list_users))
+    .merge(SwaggerUI::with_spec("/swagger-ui", ApiDoc::openapi()))
+    .route(
+        "/redoc",
+        get(|| async { Html(ReDoc::html("/api-docs/openapi.json")) }),
+    );
 ```
 
 **Features:**
@@ -230,19 +256,21 @@ http://localhost:8080/redoc
 - Downloadable OpenAPI spec
 - Menu/navigation sidebar
 
-### All UI Options
+### Serving Several UIs
 
-Serve all three UIs simultaneously:
+Because each UI is just a router merge or a route, serving all three is a matter of wiring all three against the same spec URL:
 
-```toml
-[openapi]
-ui = "all"
-```
+```rust
+use acton_service::openapi::{RapiDoc, ReDoc, SwaggerUI};
+use axum::response::Html;
 
-```bash
-http://localhost:8080/swagger-ui
-http://localhost:8080/rapidoc
-http://localhost:8080/redoc
+const SPEC_URL: &str = "/api-docs/openapi.json";
+
+let router = Router::new()
+    .route("/users", get(list_users))
+    .merge(SwaggerUI::with_spec("/swagger-ui", ApiDoc::openapi()))
+    .route("/rapidoc", get(|| async { Html(RapiDoc::html(SPEC_URL)) }))
+    .route("/redoc", get(|| async { Html(ReDoc::html(SPEC_URL)) }));
 ```
 
 ## Multi-Version Documentation
@@ -301,7 +329,7 @@ async fn main() -> Result<()> {
             router
                 .route("/users", get(v2::list_users))
                 .route("/users", post(v2::create_user))
-                .route("/users/:id", put(v2::update_user))
+                .route("/users/{id}", put(v2::update_user))
                 .merge(SwaggerUI::with_spec("/swagger-ui/v2", ApiDocV2::openapi()))
         })
         .build_routes();
@@ -314,18 +342,32 @@ async fn main() -> Result<()> {
 }
 ```
 
-Access version-specific documentation:
+Each `with_spec()` call publishes its UI at the given path and its spec at `/api-docs/openapi.json`, both under the version prefix they were merged into:
 
 ```bash
 # V1 documentation
-http://localhost:8080/swagger-ui/v1
+http://localhost:8080/api/v1/swagger-ui/v1
 
 # V2 documentation
-http://localhost:8080/swagger-ui/v2
+http://localhost:8080/api/v2/swagger-ui/v2
 
 # Version-specific specs
-http://localhost:8080/openapi/v1.json
-http://localhost:8080/openapi/v2.json
+http://localhost:8080/api/v1/api-docs/openapi.json
+http://localhost:8080/api/v2/api-docs/openapi.json
+```
+
+Alternatively, mount a single Swagger UI at the top level that offers a version dropdown, using `SwaggerUI::with_versions()` — it takes an owned `String` path and a list of `(spec_url, spec)` pairs, and returns a `Router`:
+
+```rust
+let docs = SwaggerUI::with_versions(
+    "/swagger-ui".to_string(),
+    vec![
+        ("/api-docs/v1/openapi.json".to_string(), ApiDocV1::openapi()),
+        ("/api-docs/v2/openapi.json".to_string(), ApiDocV2::openapi()),
+    ],
+);
+
+let app = Router::new().merge(routes).merge(docs);
 ```
 
 ## Authentication Documentation
@@ -475,21 +517,26 @@ struct CreateUserRequest {
 
 ### Disable in Production
 
-Disable OpenAPI documentation in production environments:
+Documentation routes exist only if you mount them, so "disabling docs" means not merging the UI router. Gate the merge on whatever signal you already have — for example `[service].environment` from your config, or a Cargo feature:
 
-```toml
-[openapi]
-enabled = false  # Disable docs in production
+```rust
+use acton_service::openapi::SwaggerUI;
+
+let config = Config::<()>::load()?;
+
+let mut router = Router::new().route("/users", get(list_users));
+
+// Only expose docs outside production.
+if config.service.environment != "production" {
+    router = router.merge(SwaggerUI::with_spec("/swagger-ui", ApiDoc::openapi()));
+}
 ```
 
-Or use environment-based configuration:
+Compile-time gating keeps the UI and spec out of the production binary entirely:
 
-```bash
-# Development
-ACTON_OPENAPI_ENABLED=true cargo run
-
-# Production
-ACTON_OPENAPI_ENABLED=false cargo run
+```rust
+#[cfg(debug_assertions)]
+let router = router.merge(SwaggerUI::with_spec("/swagger-ui", ApiDoc::openapi()));
 ```
 
 ### Custom Documentation URL
@@ -619,4 +666,4 @@ mod v2 {
 
 - **[API Versioning](/docs/api-versioning)** - Type-safe API versioning
 - **[Authentication](/docs/authentication)** - JWT authentication documentation
-- **[Configuration](/docs/configuration)** - OpenAPI configuration options
+- **[Configuration](/docs/configuration)** - Service configuration reference (note: OpenAPI has no config section — it is wired in code)

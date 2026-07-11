@@ -286,38 +286,44 @@ Do you run multiple instances of this service?
                           (easier to start with Redis than migrate later)
 ```
 
-### Configuration Examples
+### How the Limiter Is Selected
 
-**Redis (Multi-Instance):**
+There is no `backend` key in `[rate_limit]`. Both limiters read the **same** `[rate_limit]` configuration — the same `per_user_rpm`, `per_client_rpm`, `window_secs`, and `[rate_limit.routes]` entries apply to either. What differs is which limiter is wired up:
+
+| Limiter | Type | Feature | How it is wired |
+| --- | --- | --- | --- |
+| Governor (in-memory) | `GovernorRateLimit` | `governor` | Auto-applied by `ServiceBuilder` when `auto_apply = true` (the default) |
+| Redis (distributed) | `RateLimit` | `cache` | Wired manually in your route closure |
+
+**Governor (single-instance) — enable the feature and configure:**
+
+```toml
+[rate_limit]
+per_user_rpm = 100       # 100 per this instance
+per_client_rpm = 1000
+auto_apply = true        # Default
+```
+
+```toml
+# Cargo.toml
+[dependencies]
+acton-service = { version = "{% version() %}", features = ["governor"] }
+```
+
+**Redis (multi-instance) — configure Redis, then attach `RateLimit` yourself:**
+
 ```toml
 [redis]
 url = "redis://redis-cluster:6379"
-pool_size = 10
+max_connections = 10
 
 [rate_limit]
-backend = "redis"        # Distributed rate limiting
 per_user_rpm = 100       # 100 total across all instances
 per_client_rpm = 1000
+auto_apply = false       # Don't also auto-attach the in-memory limiter
 ```
 
-**Governor (Single-Instance):**
-```toml
-[rate_limit]
-backend = "governor"     # In-memory rate limiting
-per_user_rpm = 100       # 100 per this instance
-per_client_rpm = 1000
-```
-
-### Migration Path
-
-**Starting with Governor, need to scale:**
-
-1. Add Redis to infrastructure
-2. Update config to use Redis backend
-3. Restart service
-4. Scale to multiple instances
-
-No code changes needed - just configuration.
+See [Redis-Backed Rate Limiting](#redis-backed-rate-limiting) below for the wiring code.
 
 ### When Limits Feel Wrong
 
@@ -332,7 +338,7 @@ kubectl get pods -l app=my-service
 # 3 instances × 100 req/min = 300 effective limit
 ```
 
-**Fix:** Switch to Redis backend for distributed coordination.
+**Fix:** Switch to the Redis-backed `RateLimit` middleware for distributed coordination.
 
 **Symptom:** "Rate limiting is slow and sometimes fails"
 
@@ -373,69 +379,75 @@ Redis-backed rate limiting is essential for multi-instance deployments where con
 
 ### Configuration
 
+The Redis-backed limiter requires the `cache` feature and reads the same `[rate_limit]` section as the governor limiter:
+
 ```toml
 [redis]
 url = "redis://localhost:6379"
-pool_size = 10
+max_connections = 10
 
 [rate_limit]
-enabled = true
-default_requests = 100
-default_window_secs = 60
+per_user_rpm = 100
+per_client_rpm = 1000
+window_secs = 60
+auto_apply = false       # Don't also auto-attach the in-memory governor limiter
 ```
 
-### Basic Usage
+### Wiring the Middleware
 
-```rust
-use acton_service::middleware::RateLimitLayer;
-use std::time::Duration;
-
-// Allow 100 requests per 60 seconds
-let limiter = RateLimitLayer::new(100, Duration::from_secs(60));
-
-ServiceBuilder::new()
-    .with_routes(routes)
-    .with_middleware(|router| {
-        router.layer(limiter)
-    })
-    .build()
-```
-
-### Per-Endpoint Limits
-
-Different endpoints often require different rate limits. Apply rate limiting within the versioned builder:
+`RateLimit::new()` takes the `RateLimitConfig` and a Redis pool. Attach it with `axum::middleware::from_fn_with_state`:
 
 ```rust
 use acton_service::prelude::*;
-use acton_service::middleware::RateLimitLayer;
-use std::time::Duration;
+use acton_service::middleware::RateLimit;
+use axum::middleware::from_fn_with_state;
+
+let config = Config::load()?;
+let state = AppState::default();
+
+// The pool is managed by the framework's Redis pool agent
+let redis_pool = state.redis().await.expect("redis pool configured");
+
+let rate_limit = RateLimit::new(config.rate_limit.clone(), redis_pool);
 
 let routes = VersionedApiBuilder::new()
     .with_base_path("/api")
     .add_version(ApiVersion::V1, |router| {
         router
-            // Public endpoints - stricter limits
-            .route("/public/info", get(public_handler)
-                .layer(RateLimitLayer::new(10, Duration::from_secs(60))))
-
-            // Authenticated endpoints - more generous limits
-            .route("/users", get(list_users)
-                .layer(RateLimitLayer::new(100, Duration::from_secs(60))))
-
-            // Admin endpoints - even higher limits or no limiting
-            .route("/admin/settings", get(admin_handler)
-                .layer(RateLimitLayer::new(1000, Duration::from_secs(60))))
+            .route("/users", get(list_users))
+            .route("/reports/generate", post(generate_report))
+            .layer(from_fn_with_state(rate_limit, RateLimit::middleware))
     })
     .build_routes();
 
 ServiceBuilder::new()
+    .with_config(config)
+    .with_state(state)
     .with_routes(routes)
     .build()
     .serve()
     .await?;
 ```
 
-**Tip:** For simpler per-user/per-client limits, use configuration-based approach (see Quick Start) rather than per-endpoint layers.
+### Per-Endpoint Limits
+
+Per-endpoint limits are **configuration**, not code. `RateLimit` reads the `[rate_limit.routes]` table and applies the matching override — one middleware instance covers every route:
+
+```toml
+# Public endpoints - stricter limits
+[rate_limit.routes."/api/v1/public/info"]
+requests_per_minute = 10
+
+# Authenticated endpoints - more generous limits
+[rate_limit.routes."/api/v1/users"]
+requests_per_minute = 100
+
+# Admin endpoints - higher limits
+[rate_limit.routes."/api/v1/admin/settings"]
+requests_per_minute = 1000
+```
+
+See [Per-Route Configuration](#per-route-configuration) above for wildcards, method prefixes, and path normalization.
 
 ### Redis Key Structure
 
@@ -462,37 +474,57 @@ Governor provides in-memory rate limiting for single-instance deployments with z
 - Lower latency (no network calls)
 
 **Simple Configuration**
-- Predefined time window presets
-- Minimal configuration required
-- Drop-in replacement for Redis limiter
+- Configured entirely through `[rate_limit]` in `config.toml`
+- Auto-applied by `ServiceBuilder` — no code required
+- Reads the same per-route table as the Redis limiter
 
 **Limitations**
 - Not suitable for multi-instance deployments (limits multiply)
 - Counters reset on service restart
 - No cross-service synchronization
 
-### Presets
+### Automatic Wiring
 
-```rust
-use acton_service::middleware::GovernorRateLimitLayer;
+With the `governor` feature enabled and `auto_apply = true` (the default), `ServiceBuilder` constructs `GovernorRateLimit::new(config.rate_limit)` and attaches it for you. Nothing to write:
 
-// Per-second limits
-GovernorRateLimitLayer::per_second(10);   // 10 requests/second
-
-// Per-minute limits
-GovernorRateLimitLayer::per_minute(100);  // 100 requests/minute
-
-// Per-hour limits
-GovernorRateLimitLayer::per_hour(1000);   // 1000 requests/hour
+```toml
+[rate_limit]
+per_user_rpm = 100
+per_client_rpm = 1000
+window_secs = 60
 ```
 
-### Custom Windows
+### Manual Wiring
+
+Set `auto_apply = false` when you need to scope the limiter to a subset of routes:
 
 ```rust
-use std::time::Duration;
+use acton_service::prelude::*;
+use acton_service::middleware::GovernorRateLimit;
+use axum::middleware::from_fn_with_state;
 
-// Custom: 500 requests per 5 minutes
-GovernorRateLimitLayer::new(500, Duration::from_secs(300));
+let gov = GovernorRateLimit::new(config.rate_limit.clone());
+
+let routes = VersionedApiBuilder::new()
+    .with_base_path("/api")
+    .add_version(ApiVersion::V1, |router| {
+        router
+            .route("/users", get(list_users))
+            .layer(from_fn_with_state(gov, GovernorRateLimit::middleware))
+    })
+    .build_routes();
+```
+
+### Quota Presets
+
+`GovernorConfig` carries per-second, per-minute, and per-hour quota presets for building a standalone quota outside the `[rate_limit]` config:
+
+```rust
+use acton_service::middleware::GovernorConfig;
+
+GovernorConfig::per_second(10);   // 10 requests/second
+GovernorConfig::per_minute(100);  // 100 requests/minute
+GovernorConfig::per_hour(1000);   // 1000 requests/hour
 ```
 
 ### When to Use Governor
@@ -527,28 +559,15 @@ User "user:456" → rate_limit:user:456:1700000000
 Anonymous (IP 1.2.3.4) → rate_limit:ip:1.2.3.4:1700000000
 ```
 
-### Tiered Limits by Role
+### Per-User vs Per-Client Buckets
 
-Implement different limits for different user tiers:
+Both limiters key their buckets from the validated token claims — there is no `with_user_limits()` switch to flip. The bucket is chosen automatically:
 
-```rust
-use acton_service::middleware::RateLimitLayer;
+- `sub` claim present → per-user bucket, limited by `per_user_rpm`
+- `client_id` claim present → per-client bucket, limited by `per_client_rpm`
+- No claims → per-IP bucket
 
-async fn custom_rate_limiter(
-    claims: Claims,
-) -> Result<(), RateLimitError> {
-    let limit = if claims.roles.contains(&"premium".to_string()) {
-        1000  // Premium users: 1000 req/hour
-    } else if claims.roles.contains(&"user".to_string()) {
-        100   // Regular users: 100 req/hour
-    } else {
-        10    // Anonymous: 10 req/hour
-    };
-
-    // Apply limit logic
-    Ok(())
-}
-```
+Token authentication runs before rate limiting in the `ServiceBuilder` middleware order, so claims are always available to the limiter when a valid token is presented.
 
 ## Per-Client Rate Limiting
 
@@ -649,52 +668,44 @@ Choose **Governor** if:
 
 ### Combined Global + Per-User Limits
 
-```rust
-// Global limit: 10,000 req/minute total
-let global_limiter = RateLimitLayer::new(10_000, Duration::from_secs(60));
+A single limiter instance handles both. Set the global defaults with `per_user_rpm` / `per_client_rpm`, then add a `per_user = false` route entry for any endpoint that needs one shared bucket across all callers:
 
-// Per-user limit: 100 req/minute per user
-let user_limiter = RateLimitLayer::new(100, Duration::from_secs(60))
-    .with_user_limits(true);
+```toml
+[rate_limit]
+per_user_rpm = 100          # Each user: 100 req/min
+per_client_rpm = 1000       # Each service client: 1000 req/min
 
-ServiceBuilder::new()
-    .with_routes(routes)
-    .with_middleware(|router| {
-        router
-            .layer(JwtAuth::new("secret"))
-            .layer(global_limiter)   // Apply global limit first
-            .layer(user_limiter)     // Then per-user limit
-    })
-    .build()
+# One shared 10,000 req/min budget for this endpoint, across ALL callers
+[rate_limit.routes."/api/v1/search"]
+requests_per_minute = 10_000
+per_user = false
 ```
+
+Token authentication is configured in the same file — no `JwtAuth::new(...)` call and no manual layer ordering. `ServiceBuilder` always runs token auth before rate limiting, so claims are populated by the time the limiter picks a bucket:
+
+```toml
+[token]
+format = "jwt"
+public_key_path = "./keys/jwt-public.pem"
+algorithm = "RS256"
+```
+
+See [Token Authentication](/docs/token-auth) for PASETO and the other JWT algorithms.
 
 ### Endpoint-Specific Overrides
 
-```rust
-use acton_service::prelude::*;
-use acton_service::middleware::RateLimitLayer;
+```toml
+# Most endpoints: 100 req/min
+[rate_limit.routes."/api/v1/users"]
+requests_per_minute = 100
 
-let routes = VersionedApiBuilder::new()
-    .with_base_path("/api")
-    .add_version(ApiVersion::V1, |router| {
-        router
-            // Most endpoints: 100 req/min
-            .route("/users", get(list_users)
-                .layer(RateLimitLayer::new(100, Duration::from_secs(60))))
-            .route("/documents", get(list_documents)
-                .layer(RateLimitLayer::new(100, Duration::from_secs(60))))
+[rate_limit.routes."/api/v1/documents"]
+requests_per_minute = 100
 
-            // Expensive endpoint: 10 req/min
-            .route("/reports/generate", post(generate_report)
-                .layer(RateLimitLayer::new(10, Duration::from_secs(60))))
-    })
-    .build_routes();
-
-ServiceBuilder::new()
-    .with_routes(routes)
-    .build()
-    .serve()
-    .await?;
+# Expensive endpoint: 10 req/min
+[rate_limit.routes."POST /api/v1/reports/generate"]
+requests_per_minute = 10
+burst_size = 2
 ```
 
 ## Troubleshooting
@@ -706,12 +717,14 @@ ServiceBuilder::new()
 **Possible Causes:**
 1. Multiple service instances with Governor limiter
 2. Redis connection issues
-3. Middleware order incorrect
+3. `auto_apply = false` with no manually-wired limiter
+4. The `governor` feature is not enabled
 
 **Solutions:**
-- Switch to Redis-backed limiter for multi-instance
+- Switch to the Redis-backed limiter for multi-instance
 - Verify Redis connectivity with `redis-cli PING`
-- Place rate limiter after authentication but before handlers
+- Confirm `auto_apply = true`, or that you attached the middleware yourself
+- Confirm the `governor` (or `cache`) feature is enabled in `Cargo.toml`
 
 ### Redis Connection Errors
 

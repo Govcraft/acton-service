@@ -99,6 +99,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```rust
 // src/main.rs
 use acton_service::prelude::*;
+use acton_service::grpc::server::GrpcServicesBuilder;
 use tonic::{Request, Response, Status};
 
 // Include generated protobuf code
@@ -139,17 +140,23 @@ impl MyService for MyServiceImpl {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Create gRPC service
-    let grpc_service = MyServiceServer::new(MyServiceImpl::default());
+    // Collect gRPC services into tonic routes
+    let grpc_routes = GrpcServicesBuilder::new()
+        .add_service(MyServiceServer::new(MyServiceImpl::default()))
+        .build(None);
 
     // Serve on single port (HTTP + gRPC multiplexed)
     ServiceBuilder::new()
-        .with_grpc_service(grpc_service)
+        .with_grpc_services(grpc_routes)
         .build()
         .serve()
         .await
 }
 ```
+
+`GrpcServicesBuilder` (from `acton_service::grpc::server`) collects every service you register and returns a `tonic::service::Routes`. `ServiceBuilder::with_grpc_services()` takes that single value — call `.add_service()` once per gRPC service rather than calling `with_grpc_services()` repeatedly.
+
+The argument to `build()` is an optional `AppState`: pass `None` unless you enable the health service (see [Health Checks](#standard-grpc-health)), which needs the state to inspect your configured dependencies.
 
 ### 6. Build and Run
 
@@ -649,8 +656,12 @@ Server::builder()
 Or use acton-service's `ServiceBuilder` for automatic tracing:
 
 ```rust
+let grpc_routes = GrpcServicesBuilder::new()
+    .add_service(my_service)
+    .build(None);
+
 ServiceBuilder::new()
-    .with_grpc_service(my_service)  // Tracing applied automatically
+    .with_grpc_services(grpc_routes)  // Tracing applied automatically
     .build()
     .serve()
     .await?;
@@ -660,20 +671,27 @@ ServiceBuilder::new()
 
 Limit gRPC request rates:
 
+`GrpcRateLimitLayer::new()` takes a `LocalRateLimitConfig` — the same struct the `[middleware.governor]` config section deserializes into:
+
 ```rust
 use acton_service::grpc::middleware::GrpcRateLimitLayer;
-use governor::{Quota, RateLimiter};
-use std::num::NonZeroU32;
+use acton_service::config::LocalRateLimitConfig;
 
-let quota = Quota::per_second(NonZeroU32::new(100).unwrap());
-let limiter = Arc::new(RateLimiter::direct(quota));
+let rate_limit = LocalRateLimitConfig {
+    enabled: true,
+    requests_per_period: 100,
+    period_secs: 1,        // 100 requests/second
+    burst_size: 10,
+};
 
 Server::builder()
-    .layer(GrpcRateLimitLayer::new(limiter))
+    .layer(GrpcRateLimitLayer::new(rate_limit))
     .add_service(my_service)
     .serve(addr)
     .await?;
 ```
+
+Requires the `governor` feature.
 
 ### Combining Interceptors
 
@@ -703,20 +721,27 @@ let service = MyServiceServer::with_interceptor(
 
 ### Standard gRPC Health
 
-acton-service implements `grpc.health.v1.Health` protocol:
+acton-service implements the `grpc.health.v1.Health` protocol. Enable it with `.with_health()` — the builder constructs and registers the health service for you:
 
 ```rust
-use acton_service::grpc::HealthService;
+use acton_service::grpc::server::GrpcServicesBuilder;
 
-let health_service = HealthService::new();
+let state = AppState::default();
+
+let grpc_routes = GrpcServicesBuilder::new()
+    .with_health()                        // Standard gRPC health
+    .add_service(my_service)
+    .build(Some(state.clone()));          // Health needs AppState
 
 ServiceBuilder::new()
-    .with_grpc_service(health_service)  // Standard gRPC health
-    .with_grpc_service(my_service)
+    .with_state(state)
+    .with_grpc_services(grpc_routes)
     .build()
     .serve()
     .await?;
 ```
+
+The health service reports on the dependencies configured in `AppState` (database, Redis, NATS). If you enable `.with_health()` but pass `None` to `build()`, the builder logs a warning and skips the health service.
 
 Check health with grpcurl:
 
@@ -741,23 +766,25 @@ readinessProbe:
 
 ## gRPC Reflection
 
-Enable service discovery for dynamic clients (grpcurl, gRPC UI):
+Enable service discovery for dynamic clients (grpcurl, gRPC UI). Call `.with_reflection()` and register the file descriptor set generated at build time by `tonic-build` — `GrpcServicesBuilder` assembles the reflection service itself:
 
 ```rust
-use tonic_reflection::server::Builder;
+use acton_service::grpc::server::GrpcServicesBuilder;
 
-// Build reflection service
-let reflection_service = Builder::configure()
-    .register_encoded_file_descriptor_set(myservice::FILE_DESCRIPTOR_SET)
-    .build()?;
+let grpc_routes = GrpcServicesBuilder::new()
+    .with_reflection()
+    .add_file_descriptor_set(myservice::FILE_DESCRIPTOR_SET)
+    .add_service(my_service)
+    .build(None);
 
 ServiceBuilder::new()
-    .with_grpc_service(reflection_service)
-    .with_grpc_service(my_service)
+    .with_grpc_services(grpc_routes)
     .build()
     .serve()
     .await?;
 ```
+
+`.with_reflection()` requires at least one `.add_file_descriptor_set()` call. Register one descriptor set per proto package you want reflected.
 
 Now you can use grpcurl without `.proto` files:
 
@@ -785,9 +812,13 @@ grpcurl -plaintext -d '{"user_id":123}' \
 Default mode - automatic protocol detection:
 
 ```rust
+let grpc_routes = GrpcServicesBuilder::new()
+    .add_service(grpc_service)
+    .build(None);
+
 ServiceBuilder::new()
-    .with_routes(http_routes)         // HTTP routes
-    .with_grpc_service(grpc_service)  // gRPC service
+    .with_routes(http_routes)          // HTTP routes
+    .with_grpc_services(grpc_routes)   // gRPC services
     .build()
     .serve()  // Single port (8080)
     .await?;
@@ -815,9 +846,13 @@ port = 9090
 ```
 
 ```rust
+let grpc_routes = GrpcServicesBuilder::new()
+    .add_service(grpc_service)
+    .build(None);
+
 ServiceBuilder::new()
-    .with_routes(http_routes)         // Port 8080
-    .with_grpc_service(grpc_service)  // Port 9090
+    .with_routes(http_routes)          // Port 8080
+    .with_grpc_services(grpc_routes)   // Port 9090
     .build()
     .serve()
     .await?;
@@ -828,8 +863,12 @@ ServiceBuilder::new()
 Skip HTTP entirely:
 
 ```rust
+let grpc_routes = GrpcServicesBuilder::new()
+    .add_service(grpc_service)
+    .build(None);
+
 ServiceBuilder::new()
-    .with_grpc_service(grpc_service)
+    .with_grpc_services(grpc_routes)
     .build()
     .serve()
     .await?;
@@ -887,11 +926,10 @@ Full working example combining all features:
 
 ```rust
 use acton_service::prelude::*;
-use acton_service::grpc::{interceptors::*, middleware::*, HealthService};
+use acton_service::grpc::{interceptors::*, middleware::*, server::GrpcServicesBuilder};
 use acton_service::config::TokenConfig;
 use std::sync::Arc;
-use tonic::{Request, Response, Status, transport::Server};
-use tonic_reflection::server::Builder as ReflectionBuilder;
+use tonic::{Request, Response, Status};
 
 // Include generated code
 pub mod myservice {
@@ -969,19 +1007,22 @@ async fn main() -> Result<()> {
         }
     );
 
-    // Setup reflection
-    let reflection = ReflectionBuilder::configure()
-        .register_encoded_file_descriptor_set(myservice::FILE_DESCRIPTOR_SET)
-        .build()?;
+    // Build state so the health service can inspect dependencies
+    let state = AppState::default();
 
-    // Setup health
-    let health = HealthService::new();
+    // Collect services, health, and reflection into tonic routes
+    let grpc_routes = GrpcServicesBuilder::new()
+        .with_health()
+        .with_reflection()
+        .add_file_descriptor_set(myservice::FILE_DESCRIPTOR_SET)
+        .add_service(grpc_service)
+        .build(Some(state.clone()));
 
     // Serve with acton-service
     ServiceBuilder::new()
-        .with_grpc_service(health)
-        .with_grpc_service(reflection)
-        .with_grpc_service(grpc_service)
+        .with_config(config)
+        .with_state(state)
+        .with_grpc_services(grpc_routes)
         .build()
         .serve()
         .await
@@ -1031,7 +1072,7 @@ cargo build
 
 Check that:
 1. `grpc` feature is enabled in Cargo.toml
-2. Service is registered with `ServiceBuilder::with_grpc_service()`
+2. Service is added via `GrpcServicesBuilder::add_service()` and the resulting routes passed to `ServiceBuilder::with_grpc_services()`
 3. Correct port (default 8080, or check config)
 4. Protocol detection working (use separate ports to debug)
 

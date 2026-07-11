@@ -10,7 +10,7 @@ Get a backend service running in 5 minutes with automatic health checks and obse
 
 ## Prerequisites
 
-- Rust 1.70+ installed
+- Rust 1.84 or later installed
 - Basic familiarity with async Rust
 - 5 minutes of your time
 

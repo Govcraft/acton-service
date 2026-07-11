@@ -22,13 +22,13 @@ acton-service extends Askama with `TemplateContext` for common page data and `Ht
 
 ```toml
 [dependencies]
-acton-service = { version = "{{version}}", features = ["askama", "session-memory"] }
+acton-service = { version = "{% version() %}", features = ["askama", "session-memory"] }
 ```
 
 Or use `htmx-full` for the complete HTMX stack:
 
 ```toml
-acton-service = { version = "{{version}}", features = ["htmx-full"] }
+acton-service = { version = "{% version() %}", features = ["htmx-full"] }
 ```
 
 ### 2. Create a Template

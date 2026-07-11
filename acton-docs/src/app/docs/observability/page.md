@@ -137,12 +137,13 @@ export OTEL_SERVICE_NAME="my-service"
 export OTEL_EXPORTER_OTLP_PROTOCOL="grpc"
 ```
 
-Or in `config.toml`:
+Or in `config.toml`, via the `[otlp]` section:
 
 ```toml
-[observability]
+[otlp]
+endpoint = "http://jaeger:4317"
 service_name = "my-service"
-otlp_endpoint = "http://jaeger:4317"
+enabled = true
 ```
 
 ---
@@ -443,24 +444,27 @@ export OTEL_EXPORTER_OTLP_PROTOCOL="grpc"
 
 ### Configuration File
 
-Or configure via `~/.config/acton-service/my-service/config.toml`:
+Or configure via `~/.config/acton-service/my-service/config.toml`. There is no `[observability]` section — OpenTelemetry export is configured under `[otlp]`, and the log level lives under `[service]`:
 
 ```toml
-[observability]
-# Service name for tracing and metrics
-service_name = "my-service"
-
-# OpenTelemetry OTLP endpoint
-otlp_endpoint = "http://jaeger:4317"
-
+[service]
+name = "my-service"
 # Log level (trace, debug, info, warn, error)
 log_level = "info"
 
-# Enable/disable specific observability features
-tracing_enabled = true
-metrics_enabled = true
-logging_enabled = true
+[otlp]
+# OpenTelemetry OTLP endpoint (required when the section is present)
+endpoint = "http://jaeger:4317"
+
+# Service name reported on traces and metrics
+# (optional — defaults to the service name when omitted)
+service_name = "my-service"
+
+# Enable OTLP export (default: true)
+enabled = true
 ```
+
+`[otlp]` accepts exactly these three keys: `endpoint`, `service_name`, and `enabled`. Omit the whole section to run without OTLP export.
 
 ---
 
