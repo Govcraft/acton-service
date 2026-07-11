@@ -10,21 +10,25 @@ Build production backends with enforced best practices, dual HTTP+gRPC support, 
 
 ## What is this?
 
-Building production backends requires solving the same problems repeatedly: API versioning, health checks, observability, resilience patterns, connection pooling, and configuration management. Most frameworks leave these as optional concerns or implementation details.
+Building production backends requires solving the same problems repeatedly: API versioning, health checks, observability, resilience patterns, authentication, connection pooling, and configuration management. Most frameworks leave these as optional concerns or implementation details.
 
 acton-service provides a **batteries-included, type-enforced framework** where production best practices are the default path:
 
 - **Type-enforced API versioning** - Impossible to bypass, compiler-enforced versioning
 - **Dual HTTP + gRPC** - Run both protocols on the same port with automatic detection
+- **GraphQL transport** - Versioned schemas that inherit the same middleware stack
+- **Complete authentication stack** - PASETO (default) and JWT tokens, Argon2 password hashing, API keys, key rotation, OAuth/OIDC, sessions
 - **Cedar policy-based authorization** - AWS Cedar integration for fine-grained access control
+- **Security & compliance built-in** - BLAKE3 hash-chained audit logging, login lockout, NIST AC-2 account lifecycle, FIPS 140-3 capable crypto
 - **Production observability** - OpenTelemetry tracing, metrics, and structured logging built-in
 - **Resilience patterns** - Circuit breaker, retry logic, and bulkhead patterns included
+- **Multi-database support** - PostgreSQL, Turso/libsql, SurrealDB, plus ClickHouse for analytics
 - **Zero-config defaults** - XDG-compliant configuration with sensible production defaults and custom config extensions
 - **Kubernetes-ready** - Automatic health/readiness probes for orchestration
 
 It's opinionated, comprehensive, and designed for teams where best practices can't be optional.
 
-**Current Status**: acton-service is under active development. Core features (HTTP/gRPC, versioning, health checks, observability, resilience) are production-ready. Some advanced features are in progress.
+**Current Status**: acton-service is under active development but broadly feature-complete. Transports (HTTP/gRPC/GraphQL/WebSocket/SSE), versioning, health checks, observability, resilience, the authentication and authorization stack, sessions, audit logging, and multi-database support all ship today. See the [roadmap](#roadmap) for what's next.
 
 ---
 
@@ -95,9 +99,11 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-acton-service = { version = "0.2", features = ["http", "observability"] }
+acton-service = "0.27"
 tokio = { version = "1", features = ["full"] }
 ```
+
+The default features (`http`, `observability`, `crypto-aws-lc-rs`) give you a versioned HTTP service with tracing, metrics, and health checks. Enable more as you need them — see [Feature Flags](#feature-flags).
 
 Or use the CLI to scaffold a complete service:
 
@@ -115,6 +121,7 @@ Building production backends requires solving the same problems over and over:
 
 - **Dual Protocols**: Modern deployments need both HTTP REST APIs and gRPC, but most frameworks make you choose one or run two separate servers
 - **Observability**: Distributed tracing, metrics collection, and structured logging should be standard, not afterthoughts assembled from scattered libraries
+- **Authentication**: Token validation, password hashing, key rotation, OAuth flows, and session management are security-critical and easy to get wrong
 - **Resilience Patterns**: Circuit breakers, retries, and bulkheads are critical for production but tedious to implement correctly
 - **Health Checks**: Every orchestrator needs them, but every team implements them differently with varying quality
 - **API Evolution**: Breaking changes slip through because versioning is optional and easily forgotten
@@ -130,8 +137,9 @@ acton-service provides a **comprehensive, opinionated framework** where producti
 4. **Automatic health endpoints** - Kubernetes-ready liveness and readiness probes with dependency monitoring ✅
 5. **Type-enforced API versioning** - The compiler prevents unversioned APIs; impossible to bypass ✅
 6. **Zero-config defaults** - XDG-compliant configuration with sensible defaults, environment variable overrides, and custom config extensions ✅
-7. **Batteries-included middleware** - JWT auth, Cedar policy-based authorization, rate limiting, request tracking, compression, CORS, timeouts ✅
-8. **Connection pool management** - PostgreSQL, Redis, and NATS support with automatic retry and health checks ✅
+7. **Config-driven security** - PASETO/JWT authentication, Cedar policy authorization, rate limiting, sessions, and audit logging wired automatically from configuration ✅
+8. **Full identity stack** - Password hashing (Argon2), API keys, signing-key rotation, OAuth/OIDC providers, login lockout, and account lifecycle management ✅
+9. **Connection pool management** - PostgreSQL, Turso, SurrealDB, ClickHouse, Redis, and NATS support with automatic retry and health checks ✅
 
 Most importantly: **it's designed for teams**. The type system enforces best practices that individual contributors can't accidentally bypass.
 
@@ -192,32 +200,36 @@ url = "redis://localhost"
 optional = true   # Readiness succeeds even if Redis is down
 ```
 
-### Batteries-Included Middleware
+### Config-Driven Middleware
 
-Production-ready middleware stack with comprehensive coverage:
+Production middleware is **applied automatically from configuration** — no manual layering required. Configure token authentication, rate limiting, sessions, and audit logging in `config.toml`, and `ServiceBuilder` wires the layers in the correct order:
 
-```rust
-ServiceBuilder::new()
-    .with_routes(routes)
-    .with_middleware(|router| {
-        router
-            .layer(JwtAuth::new("your-secret"))
-            .layer(RequestTrackingConfig::default().layer())
-            .layer(RateLimitLayer::new(100, Duration::from_secs(60)))
-            .layer(ResilienceLayer::new()
-                .with_circuit_breaker(0.5)  // 50% failure threshold
-                .with_retry(3)               // max 3 retries
-                .with_bulkhead(100))         // max 100 concurrent requests
-    })
-    .build()
-    .serve()
-    .await?;
+```toml
+# config.toml — PASETO v4 token authentication (the default token format)
+[token.paseto]
+version = "v4"
+purpose = "public"                 # "local" (symmetric) or "public" (asymmetric)
+key_path = "./keys/paseto.key"
+issuer = "my-service"
+# public_paths = ["/public/"]      # Skip token auth for these prefixes
+
+# Or JWT instead (requires the `jwt` feature)
+# [token.jwt]
+# public_key_path = "./keys/jwt-public.pem"
+# algorithm = "RS256"              # RS256, ES256, HS256
+# issuer = "https://auth.mydomain.com"
+
+[rate_limit]
+auto_apply = true
 ```
+
+Validated claims are placed in request extensions, available to handlers, Cedar policies, GraphQL resolvers, and gRPC interceptors alike. Because everything is standard Tower middleware, you can still `.layer()` any custom or third-party middleware on your routers.
 
 Available middleware (all HTTP and gRPC compatible):
 
 **Authentication & Authorization**
-- **JWT Authentication** - Full validation with RS256, ES256, HS256/384/512 algorithms
+- **PASETO Authentication** (default) - v4 local (symmetric) and public (asymmetric) token validation
+- **JWT Authentication** (`jwt` feature) - RS256, ES256, HS256/384/512 algorithms
 - **Cedar Policy-Based Authorization** - AWS Cedar integration for fine-grained access control with:
   - Declarative policy files for resource-based permissions
   - Role-based and attribute-based access control (RBAC/ABAC)
@@ -227,21 +239,22 @@ Available middleware (all HTTP and gRPC compatible):
 - Claims structure with roles, permissions, user/client identification
 - Redis-backed token revocation (optional)
 
-**Resilience & Reliability**
+**Resilience & Reliability** (`resilience` feature)
 - **Circuit Breaker** - Configurable failure rate monitoring with auto-recovery
 - **Retry Logic** - Exponential backoff with configurable max attempts
 - **Bulkhead** - Concurrency limiting with wait timeouts to prevent overload
 
 **Rate Limiting**
 - **Redis-backed rate limiting** - Distributed rate limiting for multi-instance deployments
-- **Governor rate limiting** - Local in-memory limiting with per-second/minute/hour presets
-- Per-user and per-client limits via JWT claims
+- **Governor rate limiting** (`governor` feature) - Local in-memory limiting with per-route configuration
+- Per-user and per-client limits via token claims
 
 **Observability**
 - **Request Tracking** - UUID-based request ID generation and propagation
 - **Distributed Tracing Headers** - x-request-id, x-trace-id, x-span-id, x-correlation-id
-- **OpenTelemetry Metrics** - HTTP request count, duration histograms, active requests, sizes
+- **OpenTelemetry Metrics** (`otel-metrics` feature) - HTTP request count, duration histograms, active requests, sizes
 - **Sensitive Header Masking** - Automatic masking in logs (authorization, cookies, API keys)
+- **Security Headers** - Sensible defaults applied automatically
 
 **Standard HTTP Middleware**
 - **Compression** - gzip, br, deflate, zstd content encoding
@@ -250,11 +263,36 @@ Available middleware (all HTTP and gRPC compatible):
 - **Body Size Limits** - Prevent oversized payloads
 - **Panic Recovery** - Graceful handling of panics with error logging
 
+### Authentication & Identity
+
+Beyond token validation, the `auth` feature family provides a complete identity stack:
+
+- **Password hashing** (`auth`) - Argon2id with secure defaults ([guide](https://govcraft.github.io/acton-service/docs/password-hashing))
+- **Token generation** (`auth`) - Mint PASETO or JWT tokens with typed claims ([guide](https://govcraft.github.io/acton-service/docs/token-generation))
+- **API keys** (`auth`) - BLAKE3-hashed API key issuance and validation ([guide](https://govcraft.github.io/acton-service/docs/api-keys))
+- **Signing-key rotation** (`auth`) - Rotate token signing keys with a drain grace period for in-flight tokens
+- **OAuth 2.0 / OIDC** (`oauth`) - Pluggable provider integration built on `oauth2` and `openidconnect` ([guide](https://govcraft.github.io/acton-service/docs/oauth))
+- **Sessions** (`session-memory` / `session-redis`) - Cookie sessions via `tower-sessions` with in-memory or Redis stores ([guide](https://govcraft.github.io/acton-service/docs/session))
+- **Login lockout** (`login-lockout`) - Progressive delays and account lockout on repeated failures ([guide](https://govcraft.github.io/acton-service/docs/login-lockout))
+- **Account lifecycle** (`accounts` / `account-handlers`) - NIST AC-2 aligned account management with optional pre-built REST handlers
+
+Enable `auth-full` to get the entire stack in one flag.
+
+### Security, Audit & Compliance
+
+- **Audit logging** (`audit`) - BLAKE3 hash-chained, tamper-evident audit trails for auth, account, and request events, with storage backends for PostgreSQL, Turso, SurrealDB, and ClickHouse ([guide](https://govcraft.github.io/acton-service/docs/audit))
+- **TLS termination** (`tls`) - rustls-based HTTPS with automatic crypto-provider installation
+- **FIPS 140-3 path** - `aws-lc-rs` is the default crypto provider; see [Choosing a Crypto Provider](#choosing-a-crypto-provider)
+- **systemd journald** (`journald`) - Native journal integration for structured logs on Linux hosts
+
 ### HTTP + gRPC Support
 
 Run HTTP and gRPC services together on a single port:
 
 ```rust
+use acton_service::grpc::server::GrpcServicesBuilder;
+use acton_service::prelude::*;
+
 // HTTP handlers
 let http_routes = VersionedApiBuilder::new()
     .add_version(ApiVersion::V1, |router| {
@@ -262,22 +300,18 @@ let http_routes = VersionedApiBuilder::new()
     })
     .build_routes();
 
-// gRPC service
-#[derive(Default)]
-struct MyGrpcService;
-
-#[tonic::async_trait]
-impl my_service::MyService for MyGrpcService {
-    async fn my_method(&self, req: Request<MyRequest>)
-        -> Result<Response<MyResponse>, Status> {
-        // ...
-    }
-}
+// gRPC services with health checks and reflection
+let grpc_routes = GrpcServicesBuilder::new()
+    .with_health()
+    .with_reflection()
+    .add_file_descriptor_set(hello::FILE_DESCRIPTOR_SET)
+    .add_service(HelloServiceServer::new(HelloService::default()))
+    .build(None);
 
 // Serve both protocols on the same port (automatic protocol detection)
 ServiceBuilder::new()
     .with_routes(http_routes)
-    .with_grpc_service(my_service::MyServiceServer::new(MyGrpcService))
+    .with_grpc_services(grpc_routes)
     .build()
     .serve()
     .await?;
@@ -374,6 +408,46 @@ acton service add graphql                         # retrofit existing project
 acton service add graphql --cedar                 # add Cedar resolver guard
 ```
 
+### WebSocket, SSE & Server-Rendered Web Apps
+
+The framework isn't limited to APIs:
+
+- **WebSocket** (`websocket` feature) - Real-time bidirectional connections mounted under the versioned router ([guide](https://govcraft.github.io/acton-service/docs/websocket), [chat-server example](./acton-service/examples/websocket/chat-server.rs))
+- **Server-Sent Events** (`sse` feature) - Streaming updates over plain HTTP ([guide](https://govcraft.github.io/acton-service/docs/sse))
+- **HTMX integration** (`htmx` feature) - Request/response header extractors via `axum-htmx` ([guide](https://govcraft.github.io/acton-service/docs/htmx))
+- **Askama templates** (`askama` feature) - Compile-time checked HTML templates ([guide](https://govcraft.github.io/acton-service/docs/askama))
+
+Enable `htmx-full` (htmx + askama + sse + in-memory sessions) and you have everything needed for a hypermedia-driven web app — see the [task-manager example](./acton-service/examples/htmx/task-manager.rs).
+
+### Data Layer
+
+Choose exactly one primary database backend (enforced at compile time), and optionally add ClickHouse for analytics:
+
+- **PostgreSQL** (`database`) - SQLx with compile-time checked queries ([guide](https://govcraft.github.io/acton-service/docs/database))
+- **Turso / libsql** (`turso`) - Edge-replicated SQLite ([guide](https://govcraft.github.io/acton-service/docs/turso))
+- **SurrealDB** (`surrealdb`) - Multi-model database
+- **ClickHouse** (`clickhouse`) - Analytical database, composable with any primary backend ([guide](https://govcraft.github.io/acton-service/docs/clickhouse))
+- **Redis** (`cache`) - Connection pooling via deadpool ([guide](https://govcraft.github.io/acton-service/docs/cache))
+- **NATS JetStream** (`events`) - Event streaming ([guide](https://govcraft.github.io/acton-service/docs/events))
+
+On top of the raw pools, opt into higher-level abstractions:
+
+- **Repository traits** (`repository`) - Database-agnostic CRUD abstractions
+- **Handler traits** (`handlers`) - Pre-built REST CRUD patterns on top of repositories
+- **Pagination** (`pagination-axum` / `pagination-sqlx` / `pagination-full`) - Query-parameter extraction and SQL pagination helpers
+
+All pools are managed by `AppState` with automatic connection retry and health-check integration:
+
+```rust
+async fn list_products(State(state): State<AppState>) -> Result<Json<Vec<Product>>> {
+    let db = state.db().await.ok_or(Error::Internal("database unavailable".into()))?;
+    let products = sqlx::query_as!(Product, "SELECT id, name FROM products")
+        .fetch_all(&db)
+        .await?;
+    Ok(Json(products))
+}
+```
+
 ### Zero-Configuration Defaults
 
 Configuration follows the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html):
@@ -422,33 +496,87 @@ See the [Configuration Guide](https://govcraft.github.io/acton-service/docs/conf
 
 ## Feature Flags
 
-Enable only what you need:
+Defaults: `http`, `observability`, `crypto-aws-lc-rs`. Enable only what you need:
 
 ```toml
 [dependencies]
-acton-service = { version = "0.2", features = [
-    "http",           # Axum HTTP framework (default)
-    "grpc",           # Tonic gRPC support
-    "graphql",        # async-graphql transport (versioned)
-    "graphql-cedar",  # Cedar resolver checks (implies graphql + cedar-authz)
-    "database",       # PostgreSQL via SQLx
-    "cache",          # Redis connection pooling
-    "events",         # NATS JetStream
-    "observability",  # Structured logging (default)
-    "governor",       # Advanced rate limiting
-    "openapi",        # Swagger/OpenAPI documentation
-    "cedar-authz",    # AWS Cedar policy-based authorization
-] }
+acton-service = { version = "0.27", features = ["grpc", "database", "cache"] }
 ```
 
-**Note**: All major feature flags are implemented. Some CLI commands (like advanced endpoint generation) are still in progress. See the roadmap below.
+**Transports & protocols**
 
-Or use `full` to enable everything:
+| Feature | Description |
+|---|---|
+| `http` | Axum HTTP framework (default) |
+| `grpc` | Tonic gRPC with reflection, health checks, and interceptors |
+| `graphql` | async-graphql transport, versioned alongside HTTP/gRPC |
+| `graphql-cedar` | Cedar authorization callable from GraphQL resolvers |
+| `websocket` | WebSocket support |
+| `sse` | Server-Sent Events |
+| `tls` | rustls-based HTTPS |
+| `openapi` | Swagger UI / RapiDoc / ReDoc documentation |
+
+**Data layer** (`database`, `turso`, and `surrealdb` are mutually exclusive — pick one)
+
+| Feature | Description |
+|---|---|
+| `database` | PostgreSQL via SQLx |
+| `turso` | Turso / libsql |
+| `surrealdb` | SurrealDB |
+| `clickhouse` | ClickHouse analytics (composable with any primary backend) |
+| `cache` | Redis connection pooling |
+| `events` | NATS JetStream |
+| `repository` | Database-agnostic CRUD repository traits |
+| `handlers` | REST CRUD handler traits (implies `repository`) |
+| `pagination`, `pagination-axum`, `pagination-sqlx`, `pagination-full` | Pagination helpers |
+
+**Authentication & security** (PASETO validation is always available; these add more)
+
+| Feature | Description |
+|---|---|
+| `jwt` | JWT validation middleware |
+| `auth` | Argon2 password hashing, token generation, API keys, key rotation |
+| `oauth` | OAuth 2.0 / OIDC providers (implies `auth`) |
+| `auth-full` | Everything: auth + oauth + jwt + cache + database + lockout + accounts |
+| `cedar-authz` | AWS Cedar policy-based authorization |
+| `session`, `session-memory`, `session-redis` | Cookie sessions (tower-sessions) |
+| `login-lockout` | Progressive delay and account lockout |
+| `accounts`, `account-handlers` | NIST AC-2 account lifecycle (+ pre-built REST handlers) |
+| `audit` | BLAKE3 hash-chained audit logging |
+
+**Web apps**
+
+| Feature | Description |
+|---|---|
+| `htmx` | HTMX request/response integration |
+| `askama` | Askama template engine |
+| `htmx-full` | htmx + askama + sse + session-memory |
+
+**Observability & resilience**
+
+| Feature | Description |
+|---|---|
+| `observability` | OpenTelemetry tracing + structured logging (default) |
+| `otel-metrics` | HTTP metrics middleware (implies `observability`) |
+| `journald` | Native systemd journal logging |
+| `resilience` | Circuit breaker + bulkhead middleware |
+| `governor` | Local in-memory rate limiting |
+
+**Crypto provider** (exactly one required — see below)
+
+| Feature | Description |
+|---|---|
+| `crypto-aws-lc-rs` | aws-lc-rs rustls provider (default, FIPS 140-3 capable) |
+| `crypto-ring` | ring rustls provider (no C toolchain requirement) |
+
+Or use `full` to enable everything (with PostgreSQL as the database backend):
 
 ```toml
 [dependencies]
-acton-service = { version = "0.2", features = ["full"] }
+acton-service = { version = "0.27", features = ["full"] }
 ```
+
+See the [Feature Flags guide](https://govcraft.github.io/acton-service/docs/feature-flags) for a decision tree.
 
 ### Choosing a Crypto Provider
 
@@ -462,7 +590,7 @@ that `aws-lc-rs` requires at build time:
 
 ```toml
 [dependencies]
-acton-service = { version = "0.2", default-features = false, features = [
+acton-service = { version = "0.27", default-features = false, features = [
     "http",
     "observability",
     "crypto-ring",
@@ -504,107 +632,25 @@ async fn main() -> Result<()> {
 }
 ```
 
-### Production Service with Database
+### All Bundled Examples
 
-```rust
-use acton_service::prelude::*;
+| Example | Shows | Run with |
+|---|---|---|
+| [`simple-api`](./acton-service/examples/basic/simple-api.rs) | Versioned API, zero config | `cargo run --example simple-api` |
+| [`users-api`](./acton-service/examples/basic/users-api.rs) | Deprecation headers (RFC 8594) | `cargo run --example users-api` |
+| [`custom-config`](./acton-service/examples/custom-config.rs) | Custom configuration extensions | `cargo run --example custom-config` |
+| [`ping-pong`](./acton-service/examples/basic/ping-pong.rs) | Dual-protocol HTTP + gRPC | `cargo run --example ping-pong --features grpc` |
+| [`single-port`](./acton-service/examples/grpc/single-port.rs) | Single-port protocol detection, reflection, gRPC health | `cargo run --example single-port --features grpc` |
+| [`event-driven`](./acton-service/examples/events/event-driven.rs) | Event-driven architecture with NATS | `cargo run --example event-driven --features grpc` |
+| [`cedar-authz`](./acton-service/examples/authorization/cedar-authz.rs) | Cedar policies ([guide](./acton-service/examples/authorization/README.md)) | `cargo run --example cedar-authz --features cedar-authz,cache` |
+| [`database-api`](./acton-service/examples/database/database-api.rs) | PostgreSQL CRUD with SQLx | `cargo run --example database-api --features database` |
+| [`chat-server`](./acton-service/examples/websocket/chat-server.rs) | WebSocket real-time chat | `cargo run --example chat-server --features websocket` |
+| [`task-manager`](./acton-service/examples/htmx/task-manager.rs) | HTMX + Askama + SSE + sessions web app | `cargo run --example task-manager --features htmx-full` |
+| [`graphql-basic`](./acton-service/examples/graphql/graphql-basic.rs) | Versioned GraphQL transport | `cargo run --example graphql-basic --features graphql` |
+| [`test-observability`](./acton-service/examples/observability/test-observability.rs) | Tracing/logging setup | `cargo run --example test-observability` |
+| [`test-metrics`](./acton-service/examples/observability/test-metrics.rs) | OpenTelemetry HTTP metrics | `cargo run --example test-metrics --features otel-metrics` |
 
-#[derive(Serialize)]
-struct User {
-    id: i64,
-    name: String,
-}
-
-async fn list_users(State(state): State<AppState>) -> Result<Json<Vec<User>>> {
-    let db = state.database()?;
-    let users = sqlx::query_as!(User, "SELECT id, name FROM users")
-        .fetch_all(db)
-        .await?;
-    Ok(Json(users))
-}
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    let routes = VersionedApiBuilder::new()
-        .with_base_path("/api")
-        .add_version(ApiVersion::V1, |router| {
-            router.route("/users", get(list_users))
-        })
-        .build_routes();
-
-    ServiceBuilder::new()
-        .with_routes(routes)
-        .build()
-        .serve()
-        .await
-}
-```
-
-Configuration in `~/.config/acton-service/my-service/config.toml`:
-
-```toml
-[service]
-name = "my-service"
-port = 8080
-
-[database]
-url = "postgres://localhost/mydb"
-max_connections = 50
-```
-
-### Event-Driven Service
-
-```rust
-use acton_service::prelude::*;
-
-async fn process_event(msg: async_nats::Message) -> Result<()> {
-    let payload: serde_json::Value = serde_json::from_slice(&msg.payload)?;
-    info!("Processing event: {:?}", payload);
-    Ok(())
-}
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    let config = Config::load()?;
-    init_tracing(&config)?;
-
-    let state = AppState::builder()
-        .config(config.clone())
-        .build()
-        .await?;
-
-    let nats = state.nats()?;
-    let mut subscriber = nats.subscribe("events.>").await?;
-
-    while let Some(msg) = subscriber.next().await {
-        if let Err(e) = process_event(msg).await {
-            error!("Event processing failed: {}", e);
-        }
-    }
-
-    Ok(())
-}
-```
-
-See the [Examples documentation](https://govcraft.github.io/acton-service/docs/examples) for complete examples including:
-
-- Simple versioned API - [`simple-api.rs`](./acton-service/examples/basic/simple-api.rs)
-- User management API with deprecation - [`users-api.rs`](./acton-service/examples/basic/users-api.rs)
-- Dual-protocol HTTP + gRPC - [`ping-pong.rs`](./acton-service/examples/basic/ping-pong.rs)
-- Custom configuration extensions - [`custom-config.rs`](./acton-service/examples/custom-config.rs)
-- Event-driven architecture - [`event-driven.rs`](./acton-service/examples/events/event-driven.rs)
-- Cedar policy-based authorization - [`cedar-authz.rs`](./acton-service/examples/authorization/cedar-authz.rs) | [Guide](./acton-service/examples/authorization/README.md)
-
-Run examples:
-
-```bash
-cargo run --example simple-api
-cargo run --example users-api
-cargo run --example custom-config
-cargo run --example ping-pong --features grpc
-cargo run --example event-driven --features grpc
-cargo run --example cedar-authz --features cedar-authz,cache
-```
+See the [Examples documentation](https://govcraft.github.io/acton-service/docs/examples) for walkthroughs.
 
 ## CLI Tool
 
@@ -620,21 +666,33 @@ acton service new my-api --yes
 # Full-featured service
 acton service new user-service \
     --http \
+    --grpc \
     --database postgres \
     --cache redis \
     --events nats \
-    --observability
+    --observability \
+    --graphql
 
-# Add endpoints to existing service
+# Add components to an existing service
 cd user-service
 acton service add endpoint POST /users --handler create_user
 acton service add worker email-worker --source nats --stream emails
+acton service add grpc PaymentService
+acton service add graphql --cedar
+acton service add middleware rate-limit
+acton service add version v2 --from v1
 
-# Generate Kubernetes manifests
+# Generate deployment and config artifacts
 acton service generate deployment --hpa --monitoring
+acton service generate config
+acton service generate proto
+
+# Validate and iterate
+acton service validate
+acton service dev
 ```
 
-See the [CLI documentation](./acton-cli/README.md) for details.
+See the [CLI documentation](https://govcraft.github.io/acton-service/docs/cli-overview) for details.
 
 ## Architecture
 
@@ -642,10 +700,13 @@ acton-service is built on production-proven Rust libraries:
 
 - **HTTP**: [axum](https://github.com/tokio-rs/axum) - Ergonomic web framework
 - **gRPC**: [tonic](https://github.com/hyperium/tonic) - Native Rust gRPC
-- **Database**: [SQLx](https://github.com/launchbadge/sqlx) - Compile-time checked queries
+- **GraphQL**: [async-graphql](https://github.com/async-graphql/async-graphql) - GraphQL server library
+- **Database**: [SQLx](https://github.com/launchbadge/sqlx) (PostgreSQL), [libsql](https://github.com/tursodatabase/libsql) (Turso), [SurrealDB](https://github.com/surrealdb/surrealdb), [clickhouse-rs](https://github.com/ClickHouse/clickhouse-rs)
 - **Cache**: [redis-rs](https://github.com/redis-rs/redis-rs) - Redis client
 - **Events**: [async-nats](https://github.com/nats-io/nats.rs) - NATS client
+- **Tokens**: [rusty_paseto](https://github.com/rrrodzilla/rusty_paseto) - PASETO implementation
 - **Observability**: [OpenTelemetry](https://github.com/open-telemetry/opentelemetry-rust) - Distributed tracing
+- **Concurrency**: [acton-reactive](https://github.com/Govcraft/acton-reactive) - Actor-based background workers
 
 Design principles:
 
@@ -672,9 +733,18 @@ Design principles:
 - **[Configuration](https://govcraft.github.io/acton-service/docs/configuration)** - Environment and file-based configuration
 - **[API Versioning](https://govcraft.github.io/acton-service/docs/api-versioning)** - Type-safe versioning patterns
 - **[Health Checks](https://govcraft.github.io/acton-service/docs/health-checks)** - Kubernetes liveness and readiness
-- **[Database](https://govcraft.github.io/acton-service/docs/database)** - PostgreSQL integration with SQLx
-- **[JWT Authentication](https://govcraft.github.io/acton-service/docs/jwt-auth)** - Authentication patterns
+- **[Database](https://govcraft.github.io/acton-service/docs/database)** - PostgreSQL, [Turso](https://govcraft.github.io/acton-service/docs/turso), and [ClickHouse](https://govcraft.github.io/acton-service/docs/clickhouse)
+- **[Token Authentication](https://govcraft.github.io/acton-service/docs/token-auth)** - PASETO and JWT validation
+- **[OAuth / OIDC](https://govcraft.github.io/acton-service/docs/oauth)** - Provider integration
+- **[Sessions](https://govcraft.github.io/acton-service/docs/session)** - Cookie sessions with memory or Redis stores
 - **[Cedar Authorization](https://govcraft.github.io/acton-service/docs/cedar-auth)** - Policy-based access control
+- **[Audit Logging](https://govcraft.github.io/acton-service/docs/audit)** - Tamper-evident audit trails
+- **[Rate Limiting](https://govcraft.github.io/acton-service/docs/rate-limiting)** - Distributed and local strategies
+- **[Resilience](https://govcraft.github.io/acton-service/docs/resilience)** - Circuit breaker, retry, bulkhead
+- **[GraphQL](https://govcraft.github.io/acton-service/docs/graphql-guide)** - Versioned GraphQL transport
+- **[WebSocket](https://govcraft.github.io/acton-service/docs/websocket)** - Real-time connections
+- **[HTMX](https://govcraft.github.io/acton-service/docs/htmx)** - Hypermedia-driven web apps
+- **[Crypto Provider](https://govcraft.github.io/acton-service/docs/crypto-provider)** - aws-lc-rs vs ring, FIPS
 - **[Observability](https://govcraft.github.io/acton-service/docs/observability)** - Metrics, tracing, and logging
 - **[Production Deployment](https://govcraft.github.io/acton-service/docs/production)** - Production best practices
 
@@ -809,26 +879,30 @@ See the [Examples documentation](https://govcraft.github.io/acton-service/docs/e
 
 **Implemented** ✅
 - **Dual Protocol Support**: Single-port HTTP + gRPC multiplexing with automatic protocol detection
-- **Complete Observability Stack**: OpenTelemetry tracing/metrics (OTLP exporter), structured JSON logging, distributed request tracing
+- **GraphQL Transport**: async-graphql integration with path-versioned schemas, GraphiQL, claims propagation, and Cedar resolver authorization
+- **WebSocket & SSE**: Real-time connections and server-sent events under the versioned router
+- **Complete Observability Stack**: OpenTelemetry tracing/metrics (OTLP exporter), structured JSON logging, journald integration, distributed request tracing
 - **Production Resilience Patterns**: Circuit breaker, exponential backoff retry, bulkhead (concurrency limiting)
-- **Comprehensive Middleware**: JWT authentication (RS256/ES256/HS256/384/512), Redis-backed distributed rate limiting, local governor rate limiting, request tracking with correlation IDs, OpenTelemetry metrics middleware
-- **Cedar Policy-Based Authorization**: AWS Cedar integration with declarative policies, manual reload endpoint, Redis caching, HTTP/gRPC support, customizable path normalization (automatic hot-reload in progress)
+- **Token Authentication**: PASETO v4 (default) and JWT (RS256/ES256/HS256/384/512), config-driven and auto-applied, with Redis-backed revocation
+- **Identity Stack**: Argon2 password hashing, API keys, token generation, signing-key rotation, OAuth 2.0/OIDC providers, cookie sessions (memory/Redis)
+- **Security & Compliance**: BLAKE3 hash-chained audit logging with pluggable storage, login lockout, NIST AC-2 account lifecycle, TLS with FIPS 140-3 capable crypto provider
+- **Cedar Policy-Based Authorization**: AWS Cedar integration with declarative policies, manual reload endpoint, Redis caching, HTTP/gRPC/GraphQL support, customizable path normalization
 - **Type-Enforced API Versioning**: Compile-time enforcement with RFC 8594 deprecation headers
 - **Automatic Health Checks**: Kubernetes-ready liveness/readiness probes with dependency monitoring (database, cache, events)
-- **Connection Pool Management**: PostgreSQL (SQLx), Redis (Deadpool), NATS JetStream with automatic retry and health checks
+- **Multi-Database Support**: PostgreSQL (SQLx), Turso/libsql, SurrealDB, ClickHouse analytics, Redis (Deadpool), NATS JetStream — all with automatic retry and health checks
+- **Persistence Abstractions**: Repository and REST handler traits, pagination helpers
+- **Web App Stack**: HTMX integration, Askama templates, session-backed hypermedia apps
 - **XDG-Compliant Configuration**: Multi-source config with environment variable overrides and sensible defaults
 - **OpenAPI/Swagger Support**: Multiple UI options (Swagger UI, RapiDoc, ReDoc) with multi-version documentation
-- **CLI Scaffolding Tool**: Service generation with configurable features (database, cache, events, observability)
+- **CLI Tooling**: Service scaffolding plus `add endpoint/worker/grpc/graphql/middleware/version`, `generate config/deployment/proto`, `validate`, and `dev` commands
 - **gRPC Features**: Reflection service, health checks, interceptors, middleware parity with HTTP
-- **GraphQL Transport** (`graphql` feature): async-graphql + Axum integration, path-versioned schemas, GraphiQL, claims propagation, and optional Cedar resolver authorization (`graphql-cedar`)
 
 **In Progress** 🚧
-- Enhanced CLI commands (add endpoint, worker generation, deployment manifest creation)
+- Cedar automatic policy hot-reload (manual reload endpoint available today)
 - Additional OpenAPI schema generation utilities
 
 **Planned** 📋
 - GraphQL subscriptions over WebSocket
-- WebSocket support for real-time features
 - Service mesh integration (Istio, Linkerd)
 - Additional database backends (MySQL, MongoDB)
 - Observability dashboards and sample configurations
@@ -839,7 +913,7 @@ See the [Examples documentation](https://govcraft.github.io/acton-service/docs/e
 
 **Q: How does this compare to using Axum or Tonic directly?**
 
-A: acton-service is built on top of Axum (HTTP) and Tonic (gRPC) but adds production-ready features as defaults: type-enforced versioning, automatic health checks, observability stack, resilience patterns, and connection pool management. If you need maximum flexibility, use the underlying libraries directly. If you want production best practices enforced by the type system, use acton-service.
+A: acton-service is built on top of Axum (HTTP) and Tonic (gRPC) but adds production-ready features as defaults: type-enforced versioning, automatic health checks, observability stack, resilience patterns, a complete auth stack, and connection pool management. If you need maximum flexibility, use the underlying libraries directly. If you want production best practices enforced by the type system, use acton-service.
 
 **Q: Can I run both HTTP and gRPC on the same port?**
 
@@ -847,7 +921,11 @@ A: Yes! This is a core feature. acton-service provides automatic protocol detect
 
 **Q: Does this work with existing axum middleware?**
 
-A: Yes. All Tower middleware works unchanged. Use `.layer()` with any tower middleware. The framework includes comprehensive middleware for JWT auth, rate limiting, resilience patterns, request tracking, and metrics.
+A: Yes. All Tower middleware works unchanged. Use `.layer()` with any tower middleware. The framework's own middleware (token auth, Cedar, rate limiting, audit, sessions) is applied automatically from configuration in the correct order.
+
+**Q: Why PASETO instead of JWT by default?**
+
+A: PASETO (Platform-Agnostic Security Tokens) eliminates JWT's algorithm-confusion pitfalls by fixing the algorithm per version. JWT remains fully supported behind the `jwt` feature — configure whichever your infrastructure requires under `[token]`.
 
 **Q: Why enforce versioning so strictly?**
 
@@ -859,7 +937,7 @@ A: No. If you need unversioned routes, use axum directly. acton-service is opini
 
 **Q: Is this production-ready?**
 
-A: Core features are production-ready: HTTP/gRPC servers, type-enforced versioning, health checks, observability (OpenTelemetry tracing/metrics), resilience patterns (circuit breaker, retry, bulkhead), middleware stack, and connection pooling (PostgreSQL, Redis, NATS). The framework is built on battle-tested libraries (axum, tonic, sqlx). Some advanced CLI features are in progress. Review the roadmap and test thoroughly for your use case.
+A: Yes, with the usual caveats of a pre-1.0 crate: expect occasional breaking changes between minor versions (documented in the [CHANGELOG](./CHANGELOG.md)). The framework is built on battle-tested libraries (axum, tonic, sqlx) and its features — transports, auth, authorization, audit, resilience, pooling — ship complete with tests. Review the roadmap and test thoroughly for your use case.
 
 **Q: What's the performance overhead?**
 
@@ -879,7 +957,7 @@ See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for guidelines (coming soon).
 
 ## Changelog
 
-See [`CHANGELOG.md`](./CHANGELOG.md) for version history (coming soon).
+See [`CHANGELOG.md`](./CHANGELOG.md) for version history.
 
 ## License
 
@@ -894,6 +972,7 @@ Built with excellent open source libraries:
 - [tonic](https://github.com/hyperium/tonic) - gRPC implementation
 - [tower](https://github.com/tower-rs/tower) - Middleware foundation
 - [SQLx](https://github.com/launchbadge/sqlx) - Database client
+- [rusty_paseto](https://github.com/rrrodzilla/rusty_paseto) - PASETO tokens
 
 Inspired by production challenges at scale. Built by developers who've maintained backend services in production.
 
