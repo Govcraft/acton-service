@@ -6,7 +6,7 @@ authors.workspace = true
 license.workspace = true
 description = "CLI tool for scaffolding and managing acton-service backend services"
 repository = "https://github.com/Govcraft/acton-service"
-homepage = "https://github.com/Govcraft/acton-service"
+homepage = "https://govcraft.github.io/acton-service/"
 documentation = "https://docs.rs/acton-cli"
 readme = "README.md"
 keywords = ["microservice", "cli", "scaffolding", "codegen", "framework"]
@@ -18,7 +18,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Workspace dependencies
-acton-service = { path = "../acton-service", version = "0.27.0" }
+acton-service = { path = "../acton-service", version = "0.27.1" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

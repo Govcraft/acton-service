@@ -1,5 +1,5 @@
 // Markdoc functions for version management
-const ACTON_VERSION = '0.27.0'
+const ACTON_VERSION = '0.27.1'
 
 export const version = {
   transform() {
