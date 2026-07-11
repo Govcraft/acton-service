@@ -50,6 +50,7 @@ export const navigation = [
     links: [
       { title: 'Database (PostgreSQL)', href: '/docs/database' },
       { title: 'Turso (libsql)', href: '/docs/turso' },
+      { title: 'SurrealDB', href: '/docs/surrealdb' },
       { title: 'Cache (Redis)', href: '/docs/cache' },
       { title: 'Events (NATS)', href: '/docs/events' },
       { title: 'ClickHouse (Analytics)', href: '/docs/clickhouse' },

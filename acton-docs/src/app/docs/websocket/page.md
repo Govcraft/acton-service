@@ -38,14 +38,14 @@ Enable the WebSocket feature:
 
 ```toml
 [dependencies]
-acton-service = { version = "0.8", features = ["websocket"] }
+{% $dep.websocketOnly %}
 ```
 
 Or add to existing features:
 
 ```toml
 [dependencies]
-acton-service = { version = "0.8", features = ["http", "websocket", "observability"] }
+acton-service = { version = "{% version() %}", features = ["http", "websocket", "observability"] }
 ```
 
 ---

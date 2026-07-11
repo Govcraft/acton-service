@@ -79,14 +79,16 @@ This endpoint almost always returns 200 OK. It's designed to detect catastrophic
 
 Returns HTTP 200 if the service and all **required** dependencies are healthy. Returns HTTP 503 if any required dependency is unavailable.
 
+Each entry in `dependencies` is an object with a boolean `healthy` flag and an optional human-readable `message`.
+
 **Response (Success):**
 ```json
 {
   "ready": true,
   "service": "my-service",
   "dependencies": {
-    "database": "healthy",
-    "redis": "healthy"
+    "database": { "healthy": true, "message": "Connected" },
+    "redis": { "healthy": true, "message": "Connected" }
   }
 }
 ```
@@ -97,11 +99,13 @@ Returns HTTP 200 if the service and all **required** dependencies are healthy. R
   "ready": false,
   "service": "my-service",
   "dependencies": {
-    "database": "unhealthy",
-    "redis": "healthy"
+    "database": { "healthy": false, "message": "Connection failed: connection refused" },
+    "redis": { "healthy": true, "message": "Connected" }
   }
 }
 ```
+
+`ready` is `false` — and the status code `503` — only when a **required** (`optional = false`) dependency is unhealthy. An unhealthy dependency marked `optional = true` is still reported with `"healthy": false`, but leaves `ready: true` and a `200 OK`.
 
 {% callout type="note" title="Understanding Degraded State" %}
 When `/health` returns 200 but `/ready` returns 503, your service is in **degraded state**:
@@ -161,7 +165,7 @@ optional = false  # REQUIRED: Readiness fails if database is down
 
 [redis]
 url = "redis://localhost:6379"
-pool_size = 20
+max_connections = 20
 optional = true   # OPTIONAL: Readiness succeeds even if Redis is down
 
 [nats]
@@ -301,7 +305,8 @@ curl http://localhost:8080/health
 # Response
 {
   "status": "healthy",
-  "timestamp": "2025-11-16T10:30:00Z"
+  "service": "my-service",
+  "version": "{% $version.acton %}"
 }
 ```
 
@@ -315,9 +320,9 @@ curl http://localhost:8080/ready
   "ready": true,
   "service": "my-service",
   "dependencies": {
-    "database": "healthy",
-    "redis": "healthy",
-    "nats": "healthy"
+    "database": { "healthy": true, "message": "Connected" },
+    "redis": { "healthy": true, "message": "Connected" },
+    "nats": { "healthy": true, "message": "Connected" }
   }
 }
 ```
@@ -333,19 +338,21 @@ docker stop redis
 # Check readiness
 curl http://localhost:8080/ready
 
-# Response (if Redis is required)
+# Response (if Redis is required, i.e. optional = false)
 {
   "ready": false,
   "service": "my-service",
   "dependencies": {
-    "database": "healthy",
-    "redis": "unhealthy",
-    "nats": "healthy"
+    "database": { "healthy": true, "message": "Connected" },
+    "redis": { "healthy": false, "message": "Connection failed: connection refused" },
+    "nats": { "healthy": true, "message": "Connected" }
   }
 }
 
 # HTTP status code: 503 Service Unavailable
 ```
+
+If Redis were instead configured with `optional = true`, the same outage would report `"redis": { "healthy": false, ... }` but keep `"ready": true` and return **200 OK** — the pod stays in the load balancer.
 
 ### Kubernetes Pod Testing
 

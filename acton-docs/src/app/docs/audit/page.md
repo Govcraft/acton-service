@@ -221,7 +221,7 @@ When a database feature is enabled alongside `audit`, events are persisted with 
 
 ```toml
 [dependencies]
-acton-service = { version = "0.11.0", features = ["audit", "database"] }
+{% $dep.auditDatabase %}
 ```
 
 Uses `CREATE RULE` to prevent updates and deletes on the `audit_events` table.
@@ -230,7 +230,7 @@ Uses `CREATE RULE` to prevent updates and deletes on the `audit_events` table.
 
 ```toml
 [dependencies]
-acton-service = { version = "0.11.0", features = ["audit", "turso"] }
+{% dep(["audit", "turso"]) %}
 ```
 
 Uses `CREATE TRIGGER ... RAISE(ABORT)` to enforce immutability.
@@ -239,7 +239,7 @@ Uses `CREATE TRIGGER ... RAISE(ABORT)` to enforce immutability.
 
 ```toml
 [dependencies]
-acton-service = { version = "0.11.0", features = ["audit", "surrealdb"] }
+{% dep(["audit", "surrealdb"]) %}
 ```
 
 Uses `PERMISSIONS FOR update, delete NONE` on the audit table.
@@ -281,7 +281,7 @@ When the `observability` feature is also enabled, audit events are exported as s
 
 ```toml
 [dependencies]
-acton-service = { version = "0.11.0", features = ["audit", "observability"] }
+{% $dep.audit %}
 ```
 
 ```toml
@@ -348,14 +348,29 @@ Built-in event kinds for common operations:
 | `AuthTokenInvalid` | Bearer token failed validation (middleware-emitted) |
 | `AuthLogout` | User logout |
 | `AuthTokenRefresh` | Token refresh |
-| `AuthTokenRevoked` | Revoked token used |
+| `AuthTokenRevoked` | Token revocation |
 | `AuthPasswordChanged` | Password change |
 | `AuthApiKeyCreated` | API key created |
 | `AuthApiKeyRevoked` | API key revoked |
 | `AuthOAuthCallback` | OAuth callback processed |
 | `AuthPermissionDenied` | Authorization denied |
+| `AuthAccountLocked` | Account locked after repeated login failures (requires `login-lockout`) |
+| `AuthAccountUnlocked` | Account unlocked (requires `login-lockout`) |
+| `AccountCreated` | Account created (requires `accounts`) |
+| `AccountDisabled` | Account disabled by an administrator (requires `accounts`) |
+| `AccountEnabled` | Account enabled or re-activated (requires `accounts`) |
+| `AccountLocked` | Account locked due to a security event (requires `accounts`) |
+| `AccountUnlocked` | Account unlocked (requires `accounts`) |
+| `AccountExpired` | Account expired (requires `accounts`) |
+| `AccountDeleted` | Account deleted (requires `accounts`) |
+| `AccountUpdated` | Account updated — profile, email verification, password, or roles (requires `accounts`) |
+| `AuthKeyRotated` | Signing key rotated (new key active, old key draining) |
+| `AuthKeyRetired` | Signing key retired after its drain period expired |
+| `AuthKeyRotationFailed` | Key rotation failed |
+| `ConfigLoaded` | Configuration loaded at startup (NIST CM-3) |
+| `ConfigDriftDetected` | Active configuration differs from on-disk sources (NIST CM-3) |
 | `HttpRequest` | HTTP request (from middleware) |
-| `HttpRequestDenied` | Denied HTTP request |
+| `HttpRequestDenied` | Denied HTTP request (rate limit, auth failure, etc.) |
 | `Custom(String)` | Custom application event |
 
 ### Severity Levels

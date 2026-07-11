@@ -30,7 +30,7 @@ A complete backend service with:
 **Time Commitment**: 30-45 minutes
 
 **Prerequisites**:
-- Rust 1.70+ installed
+- Rust 1.84 or later installed
 - PostgreSQL installed (or Docker)
 - Basic understanding of REST APIs and async Rust
 
@@ -312,9 +312,19 @@ SELECT * FROM users;
 Replace the handler functions:
 
 ```rust
+// Helper: the pool is optional, so unwrap it once per handler.
+// `state.db()` is async and returns `Option<PgPool>` — `None` means the
+// `database` feature is off or the pool failed to initialize.
+async fn db_pool(state: &AppState) -> Result<sqlx::PgPool> {
+    state
+        .db()
+        .await
+        .ok_or_else(|| Error::Internal("database pool unavailable".to_string()))
+}
+
 // List all users (with database)
 async fn list_users(State(state): State<AppState>) -> Result<Json<Vec<User>>> {
-    let db = state.database()?;
+    let db = db_pool(&state).await?;
 
     let users: Vec<User> = sqlx::query_as!(
         User,
@@ -328,11 +338,11 @@ async fn list_users(State(state): State<AppState>) -> Result<Json<Vec<User>>> {
         ORDER BY id
         "#
     )
-    .fetch_all(db)
+    .fetch_all(&db)
     .await
     .map_err(|e| {
         error!("Database error: {}", e);
-        Error::DatabaseError(e.to_string())
+        Error::from(e)
     })?;
 
     Ok(Json(users))
@@ -343,7 +353,7 @@ async fn get_user(
     State(state): State<AppState>,
     Path(id): Path<u64>,
 ) -> Result<Json<User>> {
-    let db = state.database()?;
+    let db = db_pool(&state).await?;
 
     let user = sqlx::query_as!(
         User,
@@ -358,11 +368,11 @@ async fn get_user(
         "#,
         id as i64
     )
-    .fetch_optional(db)
+    .fetch_optional(&db)
     .await
     .map_err(|e| {
         error!("Database error: {}", e);
-        Error::DatabaseError(e.to_string())
+        Error::from(e)
     })?
     .ok_or(Error::NotFound("User not found".to_string()))?;
 
@@ -374,7 +384,7 @@ async fn create_user(
     State(state): State<AppState>,
     Json(req): Json<CreateUserRequest>,
 ) -> Result<(StatusCode, Json<User>)> {
-    let db = state.database()?;
+    let db = db_pool(&state).await?;
 
     let user = sqlx::query_as!(
         User,
@@ -390,16 +400,25 @@ async fn create_user(
         req.username,
         req.email
     )
-    .fetch_one(db)
+    .fetch_one(&db)
     .await
     .map_err(|e| {
         error!("Database error: {}", e);
-        Error::DatabaseError(e.to_string())
+        Error::from(e)
     })?;
 
     Ok((StatusCode::CREATED, Json(user)))
 }
 ```
+
+{% callout type="note" title="Why `state.db()` is async and optional" %}
+`AppState::db()` is `async` and returns `Option<PgPool>` — connection pools are
+built lazily, and a service compiled without the `database` feature simply has
+none. Unwrap it once at the top of each handler (as `db_pool` does above), then
+pass `&db` to sqlx's `fetch_*` calls. `sqlx::Error` converts into
+`acton_service::Error` via `From`, so `?` alone works if you don't need the log
+line.
+{% /callout %}
 
 ### Test with Real Database
 
@@ -522,8 +541,12 @@ Update handlers to accept your custom state:
 ```rust
 // Access both framework and custom state
 async fn list_users(State(state): State<UserServiceState>) -> Result<Json<Vec<User>>> {
-    // Access framework state
-    let db = state.app.database()?;
+    // Access framework state — `db()` is async and returns Option<PgPool>
+    let db = state
+        .app
+        .db()
+        .await
+        .ok_or_else(|| Error::Internal("database pool unavailable".to_string()))?;
 
     // Access custom state
     let mut hits = state.cache_hits.write().await;
@@ -542,9 +565,8 @@ async fn list_users(State(state): State<UserServiceState>) -> Result<Json<Vec<Us
         ORDER BY id
         "#
     )
-    .fetch_all(db)
-    .await
-    .map_err(|e| Error::DatabaseError(e.to_string()))?;
+    .fetch_all(&db)
+    .await?;
 
     Ok(Json(users))
 }
@@ -607,7 +629,7 @@ struct UserListResponse {
 
 ```rust
 async fn list_users_v2(State(state): State<AppState>) -> Result<Json<UserListResponse>> {
-    let db = state.database()?;
+    let db = db_pool(&state).await?;
 
     let users: Vec<User> = sqlx::query_as!(
         User,
@@ -621,9 +643,8 @@ async fn list_users_v2(State(state): State<AppState>) -> Result<Json<UserListRes
         ORDER BY id
         "#
     )
-    .fetch_all(db)
-    .await
-    .map_err(|e| Error::DatabaseError(e.to_string()))?;
+    .fetch_all(&db)
+    .await?;
 
     let total = users.len();
 
@@ -687,58 +708,84 @@ The framework automatically adds RFC-compliant deprecation headers to V1 respons
 
 **Time**: 5 minutes
 
-### Add JWT Middleware
+### Turn On Token Authentication
 
-Update your `add_version` for V2 to include auth:
+You don't layer auth middleware onto routes by hand. Adding a `[token]` section to
+`config.toml` makes `ServiceBuilder` apply token authentication automatically to
+every route it serves.
 
-```rust
-use acton_service::middleware::JwtAuth;
-
-// In main(), before routes:
-let jwt_secret = std::env::var("JWT_SECRET")
-    .unwrap_or_else(|_| "dev-secret-key".to_string());
-let auth_layer = JwtAuth::new(&jwt_secret);
-
-// Update V2 routes to add auth
-.add_version(ApiVersion::V2, |router| {
-    router
-        .route("/status", get(status))
-        // Public endpoint
-        .route("/users", get(list_users_v2))
-        // Protected endpoints
-        .route("/users", post(create_user))
-        .route("/users/{id}", get(get_user))
-        .layer(auth_layer)
-})
-```
-
-### Generate a Test JWT
-
-For testing, use [jwt.io](https://jwt.io/) or create a token:
+First, generate a key:
 
 ```bash
-# Example token (HS256, secret: "dev-secret-key")
-export TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+mkdir -p keys
+head -c 32 /dev/urandom > keys/paseto.key
+```
+
+Then add the `[token]` section to `config.toml`:
+
+```toml
+[token]
+format = "paseto"
+version = "v4"
+purpose = "local"                # symmetric — one shared 32-byte key
+key_path = "./keys/paseto.key"
+issuer = "user-service"
+
+# Prefixes that bypass token auth entirely
+public_paths = ["/health", "/ready"]
+```
+
+{% callout type="warning" title="The `[token]` wire format is flat" %}
+The format is selected by the `format` field **inside** `[token]`. A nested
+`[token.paseto]` or `[token.jwt]` table will **not** parse. Write `[token]` with
+`format = "paseto"` (or `format = "jwt"`) and put the remaining fields inline, as
+above.
+{% /callout %}
+
+Your builder chain doesn't change at all — that's the point:
+
+```rust
+ServiceBuilder::new()
+    .with_routes(routes)
+    .build()
+    .serve()
+    .await
+```
+
+### Prefer JWT?
+
+Enable the `jwt` feature and switch the `format`. Everything else stays the same:
+
+```toml
+[token]
+format = "jwt"
+public_key_path = "./keys/jwt-public.pem"
+algorithm = "RS256"              # RS256, ES256, or HS256
+issuer = "https://auth.example.com"
+audience = "api.example.com"
 ```
 
 ### Test Authenticated Endpoints
 
 ```bash
-# Public endpoint (no auth needed)
-curl http://localhost:8080/api/v2/users
+# Health endpoints are in public_paths — no token needed
+curl http://localhost:8080/health
 
-# Protected endpoint without auth (should fail)
+# Protected endpoint without a token (should fail)
 curl -X POST http://localhost:8080/api/v2/users \
   -H "Content-Type: application/json" \
   -d '{"username":"dave","email":"dave@example.com"}'
 # Output: 401 Unauthorized
 
-# Protected endpoint with auth (should succeed)
+# Protected endpoint with a token (should succeed)
 curl -X POST http://localhost:8080/api/v2/users \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"username":"dave","email":"dave@example.com"}'
 ```
+
+See [Token Authentication](/docs/token-auth) for the full option set, and
+[Token Generation](/docs/token-generation) for minting tokens your service will accept.
 
 ---
 
@@ -828,10 +875,10 @@ async fn create_user(
     State(state): State<AppState>,
     Json(req): Json<CreateUserRequest>,
 ) -> Result<impl IntoResponse> {
-    let db = state.database()?;
+    let db = db_pool(&state).await?;
 
     let user = sqlx::query_as!(/* ... */)
-        .fetch_one(db)
+        .fetch_one(&db)
         .await?;
 
     // Created response with Location header
@@ -960,7 +1007,7 @@ async fn create_user(
         return Err(Error::ValidationError("Invalid email format".to_string()));
     }
 
-    let db = state.database()?;
+    let db = db_pool(&state).await?;
 
     let user = sqlx::query_as!(
         User,
@@ -976,13 +1023,18 @@ async fn create_user(
         req.username,
         req.email
     )
-    .fetch_one(db)
+    .fetch_one(&db)
     .await
     .map_err(|e| {
-        if e.to_string().contains("duplicate key") {
-            Error::ConflictError("Username or email already exists".to_string())
+        // Turn a unique-constraint violation into a 409 instead of a 500
+        let is_duplicate = e
+            .as_database_error()
+            .is_some_and(|db_err| db_err.is_unique_violation());
+
+        if is_duplicate {
+            Error::Conflict("Username or email already exists".to_string())
         } else {
-            Error::DatabaseError(e.to_string())
+            Error::from(e)
         }
     })?;
 
@@ -1013,7 +1065,7 @@ curl -X POST http://localhost:8080/api/v2/users \
 ```
 
 {% callout type="note" title="Automatic Error Mapping" %}
-The framework automatically maps `Error` variants to appropriate HTTP status codes: `ValidationError` → 400, `NotFound` → 404, `ConflictError` → 409, etc.
+The framework automatically maps `Error` variants to appropriate HTTP status codes: `ValidationError` → 422, `BadRequest` → 400, `NotFound` → 404, `Conflict` → 409, etc.
 {% /callout %}
 
 ---
@@ -1026,14 +1078,11 @@ The framework automatically maps `Error` variants to appropriate HTTP status cod
 
 Update `Cargo.toml`:
 
+Add `resilience` (circuit breaker, retry, bulkhead) and `otel-metrics` (metrics) to the
+features you already have:
+
 ```toml
-acton-service = { version = "0.3", features = [
-    "http",
-    "observability",
-    "database",
-    "resilience",      # Add circuit breaker, retry
-    "otel-metrics"     # Add metrics
-] }
+{% dep(["http", "observability", "database", "resilience", "otel-metrics"]) %}
 ```
 
 ### Enable Structured Logging

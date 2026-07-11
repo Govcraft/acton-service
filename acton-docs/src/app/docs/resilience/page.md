@@ -15,26 +15,41 @@ Start with the [homepage](/) to understand what acton-service is, then explore [
 
 acton-service provides resilience patterns to protect your services from cascading failures, transient errors, and resource exhaustion.
 
+{% callout type="warning" title="Resilience is opt-in and manually wired" %}
+Unlike authentication, authorization, and rate limiting, resilience layers are **not** auto-applied by `ServiceBuilder`. You build a `ResilienceConfig`, ask it for a layer, and attach that layer to the tower service stack you want to protect.
+
+Current surface (`resilience` feature):
+
+- **Circuit breaker** — `ResilienceConfig::circuit_breaker_layer()`
+- **Bulkhead** — `ResilienceConfig::bulkhead_layer()`
+- **Retry** — configuration fields only. **No retry layer is constructed today**; see [Retry Logic](#retry-logic).
+{% /callout %}
+
 ## Quick Start
+
+`ResilienceConfig` is a configuration struct with a builder — it is **not** a `Layer`. Build it, then call a layer constructor:
 
 ```rust
 use acton_service::middleware::ResilienceConfig;
+use http::Request;
 
-ServiceBuilder::new()
-    .with_routes(routes)
-    .with_middleware(|router| {
-        router.layer(ResilienceConfig::new()
-            .with_circuit_breaker(true)
-            .with_circuit_breaker_threshold(0.5)   // 50% failure threshold
-            .with_retry(true)
-            .with_retry_max_attempts(3)            // max 3 retries
-            .with_bulkhead(true)
-            .with_bulkhead_max_concurrent(100))    // max 100 concurrent requests
-    })
-    .build()
-    .serve()
-    .await?;
+let config = ResilienceConfig::new()
+    .with_circuit_breaker(true)
+    .with_circuit_breaker_threshold(0.5)   // 50% failure rate opens the circuit
+    .with_bulkhead(true)
+    .with_bulkhead_max_concurrent(100);    // max 100 concurrent calls
+
+// Each constructor returns `None` when that pattern is disabled
+if let Some(layer) = config.circuit_breaker_layer::<Request<()>, String>() {
+    // Attach to your tower service stack
+}
+
+if let Some(layer) = config.bulkhead_layer() {
+    // Attach to your tower service stack
+}
 ```
+
+Both constructors return `Option`, so a disabled pattern costs you nothing at runtime.
 
 ## Circuit Breaker
 
@@ -100,7 +115,6 @@ Circuit breakers **automatically** monitor your service health and transition be
 **What You Configure:**
 - When to open (failure threshold, minimum requests)
 - How long to stay open (wait duration)
-- How to test recovery (half-open request count)
 
 **What Happens Automatically:**
 - State transitions based on observed failures
@@ -109,9 +123,72 @@ Circuit breakers **automatically** monitor your service health and transition be
 
 ### Configuration
 
-Circuit breaker parameters can be configured **declaratively** via config files or environment variables (no recompilation needed), or programmatically in code.
+`ResilienceConfig` exposes builder methods for the most common knobs, and public fields for the rest:
 
-**Option 1: Config File (Recommended for Production)**
+```rust
+use acton_service::middleware::ResilienceConfig;
+use std::time::Duration;
+
+let mut resilience = ResilienceConfig::new()
+    .with_circuit_breaker(true)
+    .with_circuit_breaker_threshold(0.5);   // Open at 50% failure rate (clamped to 0.0..=1.0)
+
+// Fields without a builder method are public — set them directly
+resilience.circuit_breaker_min_requests = 10;                          // Sliding window size
+resilience.circuit_breaker_wait_duration = Duration::from_secs(60);    // How long to stay open
+```
+
+**Available builder methods:**
+
+| Method | Argument | Effect |
+| --- | --- | --- |
+| `with_circuit_breaker(bool)` | enable flag | Turns the circuit breaker on or off |
+| `with_circuit_breaker_threshold(f64)` | `0.0`–`1.0` | Failure rate that opens the circuit (clamped) |
+| `with_retry(bool)` | enable flag | Sets the retry flag (see [Retry Logic](#retry-logic)) |
+| `with_retry_max_attempts(usize)` | attempt count | Sets the retry attempt count |
+| `with_bulkhead(bool)` | enable flag | Turns the bulkhead on or off |
+| `with_bulkhead_max_concurrent(usize)` | concurrency cap | Maximum concurrent calls |
+
+There is no `with_circuit_breaker_min_requests()`, `with_circuit_breaker_timeout_secs()`, or `with_circuit_breaker_half_open_requests()` method — set `circuit_breaker_min_requests` and `circuit_breaker_wait_duration` as fields.
+
+### Building the Layer
+
+`circuit_breaker_layer()` is generic over the request and error types of the service you're wrapping, and returns `None` when the circuit breaker is disabled:
+
+```rust
+use acton_service::middleware::resilience::ResilienceConfig;
+use http::Request;
+
+let config = ResilienceConfig::default();
+
+if let Some(layer) = config.circuit_breaker_layer::<Request<()>, String>() {
+    // Apply the layer to your service
+}
+```
+
+The request type must be `Clone` (the breaker may need to inspect a request more than once), so the circuit breaker is most useful around **outbound** tower stacks — the clients you use to call databases and downstream services — rather than around the inbound axum router, whose `Request<Body>` is not cloneable.
+
+### Configuration Reference
+
+**Failure Threshold** (`circuit_breaker_threshold`, default `0.5`)
+- Fraction of failed requests that triggers the open state
+- Range: 0.0 (never open) to 1.0 (open on total failure); values outside the range are clamped
+- Recommended: 0.5 (50%) for most services
+
+**Minimum Request Volume** (`circuit_breaker_min_requests`, default `10`)
+- Sliding-window size — how many requests are considered before the failure rate is meaningful
+- Prevents premature opening on low traffic
+- Recommended: 10-20 requests
+
+**Wait Duration** (`circuit_breaker_wait_duration`, default 30s)
+- How long the circuit stays open before testing recovery
+- Too short: doesn't allow the service to recover
+- Too long: extends downtime unnecessarily
+- Recommended: 30-60 seconds
+
+### TOML Configuration
+
+The `[middleware.resilience]` section is parsed into `config.middleware.resilience`:
 
 ```toml
 # config.toml
@@ -122,58 +199,9 @@ circuit_breaker_min_requests = 10    # Min requests before evaluation
 circuit_breaker_wait_secs = 60       # How long to stay open
 ```
 
-Configuration changes require service restart but not recompilation or redeployment.
-
-**Option 2: Environment Variables**
-
-```bash
-ACTON_MIDDLEWARE_RESILIENCE_CIRCUIT_BREAKER_ENABLED=true
-ACTON_MIDDLEWARE_RESILIENCE_CIRCUIT_BREAKER_THRESHOLD=0.5
-ACTON_MIDDLEWARE_RESILIENCE_CIRCUIT_BREAKER_MIN_REQUESTS=10
-ACTON_MIDDLEWARE_RESILIENCE_CIRCUIT_BREAKER_WAIT_SECS=60
-```
-
-**Option 3: Programmatic (Code)**
-
-```rust
-use acton_service::middleware::ResilienceConfig;
-
-let resilience = ResilienceConfig::new()
-    .with_circuit_breaker(true)
-    .with_circuit_breaker_threshold(0.5)        // Open at 50% failure rate
-    .with_circuit_breaker_min_requests(10)      // Min 10 requests before evaluation
-    .with_circuit_breaker_timeout_secs(60)      // Open state duration
-    .with_circuit_breaker_half_open_requests(3);// Test requests in half-open
-
-ServiceBuilder::new()
-    .with_routes(routes)
-    .with_middleware(|router| router.layer(resilience))
-    .build()
-```
-
-### Configuration Options
-
-**Failure Threshold**
-- Percentage of failed requests that triggers open state
-- Range: 0.0 (never open) to 1.0 (open on any failure)
-- Recommended: 0.5 (50%) for most services
-
-**Minimum Request Volume**
-- Minimum requests before evaluating failure rate
-- Prevents premature opening on low traffic
-- Recommended: 10-20 requests
-
-**Timeout Duration**
-- How long circuit stays open before testing recovery
-- Too short: doesn't allow service to recover
-- Too long: extends downtime unnecessarily
-- Recommended: 30-60 seconds
-
-**Half-Open Test Requests**
-- Number of test requests in half-open state
-- Too few: unreliable recovery detection
-- Too many: may overwhelm recovering service
-- Recommended: 3-5 requests
+{% callout type="note" title="TOML values are not auto-applied" %}
+`ServiceBuilder` does not construct resilience layers from this section. Read the values off the loaded `Config` and build the layers yourself. Keeping the settings in TOML still buys you environment-specific tuning without a recompile.
+{% /callout %}
 
 ### When to Use Circuit Breakers
 
@@ -210,31 +238,40 @@ info!(
 
 ## Retry Logic
 
-Retry logic handles transient failures by automatically retrying failed requests with exponential backoff.
+{% callout type="warning" title="Retry has no layer today" %}
+`ResilienceConfig` carries retry settings — `retry_enabled`, `retry_max_attempts`, `retry_base_delay`, `retry_max_delay`, plus the `with_retry()` and `with_retry_max_attempts()` builders — and `[middleware.resilience]` accepts the matching TOML keys. **But no retry layer is constructed from them.** There is no `retry_layer()` constructor, and neither `ServiceBuilder` nor the resilience module builds retry middleware.
 
-### How Retries Work
+Setting these values changes nothing at runtime. Until a retry layer ships, implement retries in your client code (or with a tower retry layer of your own) and use the guidance below to decide *what* to retry.
+{% /callout %}
 
-1. Initial request fails with retryable error
-2. Wait for backoff duration
-3. Retry request
-4. If fails, double backoff and retry again
-5. Continue until max retries or success
-
-### Configuration
+### Retry Settings (Configuration Only)
 
 ```rust
 use acton_service::middleware::ResilienceConfig;
+use std::time::Duration;
 
-let resilience = ResilienceConfig::new()
+let mut resilience = ResilienceConfig::new()
     .with_retry(true)
-    .with_retry_max_attempts(3)               // Max 3 retry attempts
-    .with_retry_initial_backoff_ms(100)       // Start with 100ms
-    .with_retry_max_backoff_ms(10_000)        // Cap at 10 seconds
-    .with_retry_backoff_multiplier(2.0)       // Double each retry
-    .with_retry_jitter(true);                 // Add randomization
+    .with_retry_max_attempts(3);
+
+// Public fields — no builder methods for these
+resilience.retry_base_delay = Duration::from_millis(100);
+resilience.retry_max_delay = Duration::from_secs(10);
 ```
 
+```toml
+[middleware.resilience]
+retry_enabled = true
+retry_max_attempts = 3
+retry_base_delay_ms = 100
+retry_max_delay_ms = 10000
+```
+
+There are no `with_retry_initial_backoff_ms()`, `with_retry_max_backoff_ms()`, `with_retry_backoff_multiplier()`, or `with_retry_jitter()` methods, and no backoff-multiplier or jitter fields.
+
 ### Backoff Strategy
+
+When you implement retries yourself, exponential backoff with jitter is the pattern to reach for:
 
 **Exponential Backoff:**
 ```text
@@ -312,29 +349,15 @@ Headers:
 // Server deduplicates based on idempotency key
 ```
 
-### Configuration Best Practices
+### Backoff Guidance by Workload
 
-**Fast-Failing Services:**
-```rust
-.with_retry(3)
-.initial_backoff_ms(50)
-.max_backoff_ms(500)
-```
+Starting points for the backoff you implement:
 
-**Slow External APIs:**
-```rust
-.with_retry(5)
-.initial_backoff_ms(1000)
-.max_backoff_ms(30_000)
-```
-
-**Database Queries:**
-```rust
-.with_retry(3)
-.initial_backoff_ms(100)
-.max_backoff_ms(5_000)
-.jitter(true)  // Prevent connection storms
-```
+| Workload | Attempts | Base delay | Max delay |
+| --- | --- | --- | --- |
+| Fast-failing internal services | 3 | 50ms | 500ms |
+| Slow external APIs | 5 | 1s | 30s |
+| Database queries | 3 | 100ms | 5s (add jitter to prevent connection storms) |
 
 ## Bulkhead Pattern
 
@@ -353,77 +376,72 @@ Named after ship compartments that prevent total flooding:
 
 ```rust
 use acton_service::middleware::ResilienceConfig;
+use std::time::Duration;
 
-let resilience = ResilienceConfig::new()
+let mut resilience = ResilienceConfig::new()
     .with_bulkhead(true)
-    .with_bulkhead_max_concurrent(100)         // Max 100 concurrent requests
-    .with_bulkhead_queue_size(50)              // Queue up to 50 waiting requests
-    .with_bulkhead_wait_timeout_ms(5000);      // Wait max 5 seconds
+    .with_bulkhead_max_concurrent(100);           // Max 100 concurrent calls
+
+// Public field — no builder method
+resilience.bulkhead_max_wait = Duration::from_secs(5);   // Max wait for a slot
+
+if let Some(layer) = resilience.bulkhead_layer() {
+    // Apply the layer to your service
+}
 ```
 
-### Configuration Options
+Unlike the circuit breaker, `bulkhead_layer()` is not generic — it returns `Option<BulkheadLayer>` directly, and `None` when the bulkhead is disabled.
 
-**Max Concurrent Requests**
-- Maximum requests processed simultaneously
+There is no `with_bulkhead_queue_size()` or `with_bulkhead_wait_timeout_ms()` method. Concurrency and wait time are the two knobs; requests that cannot get a slot within `bulkhead_max_wait` are rejected.
+
+### Configuration Reference
+
+**Max Concurrent Calls** (`bulkhead_max_concurrent`, default `100`)
+- Maximum calls processed simultaneously
 - Based on service capacity and resources
 - Typical values: 50-500 depending on workload
 
-**Queue Size**
-- Requests waiting for available slot
-- 0 = reject immediately when full
-- Too large = memory pressure during traffic spikes
-- Recommended: 10-50% of concurrent limit
-
-**Wait Timeout**
-- Maximum time request waits in queue
+**Max Wait** (`bulkhead_max_wait`, default 5s)
+- Maximum time a call waits for a free slot before being rejected
 - Too short: unnecessary rejections
 - Too long: poor user experience
 - Recommended: 1-5 seconds for user-facing, 10-30s for background
 
-### Response When Bulkhead Full
+Rejections and permits are logged by the layer: `on_call_permitted` emits a debug event with the current concurrency, `on_call_rejected` emits a warning with the configured maximum.
+
+### When the Bulkhead Is Full
+
+A rejected call surfaces as an **error from the bulkhead layer** — acton-service does not define a `BULKHEAD_FULL` error variant or map the rejection to an HTTP response for you. Because you attach the layer, you also decide how its rejection is rendered. `503 Service Unavailable` with a `Retry-After` header is the conventional choice:
 
 ```text
 HTTP/1.1 503 Service Unavailable
 Retry-After: 5
-
-{
-  "error": "Service temporarily overloaded",
-  "code": "BULKHEAD_FULL",
-  "status": 503,
-  "retry_after": 5
-}
 ```
 
-### Per-Endpoint Bulkheads
+### Per-Operation Bulkheads
 
-Isolate expensive operations from normal traffic:
+Isolate expensive operations from normal traffic by giving each its own `ResilienceConfig` and its own layer. Note that `ResilienceConfig` itself is never passed to `.layer()` — only the layer it produces:
 
 ```rust
-use acton_service::prelude::*;
 use acton_service::middleware::ResilienceConfig;
 
-let routes = VersionedApiBuilder::new()
-    .with_base_path("/api")
-    .add_version(ApiVersion::V1, |router| {
-        router
-            // Expensive report generation: limited concurrency
-            .route("/reports/generate", post(generate_report)
-                .layer(ResilienceConfig::new().with_bulkhead(true).with_bulkhead_max_concurrent(5)))
+// Expensive report generation: tight concurrency cap
+let reports = ResilienceConfig::new()
+    .with_bulkhead(true)
+    .with_bulkhead_max_concurrent(5);
 
-            // Normal CRUD operations: higher concurrency
-            .route("/users", get(list_users)
-                .layer(ResilienceConfig::new().with_bulkhead(true).with_bulkhead_max_concurrent(100)))
-            .route("/documents", get(list_documents)
-                .layer(ResilienceConfig::new().with_bulkhead(true).with_bulkhead_max_concurrent(100)))
-    })
-    .build_routes();
+// Normal CRUD operations: generous cap
+let crud = ResilienceConfig::new()
+    .with_bulkhead(true)
+    .with_bulkhead_max_concurrent(100);
 
-ServiceBuilder::new()
-    .with_routes(routes)
-    .build()
-    .serve()
-    .await?;
+let reports_layer = reports.bulkhead_layer();   // Option<BulkheadLayer>
+let crud_layer = crud.bulkhead_layer();
+
+// Wrap the tower services behind each operation with its own layer
 ```
+
+Each `BulkheadLayer` owns an independent slot pool, so a saturated report queue cannot starve the CRUD handlers.
 
 ### When to Use Bulkheads
 
@@ -442,64 +460,53 @@ ServiceBuilder::new()
 
 ## Combining Resilience Patterns
 
-Layer multiple patterns for comprehensive protection:
+One `ResilienceConfig` can produce both layers. Build the config once, then stack the layers you get back:
 
 ```rust
 use acton_service::middleware::ResilienceConfig;
+use http::Request;
+use std::time::Duration;
 
-let resilience = ResilienceConfig::new()
+let mut resilience = ResilienceConfig::new()
     // Circuit breaker: detect and isolate failures
     .with_circuit_breaker(true)
     .with_circuit_breaker_threshold(0.5)
-    .with_circuit_breaker_min_requests(10)
-    .with_circuit_breaker_timeout_secs(60)
-    // Retry: handle transient failures
-    .with_retry(true)
-    .with_retry_max_attempts(3)
-    .with_retry_initial_backoff_ms(100)
-    .with_retry_max_backoff_ms(5_000)
-    .with_retry_jitter(true)
     // Bulkhead: prevent resource exhaustion
     .with_bulkhead(true)
-    .with_bulkhead_max_concurrent(100)
-    .with_bulkhead_queue_size(50)
-    .with_bulkhead_wait_timeout_ms(5000);
+    .with_bulkhead_max_concurrent(100);
 
-ServiceBuilder::new()
-    .with_routes(routes)
-    .with_middleware(|router| router.layer(resilience))
-    .build()
+resilience.circuit_breaker_min_requests = 10;
+resilience.circuit_breaker_wait_duration = Duration::from_secs(60);
+resilience.bulkhead_max_wait = Duration::from_secs(5);
+
+let breaker = resilience.circuit_breaker_layer::<Request<()>, String>();
+let bulkhead = resilience.bulkhead_layer();
+
+// Stack `bulkhead` outside `breaker` so capacity is checked before the
+// circuit-breaker state, then wrap your service with the result.
 ```
+
+Retry is deliberately absent here — see [Retry Logic](#retry-logic) for why the retry settings do not produce a layer.
 
 ### Execution Order
 
-Resilience patterns execute in this order:
+Order your stack so that each layer protects the ones inside it:
 
-1. **Bulkhead** - Check capacity first
-2. **Circuit Breaker** - Fail fast if open
-3. **Retry** - Retry failed requests
-4. **Request** - Execute actual handler
+1. **Bulkhead** - Check capacity first (reject early, cheaply)
+2. **Circuit Breaker** - Fail fast if the circuit is open
+3. **Service** - Execute the actual call
 
 ### Pattern Interaction Examples
 
 **Scenario 1: Service Overload**
 ```text
-1. Bulkhead rejects excess requests (503)
-2. Accepted requests proceed through circuit breaker
-3. High failure rate triggers circuit breaker
+1. Bulkhead rejects excess calls once max_concurrent is saturated
+2. Accepted calls proceed through the circuit breaker
+3. High failure rate trips the circuit breaker
 4. Circuit opens, failing fast for recovery
 ```
 
-**Scenario 2: Transient Network Error**
-```text
-1. Request passes bulkhead (capacity available)
-2. Circuit breaker is closed (service healthy)
-3. Request fails with network timeout
-4. Retry logic retries with backoff
-5. Retry succeeds, request completes
-```
-
-**Scenario 3: Cascading Failure Prevention**
+**Scenario 2: Cascading Failure Prevention**
 ```text
 1. Downstream service fails completely
 2. Circuit breaker detects high failure rate
@@ -509,6 +516,8 @@ Resilience patterns execute in this order:
 ```
 
 ## Configuration Templates
+
+Every method below exists on `ResilienceConfig`. The `with_retry*` calls set config fields for forward-compatibility but have no runtime effect until a retry layer ships — only the circuit breaker and bulkhead settings reach a layer.
 
 ### Conservative (Low-Risk Services)
 

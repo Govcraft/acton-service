@@ -64,13 +64,15 @@ The entire design philosophy is built around preventing common production issues
 
 ## What's the current status?
 
-**Version 0.2.x** - Core features have stable APIs:
+**Version {% version() %}** - the framework is pre-1.0, so minor releases can carry breaking changes. Every breaking change is documented in the [CHANGELOG](https://github.com/Govcraft/acton-service/blob/main/CHANGELOG.md); pin an exact minor version and read the changelog before upgrading.
+
+Feature areas covered today:
 - HTTP/gRPC servers with protocol detection
 - Type-enforced API versioning
 - Health checks (liveness/readiness)
 - Observability (OpenTelemetry tracing/metrics)
 - Resilience patterns (circuit breaker, retry, bulkhead)
-- Middleware stack (auth, rate limiting, correlation IDs)
+- Middleware stack (token auth, audit, Cedar authorization, rate limiting, correlation IDs)
 - Connection pooling (PostgreSQL, Redis, NATS)
 
 The framework is built on established libraries (axum, tonic, sqlx).
@@ -121,14 +123,15 @@ The framework focuses on connection management, not schema evolution.
 
 ## Can I use a different database besides PostgreSQL?
 
-Currently, acton-service focuses on PostgreSQL via SQLx. The architecture supports other databases, but they're not included yet.
+Yes. acton-service ships three primary database backends, selected by feature flag. They are **mutually exclusive** — enable exactly one:
 
-Planned support:
-- MySQL/MariaDB
-- SQLite
-- MongoDB (via community plugin)
+- **PostgreSQL** via SQLx — the `database` feature
+- **Turso / libSQL** — the `turso` feature
+- **SurrealDB** — the `surrealdb` feature
 
-For now, if you need other databases, use Axum directly or contribute database support to the project.
+**ClickHouse** (the `clickhouse` feature) is different: it is composable, so you can enable it alongside any primary backend to add columnar analytics or audit storage.
+
+MySQL/MariaDB and MongoDB remain future ideas with no committed timeline. If you need one of those today, use Axum directly or contribute a backend to the project.
 
 ---
 
@@ -138,7 +141,7 @@ acton-service produces a standard Rust binary. Deploy like any other application
 
 **Docker**:
 ```dockerfile
-FROM rust:1.75 as builder
+FROM rust:1.84 as builder
 WORKDIR /app
 COPY . .
 RUN cargo build --release
@@ -154,7 +157,7 @@ CMD ["my-service"]
 
 **Systemd**: Install binary and create service file.
 
-See the [deployment guide](/docs/deployment) for detailed instructions.
+See the [production guide](/docs/production) for detailed instructions.
 
 ---
 
@@ -185,7 +188,7 @@ async fn test_api_endpoint() {
 
 ## What's the minimum Rust version required?
 
-acton-service requires **Rust 1.75 or later**.
+acton-service requires **Rust 1.84 or later**.
 
 The framework uses modern Rust features:
 - Async/await

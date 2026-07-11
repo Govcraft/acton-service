@@ -129,7 +129,7 @@ Enables structured logging and OpenTelemetry tracing.
 **Dependencies**: tracing, tracing-subscriber, OpenTelemetry
 
 ```toml
-{% dep("observability") %}
+{% $dep.observability %}
 ```
 
 ---
@@ -145,7 +145,7 @@ Enables gRPC support via Tonic. Can run on the same port as HTTP with automatic 
 **Dependencies**: tonic, prost
 
 ```toml
-{% dep("grpcOnly") %}
+{% $dep.grpcOnly %}
 ```
 
 ### `websocket`
@@ -163,14 +163,49 @@ Enables WebSocket support for real-time bidirectional communication. Uses Axum's
 - Actor-based room management
 
 ```toml
-{% dep("websocketOnly") %}
+{% $dep.websocketOnly %}
 ```
 
 See the [WebSocket Guide](/docs/websocket) for detailed usage.
 
+### `graphql`
+
+Enables a GraphQL transport (async-graphql + Axum). Mounts as a third sibling transport alongside `http` and `grpc`, under the same versioned router and middleware stack.
+
+**When to use**: Exposing a versioned GraphQL endpoint (`/api/v1/graphql`)
+
+**Dependencies**: async-graphql, async-graphql-axum, bytes
+
+**Provides**:
+- `VersionedGraphQLBuilder` for registering schemas per API version
+- `GraphQLContextExt` for reading authenticated claims inside resolvers
+
+```toml
+acton-service = { version = "{% version() %}", features = ["graphql"] }
+```
+
+### `graphql-cedar`
+
+GraphQL with Cedar policy authorization callable from resolvers.
+
+**When to use**: Enforcing fine-grained Cedar policies at the resolver level
+
+**Enables**: `graphql`, `cedar-authz`
+
+**Provides**:
+- `CedarResolverCheck` for policy checks inside GraphQL resolvers
+
+```toml
+acton-service = { version = "{% version() %}", features = ["graphql-cedar"] }
+```
+
 ---
 
 ## Data Layer Features
+
+{% callout type="warning" title="Pick exactly one primary backend" %}
+`database`, `turso`, and `surrealdb` are pairwise mutually exclusive and fail the build if combined. See [Database Backend Exclusivity](#database-backend-exclusivity).
+{% /callout %}
 
 ### `database`
 
@@ -186,7 +221,7 @@ PostgreSQL connection pooling via SQLx with automatic health checks and retry lo
 - Retry logic on connection failures
 
 ```toml
-{% dep("databaseOnly") %}
+{% $dep.databaseOnly %}
 ```
 
 ### `turso`
@@ -204,10 +239,29 @@ Turso/libsql database support for edge-friendly SQLite with cloud sync capabilit
 - Background sync for embedded replicas
 
 ```toml
-{% dep("tursoOnly") %}
+{% $dep.tursoOnly %}
 ```
 
 See the [Turso Guide](/docs/turso) for detailed usage.
+
+### `surrealdb`
+
+SurrealDB multi-model database support (document, graph, and relational in one store).
+
+**When to use**: Your data model needs documents or graph relations rather than plain SQL
+
+**Dependencies**: surrealdb
+
+**Provides**:
+- SurrealDB connection management
+- `SurrealDbHealth` pool health reporting
+- Shared `DatabaseError` / `DatabaseOperation` error taxonomy
+
+```toml
+{% $dep.surrealdbOnly %}
+```
+
+**Note**: Mutually exclusive with `database` and `turso`.
 
 ### `cache`
 
@@ -223,7 +277,7 @@ Redis connection pooling with support for token revocation and distributed rate 
 - Distributed rate limiting
 
 ```toml
-{% dep("cacheOnly") %}
+{% $dep.cacheOnly %}
 ```
 
 ### `events`
@@ -240,7 +294,93 @@ NATS JetStream client for event-driven architecture and pub/sub messaging.
 - Pub/sub messaging
 
 ```toml
-{% dep("eventsOnly") %}
+{% $dep.eventsOnly %}
+```
+
+### `clickhouse`
+
+ClickHouse analytical database client. Composable with any primary backend (or none) — it is not subject to the database exclusivity rule.
+
+**When to use**: Writing high-volume analytical or audit data alongside your primary store
+
+**Dependencies**: clickhouse
+
+**Provides**:
+- `AnalyticsWriter` for batched analytical writes
+- `ClickHouseHealth` pool health reporting
+
+```toml
+{% $dep.clickhouseOnly %}
+```
+
+### `repository`
+
+Generic repository traits for database CRUD abstractions. No extra dependencies — trait definitions only.
+
+**When to use**: You want a backend-agnostic CRUD abstraction over your storage layer
+
+**Dependencies**: None
+
+**Provides**:
+- `Repository` and `SoftDeleteRepository` traits
+- `RelationLoader`, `OrderDirection`, `RepositoryError` taxonomy
+
+```toml
+acton-service = { version = "{% version() %}", features = ["repository"] }
+```
+
+### `handlers`
+
+Pre-built REST CRUD handler traits built on top of `repository`.
+
+**When to use**: You want conventional list/get/create/update/delete REST handlers without writing them by hand
+
+**Enables**: `repository`
+
+**Provides**:
+- `CollectionHandler` and `SoftDeleteHandler` traits
+- `ListQuery`, `ListResponse`, `ItemResponse`, `PaginationMeta`
+- `ApiError` taxonomy and `DEFAULT_PER_PAGE` / `MAX_PER_PAGE` limits
+
+```toml
+acton-service = { version = "{% version() %}", features = ["handlers"] }
+```
+
+### `pagination`
+
+Core pagination primitives (offset, cursor, filtering, sorting, search).
+
+**When to use**: Any list endpoint that needs paging
+
+**Dependencies**: paginator-rs
+
+**Provides**:
+- `Paginator`, `PaginationParams`, `PaginatorResponse`
+- Cursor pagination (`Cursor`, `CursorDirection`)
+- Filter, sort, and search builders
+
+### `pagination-axum`
+
+Axum extractors and responses for pagination. Enables `pagination`.
+
+**Dependencies**: paginator-axum
+
+**Provides**: `PaginationQuery` extractor, `PaginatedJson` response, `create_link_header()`
+
+### `pagination-sqlx`
+
+SQLx query integration for pagination. Enables `pagination`.
+
+**Dependencies**: paginator-sqlx
+
+**Provides**: `PaginateQuery`, `PaginatedQuery`, `QueryBuilderExt`, `validate_field_name()`
+
+### `pagination-full`
+
+Meta-feature enabling `pagination`, `pagination-axum`, and `pagination-sqlx` together.
+
+```toml
+acton-service = { version = "{% version() %}", features = ["pagination-full"] }
 ```
 
 ---
@@ -391,7 +531,9 @@ Core authentication module with password hashing (Argon2id) and token generation
 
 **When to use**: Building user authentication with password login and/or stateless tokens
 
-**Dependencies**: argon2, rusty_paseto
+**Dependencies**: argon2, rand, blake3, base64
+
+**Note**: PASETO validation is always available — `rusty_paseto` is a core (non-optional) dependency, so token verification works without this flag. Enable `auth` for password hashing, token *generation*, API keys, and key rotation.
 
 **Provides**:
 - Password hashing with OWASP-recommended Argon2id
@@ -435,13 +577,13 @@ Meta-feature that enables all authentication features.
 
 **When to use**: Need complete auth support including password hashing, tokens, OAuth, JWT, and storage
 
-**Enables**: `auth`, `oauth`, `jwt`, `cache`, `database`
+**Enables**: `auth`, `oauth`, `jwt`, `cache`, `database`, `login-lockout`, `accounts`
 
 ```toml
 acton-service = { version = "{% version() %}", features = ["auth-full"] }
 ```
 
-**⚠️ Warning**: `auth-full` includes many dependencies. For production, only enable what you need.
+**⚠️ Warning**: `auth-full` includes many dependencies. For production, only enable what you need. Because it pulls in `database` (PostgreSQL), `auth-full` is mutually exclusive with `turso` and `surrealdb` — see [Database Backend Exclusivity](#database-backend-exclusivity).
 
 ---
 
@@ -464,7 +606,7 @@ AWS Cedar policy-based authorization for fine-grained access control.
 - Layered security with JWT authentication
 
 ```toml
-{% dep("cedarAuthz") %}
+{% $dep.cedarAuthz %}
 ```
 
 **Note**: Works best with `cache` feature for policy decision caching.
@@ -483,7 +625,7 @@ Circuit breaker, retry, and bulkhead patterns for production services.
 - Bulkhead (concurrency limiting)
 
 ```toml
-{% dep("resilience") %}
+{% $dep.resilience %}
 ```
 
 ### `governor`
@@ -492,7 +634,7 @@ Advanced rate limiting with per-user limits via token claims.
 
 **When to use**: Need sophisticated rate limiting beyond basic throttling
 
-**Dependencies**: tower_governor
+**Dependencies**: governor
 
 **Provides**:
 - Per-second/minute/hour rate limits
@@ -500,7 +642,7 @@ Advanced rate limiting with per-user limits via token claims.
 - In-memory rate limiting
 
 ```toml
-{% dep("governor") %}
+{% $dep.governor %}
 ```
 
 ### `otel-metrics`
@@ -517,8 +659,26 @@ HTTP metrics collection via OpenTelemetry for detailed monitoring.
 - HTTP status code distribution
 
 ```toml
-{% dep("otelMetrics") %}
+{% $dep.otelMetrics %}
 ```
+
+### `tls`
+
+Rustls-based HTTPS listener for terminating TLS directly in the service.
+
+**When to use**: Serving HTTPS without a TLS-terminating proxy in front
+
+**Dependencies**: tokio-rustls, rustls-pki-types
+
+**Provides**:
+- TLS-enabled server listener
+- Certificate and private key loading
+
+```toml
+acton-service = { version = "{% version() %}", features = ["tls"] }
+```
+
+**Note**: TLS still requires exactly one crypto provider — see [Cryptographic Provider](#cryptographic-provider).
 
 ### `journald`
 
@@ -552,7 +712,7 @@ JWT token authentication support. PASETO is the default token format and require
 - Same Claims API as PASETO
 
 ```toml
-{% dep("jwtOnly") %}
+{% $dep.jwtOnly %}
 ```
 
 {% callout type="note" title="PASETO is Default" %}
@@ -581,6 +741,54 @@ Progressive delay and account lockout for brute force protection on login endpoi
 
 See the [Login Lockout Guide](/docs/login-lockout) for detailed usage.
 
+### `accounts`
+
+Account lifecycle management (NIST AC-2): create, update, suspend, and delete user accounts. Enables `auth`.
+
+**When to use**: You need managed user accounts with a status lifecycle rather than raw credentials
+
+**Dependencies**: None (builds on `auth`)
+
+**Provides**:
+- `AccountService`, `Account`, `AccountId`, `AccountStatus`
+- `AccountStorage` trait, `CreateAccount` / `UpdateAccount` inputs
+- `AccountEvent` / `AccountNotification` lifecycle hooks
+- `AuditAccountNotification` when `audit` is also enabled
+
+```toml
+acton-service = { version = "{% version() %}", features = ["accounts"] }
+```
+
+### `account-handlers`
+
+Pre-built REST handlers for account management. Enables `accounts`.
+
+**When to use**: You want ready-made account endpoints instead of writing them
+
+**Provides**: `account_routes()` — a mountable Axum router for account CRUD
+
+```toml
+acton-service = { version = "{% version() %}", features = ["account-handlers"] }
+```
+
+### `audit`
+
+Tamper-evident audit logging with BLAKE3 hash chaining.
+
+**When to use**: Compliance regimes that require a verifiable audit trail
+
+**Dependencies**: blake3
+
+**Provides**:
+- `AuditLogger`, `AuditEvent`, `AuditEventKind`, `AuditSeverity`, `AuditSource`
+- `AuditStorage` trait and `AuditRoute` for per-route auditing
+- Alerting via `AuditAlertHook` / `AlertConfig`
+- Automatic integration with `login-lockout` and `accounts` when those are enabled
+
+```toml
+{% $dep.auditOnly %}
+```
+
 ---
 
 ## Documentation Features
@@ -600,7 +808,7 @@ OpenAPI/Swagger documentation generation with multiple UI options.
 - Auto-generated OpenAPI specs
 
 ```toml
-{% dep("openapiOnly") %}
+{% $dep.openapiOnly %}
 ```
 
 ---
@@ -741,6 +949,39 @@ tokio = { version = "1", features = ["full"] }
 
 ---
 
+## Database Backend Exclusivity
+
+acton-service supports three primary database backends, and they are **pairwise
+mutually exclusive**. Enable exactly one:
+
+| Feature | Backend | Use when |
+|---------|---------|----------|
+| `database` | PostgreSQL (SQLx) | Standard server-side SQL workloads |
+| `turso` | Turso / libsql (SQLite) | Edge deployments, embedded replicas |
+| `surrealdb` | SurrealDB | Multi-model (document/graph) workloads |
+
+Enabling any two fails the build with a `compile_error!` from `src/lib.rs`:
+
+```text
+Features `database` (PostgreSQL) and `turso` (libsql) are mutually exclusive.
+Enable only one database backend.
+```
+
+The same guard exists for `database` + `surrealdb` and `turso` + `surrealdb`.
+
+{% callout type="warning" title="Watch for transitive database features" %}
+The meta-features `auth-full` and `full` both enable `database`. Combining
+either with `turso` or `surrealdb` trips the same compile error. If you need
+Turso or SurrealDB with authentication, list the auth features explicitly
+(`auth`, `oauth`, `jwt`, `cache`, `login-lockout`, `accounts`) instead of using
+`auth-full`.
+{% /callout %}
+
+`clickhouse` is **not** a primary backend and is exempt from this rule — it is an
+analytical store that composes with any of the three (or with none).
+
+---
+
 ## Cryptographic Provider
 
 acton-service uses `rustls` for all TLS, and you must select one — and only
@@ -781,8 +1022,11 @@ Some features work better together:
 ### "cannot find type `AppState`"
 **Solution**: You're probably missing required features. Add `http` and `observability`.
 
-### "method `database` not found"
-**Solution**: Add `database` feature flag.
+### "no method named `db` found for struct `AppState`"
+**Solution**: Add the `database` feature flag. The pool accessor is `state.db().await`, which returns `Option<PgPool>`.
+
+### "Features `database` (PostgreSQL) and `turso` (libsql) are mutually exclusive"
+**Solution**: You enabled more than one database backend. Pick exactly one of `database`, `turso`, or `surrealdb`. See [Database Backend Exclusivity](#database-backend-exclusivity). Watch for meta-features that pull one in transitively — `auth-full` and `full` both enable `database`.
 
 ### "could not find `tonic` in the list"
 **Solution**: Add `grpc` feature flag.

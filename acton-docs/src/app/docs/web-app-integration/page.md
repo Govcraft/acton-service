@@ -66,7 +66,7 @@ Enable the `htmx-full` feature for complete HTMX support:
 
 ```toml
 [dependencies]
-acton-service = { version = "{{version}}", features = ["htmx-full"] }
+acton-service = { version = "{% version() %}", features = ["htmx-full"] }
 ```
 
 This includes:
@@ -198,20 +198,25 @@ Client connection:
 
 ### Hybrid Architecture
 
-You can use both patterns in the same application by organizing routes within versions:
+You can use both patterns in the same application by building each group as its own `Router`, layering it,
+and merging the results:
 
 ```rust
 let routes = VersionedApiBuilder::new()
     .with_base_path("/api")
     .add_version(ApiVersion::V1, |router| {
-        router
-            // HTMX routes with sessions
-            .route("/", get(home))
-            .route("/tasks", get(list_tasks).post(create_task))
-            .layer(session_layer)
-            // API routes with JWT
-            .route("/api/tasks", get(api_list_tasks).post(api_create_task))
-            .layer(jwt_layer)
+        // HTMX routes with sessions -> /api/v1/ui, /api/v1/ui/tasks
+        let web = Router::new()
+            .route("/ui", get(home))
+            .route("/ui/tasks", get(list_tasks).post(create_task))
+            .layer(session_layer);
+
+        // JSON API routes with JWT -> /api/v1/tasks
+        let api = Router::new()
+            .route("/tasks", get(api_list_tasks).post(api_create_task))
+            .layer(jwt_layer);
+
+        router.merge(web).merge(api)
     })
     .build_routes();
 
@@ -221,6 +226,15 @@ ServiceBuilder::new()
     .serve()
     .await?;
 ```
+
+{% callout type="warning" title="Layer scoping" %}
+`Router::layer` applies to **every route registered on that router so far**, not just the routes above it in
+the chain. Calling `.route(...).layer(session_layer).route(...).layer(jwt_layer)` on a single router applies
+*both* layers to the first group. Build each group as a separate `Router`, layer it, then `merge` - as above.
+
+Note also that paths inside `add_version` are relative to the version tree. A route declared as `"/api/tasks"`
+under `with_base_path("/api")` resolves to `/api/v1/api/tasks`, not `/api/v1/tasks`.
+{% /callout %}
 
 This pattern works well for applications that need both a web UI (admin dashboard) and an API (mobile app, integrations).
 
@@ -233,7 +247,7 @@ This pattern works well for applications that need both a web UI (admin dashboar
 Use Redis for multi-instance deployments:
 
 ```toml
-acton-service = { version = "{{version}}", features = [
+acton-service = { version = "{% version() %}", features = [
     "htmx", "askama", "sse", "session-redis"
 ] }
 ```

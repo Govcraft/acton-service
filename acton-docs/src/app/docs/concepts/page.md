@@ -164,7 +164,7 @@ Use code for:
 ```toml
 # Cargo.toml feature changes require REBUILD
 [dependencies]
-{% dep("databaseCache") %}
+{% $dep.databaseCache %}
 # Adding/removing features = recompile + redeploy
 ```
 
@@ -207,27 +207,45 @@ Request → [Middleware 1] → [Middleware 2] → [Handler] → [Middleware 2] �
 
 ### How acton-service Uses Middleware
 
+You don't stack middleware layers by hand. acton-service reads your `config.toml` and applies the corresponding middleware automatically, in the correct order: **token auth → audit → Cedar authorization → rate limiting**.
+
+Turn middleware on by declaring it in configuration:
+
+```toml
+# Token authentication — the [token] section drives the auth middleware.
+# Set format = "paseto" (default) or format = "jwt" (requires the `jwt` feature).
+[token]
+format = "paseto"
+version = "v4"
+purpose = "local"
+key_path = "./keys/paseto.key"
+issuer = "my-service"
+
+# Rate limiting
+[rate_limit]
+per_user_rpm = 200
+per_client_rpm = 1000
+window_secs = 60
+
+# Resilience: circuit breaker, retry, bulkhead
+[middleware.resilience]
+circuit_breaker_enabled = true
+circuit_breaker_threshold = 0.5
+retry_enabled = true
+retry_max_attempts = 3
+```
+
+Your builder chain stays free of middleware wiring:
+
 ```rust
 ServiceBuilder::new()
     .with_routes(routes)
-    .with_middleware(|router| {
-        router
-            .layer(JwtAuthLayer::new(config.jwt))      // Auth
-            .layer(ResilienceLayer::new())              // Circuit breaker
-            .layer(RateLimitLayer::new(config.rate))    // Rate limiting
-    })
     .build()
+    .serve()
+    .await
 ```
 
-Or use config-driven middleware (automatic):
-
-```toml
-[middleware.resilience]
-circuit_breaker_enabled = true
-
-[middleware.metrics]
-enabled = true
-```
+Because middleware lives in configuration, you tune thresholds, limits, and issuers with a restart — no recompile. See [Middleware](/docs/middleware) for the full set of sections and their defaults.
 
 ---
 

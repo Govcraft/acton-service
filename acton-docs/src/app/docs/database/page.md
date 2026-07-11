@@ -80,7 +80,7 @@ async fn list_users(State(state): State<AppState>) -> Result<Json<Vec<User>>> {
         User,
         "SELECT id, name, email FROM users ORDER BY name"
     )
-    .fetch_all(db)
+    .fetch_all(&db)
     .await?;
 
     Ok(Json(users))
@@ -368,7 +368,7 @@ async fn main() -> Result<()> {
     // Run migrations on startup
     let db = state.db().await.ok_or_else(|| Error::Internal("Database unavailable".to_string()))?;
     migrate!("./migrations")
-        .run(db)
+        .run(&db)
         .await?;
 
     // Start service
@@ -401,7 +401,7 @@ async fn get_user(
     let db = state.db().await.ok_or_else(|| Error::Internal("Database unavailable".to_string()))?;
 
     let user = sqlx::query_as!(User, "SELECT * FROM users WHERE id = $1", id)
-        .fetch_optional(db)
+        .fetch_optional(&db)
         .await?
         .ok_or_else(|| {
             Error::NotFound(format!("User {} not found", id))
@@ -437,12 +437,12 @@ async fn pool_stats(State(state): State<AppState>) -> Result<Json<PoolStats>> {
 ```rust
 // ✅ Good - parameterized query
 sqlx::query!("SELECT * FROM users WHERE id = $1", user_id)
-    .fetch_one(db)
+    .fetch_one(&db)
     .await?;
 
 // ❌ Bad - SQL injection risk
 sqlx::query(&format!("SELECT * FROM users WHERE id = {}", user_id))
-    .fetch_one(db)
+    .fetch_one(&db)
     .await?;
 ```
 

@@ -129,25 +129,36 @@ Learn more: [Observability](/docs/observability)
 - Detailed error logging for debugging
 - Prevents service crashes from request handlers
 
-## Middleware Composition
+## Middleware Types
 
-Middleware layers execute in reverse order of application. The last layer applied executes first:
+The middleware that `ServiceBuilder` wires up lives in `acton_service::middleware`:
 
-```rust
-router
-    .layer(AuthLayer)       // Executes third
-    .layer(RateLimitLayer)  // Executes second
-    .layer(TracingLayer)    // Executes first
+| Type | Purpose | Feature |
+| --- | --- | --- |
+| `PasetoAuth` | PASETO V4 token validation (default) | always available |
+| `JwtAuth` | JWT token validation | `jwt` |
+| `RedisTokenRevocation` | Redis-backed token revocation | `cache` |
+| `CedarAuthz` | Cedar policy authorization | `cedar-authz` |
+| `GovernorRateLimit` | Local in-memory rate limiting | `governor` |
+| `RateLimit` | Redis-backed distributed rate limiting | `cache` |
+| `ResilienceConfig` | Circuit breaker and bulkhead layers | `resilience` |
+
+## Execution Order
+
+`ServiceBuilder::build()` applies the middleware it manages in a fixed order. You do not choose this order — it is determined by the framework so that each stage sees the state the previous one produced:
+
+```text
+Request → framework middleware (request ID, tracing, CORS, compression, timeouts)
+        → Token auth (PasetoAuth / JwtAuth)  — populates Claims
+        → Audit logging                      — sees Claims
+        → Cedar authorization                — sees Claims
+        → Governor rate limiting             — sees Claims for per-user limits
+        → Handler
 ```
 
-**Best Practice Order:**
-1. Request tracking (first - generates correlation IDs)
-2. Panic recovery (catches all downstream panics)
-3. Authentication (validates identity early)
-4. Authorization (checks permissions after authentication)
-5. Rate limiting (throttle after auth to use user-specific limits)
-6. Resilience patterns (protect downstream services)
-7. Compression (last - compresses final response)
+Token authentication runs first so that `Claims` are available downstream: audit records the authenticated principal, Cedar evaluates policies against it, and the rate limiter applies `per_user_rpm` / `per_client_rpm` buckets keyed by the caller. Anonymous requests fall back to per-IP limits.
+
+Each stage is skipped when its configuration or feature flag is absent — for example, the governor layer is only attached when the `governor` feature is enabled and `rate_limit.auto_apply` is `true`.
 
 ## HTTP and gRPC Compatibility
 

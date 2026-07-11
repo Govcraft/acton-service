@@ -35,7 +35,8 @@ acton-service = { version = "{% version() %}", features = ["auth"] }
 ```
 
 ```rust
-use acton_service::auth::{PasetoGenerator, TokenGenerator, ClaimsBuilder};
+use acton_service::auth::{PasetoGenerator, TokenGenerator};
+use acton_service::auth::tokens::ClaimsBuilder;
 use acton_service::auth::config::{PasetoGenerationConfig, TokenGenerationConfig};
 
 // Create generator from configuration
@@ -114,7 +115,7 @@ Supported algorithms: RS256, RS384, RS512, ES256, ES384, HS256, HS384, HS512.
 The `ClaimsBuilder` provides an ergonomic API for creating token claims.
 
 ```rust
-use acton_service::auth::ClaimsBuilder;
+use acton_service::auth::tokens::ClaimsBuilder;
 
 // User token
 let claims = ClaimsBuilder::new()
@@ -168,7 +169,7 @@ let claims = ClaimsBuilder::new()
 Custom claims allow you to embed arbitrary application-specific data in tokens. Any JSON-serializable value is supported — strings, numbers, booleans, arrays, and objects. Custom claims work identically with both PASETO and JWT tokens.
 
 ```rust
-use acton_service::auth::ClaimsBuilder;
+use acton_service::auth::tokens::ClaimsBuilder;
 
 let claims = ClaimsBuilder::new()
     .user("123")

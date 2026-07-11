@@ -93,14 +93,15 @@ Manages PostgreSQL connections via SQLx:
 ServiceBuilder::new()
     .with_config(config)  // Contains database config
     .with_routes(routes)
-    .build()
+    .build()   // sync - assembles the service
+    .serve()   // async - runs it
     .await?;
 
 // Behind the scenes:
 // 1. DatabasePoolAgent::spawn() creates the agent
 // 2. Agent connects to PostgreSQL
 // 3. Pool stored in shared state
-// 4. state.db() returns the pool
+// 4. state.db().await returns Some(pool) once connected
 ```
 
 **Features:**
@@ -178,11 +179,14 @@ use axum::extract::State;
 async fn get_users(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<User>>, ApiError> {
-    // Get pool directly - no agent interaction
-    let pool = state.db()?;
+    // Get the pool directly - no agent interaction
+    let pool = state
+        .db()
+        .await
+        .ok_or(ApiError::DatabaseUnavailable)?;
 
     let users = sqlx::query_as::<_, User>("SELECT * FROM users")
-        .fetch_all(pool)
+        .fetch_all(&pool)
         .await?;
 
     Ok(Json(users))
@@ -191,8 +195,8 @@ async fn get_users(
 
 The `state.db()` method:
 1. Reads from shared state (fast, minimal locking)
-2. Returns `Result<&PgPool, DatabaseUnavailable>`
-3. Fails fast if pool not yet connected
+2. Is `async` and returns `Option<PgPool>` (a cheap `Arc` clone - sqlx executors take `&pool`)
+3. Returns `None` if the pool is not yet connected, so handlers decide how to degrade
 
 ---
 
@@ -264,8 +268,10 @@ url = "postgres://user:pass@localhost/mydb"
 max_connections = 50
 min_connections = 5
 connection_timeout_secs = 30
-idle_timeout_secs = 600
-max_lifetime_secs = 1800
+max_retries = 5
+retry_delay_secs = 2
+optional = false
+lazy_init = true
 
 # Redis pool configuration
 [redis]
@@ -280,10 +286,10 @@ url = "nats://localhost:4222"
 Or via environment variables:
 
 ```bash
-ACTON_DATABASE__URL=postgres://user:pass@localhost/mydb
-ACTON_DATABASE__MAX_CONNECTIONS=50
-ACTON_REDIS__URL=redis://localhost:6379
-ACTON_NATS__URL=nats://localhost:4222
+ACTON_DATABASE_URL=postgres://user:pass@localhost/mydb
+ACTON_DATABASE_MAX_CONNECTIONS=50
+ACTON_REDIS_URL=redis://localhost:6379
+ACTON_NATS_URL=nats://localhost:4222
 ```
 
 ---
@@ -292,7 +298,7 @@ ACTON_NATS__URL=nats://localhost:4222
 
 ### Pool Not Available
 
-If `state.db()` returns an error, check:
+If `state.db().await` returns `None`, check:
 
 1. **Configuration**: Is the database URL correct?
 2. **Network**: Can the service reach the database?
@@ -328,12 +334,12 @@ If you see "connection pool exhausted" errors:
 
 1. **Increase pool size**: Raise `max_connections`
 2. **Check for leaks**: Ensure connections are returned to pool
-3. **Add timeouts**: Set `acquire_timeout_secs`
+3. **Tune the connection timeout**: Set `connection_timeout_secs`
 
 ```toml
 [database]
-max_connections = 100  # Increase from default
-acquire_timeout_secs = 30  # Wait for available connection
+max_connections = 100        # Increase from default
+connection_timeout_secs = 30 # How long to wait for a connection
 ```
 
 ---
@@ -425,7 +431,6 @@ ServiceBuilder::new()
 ```
 
 The actor extension is automatically supervised and will restart on failure. See [Actor Extensions](/docs/actor-extensions) for the full guide.
-```
 
 ### Use Cases
 

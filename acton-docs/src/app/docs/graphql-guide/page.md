@@ -39,9 +39,9 @@ auth, tracing, rate limiting, and Cedar middleware with REST endpoints.
 
 ```toml
 [dependencies]
-acton-service = { version = "0.24", features = ["graphql"] }
+acton-service = { version = "{% version() %}", features = ["graphql"] }
 # Resolver-level Cedar checks:
-# acton-service = { version = "0.24", features = ["graphql-cedar"] }
+# acton-service = { version = "{% version() %}", features = ["graphql-cedar"] }
 
 # async-graphql derive macros emit paths to the crate by name, so add it as a
 # direct dependency too:

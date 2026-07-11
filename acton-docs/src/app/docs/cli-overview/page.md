@@ -98,9 +98,16 @@ acton service new my-service
 acton service new my-service --http --database postgres --cache redis
 ```
 
-**Senior Engineers**: Organization templates for standardized services (coming soon)
+**Senior Engineers**: Customizable templates for standardized services
+```bash
+acton setup templates   # Initialize and edit templates in your config directory
+```
 
-**DevOps/SRE**: Deployment validation and manifest generation (partially available)
+**DevOps/SRE**: Deployment validation and manifest generation
+```bash
+acton service validate --deployment
+acton service generate deployment --platform kubernetes
+```
 
 ## Command Structure
 
@@ -114,7 +121,8 @@ acton
 │   │   ├── endpoint                # Add HTTP endpoint
 │   │   ├── grpc                    # Add gRPC service
 │   │   ├── worker                  # Add background worker
-│   │   ├── middleware              # Add middleware
+│   │   ├── middleware              # Show middleware wiring
+│   │   ├── graphql                 # Add GraphQL transport
 │   │   └── version                 # Add API version
 │   ├── generate
 │   │   ├── deployment              # Generate deployment configs
@@ -125,31 +133,76 @@ acton
 │       ├── run                     # Run development server
 │       ├── health                  # Check service health
 │       └── logs                    # View logs
-└── [future top-level commands]
+└── setup
+    ├── completions                 # Generate/install shell completions
+    └── templates                   # Manage user-customizable templates
 ```
 
 ## Implementation Status
 
-**Fully Implemented:**
+All commands listed above are implemented and available:
+
+**Service creation and scaffolding:**
 - ✅ Interactive and non-interactive service creation
 - ✅ Service scaffolding with multiple features
 - ✅ Template-based code generation
 - ✅ Git integration and automatic formatting
-- ✅ `acton service add endpoint` - Add HTTP endpoints
-- ✅ `acton service add worker` - Add background workers
-- ✅ `acton service generate deployment` - Generate Kubernetes manifests
 
-**Planned:**
-- 🚧 `acton service add grpc` - Add gRPC services
-- 🚧 `acton service add middleware` - Add custom middleware
-- 🚧 `acton service add version` - Add API versions
-- 🚧 `acton service validate` - Validate service quality
-- 🚧 `acton service generate config` - Generate configuration
-- 🚧 `acton service generate proto` - Generate proto files
-- 🚧 `acton service dev` - Development tools
+**Adding components:**
+- ✅ `acton service add endpoint` - Add HTTP endpoints
+- ✅ `acton service add grpc` - Add gRPC services
+- ✅ `acton service add worker` - Add background workers
+- ✅ `acton service add middleware` - Show middleware wiring for a given type
+- ✅ `acton service add graphql` - Add a versioned GraphQL transport
+- ✅ `acton service add version` - Add API versions
+
+**Generation, validation, and dev tools:**
+- ✅ `acton service generate deployment` - Generate Kubernetes manifests
+- ✅ `acton service generate config` - Generate configuration
+- ✅ `acton service generate proto` - Generate proto files
+- ✅ `acton service validate` - Validate service quality
+- ✅ `acton service dev` - Run, health-check, and tail logs
+
+**Setup:**
+- ✅ `acton setup completions` - Generate/install shell completions (bash, zsh, fish, powershell, elvish)
+- ✅ `acton setup templates` - Initialize, list, and locate user-customizable templates
+
+## GraphQL Transport
+
+Add a versioned GraphQL endpoint to an existing service:
+
+```bash
+acton service add graphql --version v1
+```
+
+Pass `--cedar` to wire Cedar resolver authorization (requires the `cedar-authz` feature):
+
+```bash
+acton service add graphql --version v1 --cedar
+```
+
+You can also scaffold GraphQL at creation time with `acton service new my-api --graphql`.
+
+## Setup Commands
+
+Install shell completions for your current shell (auto-detected):
+
+```bash
+acton setup completions
+```
+
+Initialize user-customizable templates in your XDG config directory, then edit any template to change what the CLI generates:
+
+```bash
+acton setup templates            # Initialize templates
+acton setup templates --list     # List available templates
+acton setup templates --show-path # Print the templates directory
+```
+
+Templates you don't modify fall back to the embedded defaults.
 
 ## Next Steps
 
 - Learn about [Service Scaffolding](/docs/cli-scaffolding) to create new services
 - Explore all [CLI Commands](/docs/cli-commands) available
-- Review the [Getting Started](/docs/getting-started) guide for complete examples
+- Review the [Quickstart](/docs/quickstart) guide for complete examples

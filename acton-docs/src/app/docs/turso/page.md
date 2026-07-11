@@ -38,15 +38,19 @@ Enable the Turso feature:
 
 ```toml
 [dependencies]
-acton-service = { version = "0.8", features = ["turso"] }
+{% $dep.tursoOnly %}
 ```
 
 Or add to existing features:
 
 ```toml
 [dependencies]
-acton-service = { version = "0.8", features = ["http", "turso", "observability"] }
+{% dep(["http", "turso", "observability"]) %}
 ```
+
+{% callout type="warning" title="One primary backend at a time" %}
+The `database` (PostgreSQL), `turso` (libsql), and `surrealdb` features are **pairwise mutually exclusive** - enabling more than one is a compile error. Pick a single primary backend. The `clickhouse` feature is analytical and composes with any of them. See [SurrealDB](/docs/surrealdb) and [Database (PostgreSQL)](/docs/database).
+{% /callout %}
 
 ---
 
@@ -167,17 +171,16 @@ async fn get_users(
 ) -> Result<Json<Vec<User>>> {
     // Get the Turso database connection
     let db = state.turso().await
-        .ok_or(Error::Internal("Turso not available"))?;
+        .ok_or_else(|| Error::Internal("Turso not available".into()))?;
 
     // Get a connection from the database
     let conn = db.connect()
         .map_err(|e| Error::Internal(format!("Connection failed: {}", e)))?;
 
-    // Execute queries
+    // Execute queries - libsql::Error converts into Error::Database automatically
     let mut rows = conn
         .query("SELECT id, name, email FROM users", ())
-        .await
-        .map_err(|e| Error::Database(e.to_string()))?;
+        .await?;
 
     let mut users = Vec::new();
     while let Some(row) = rows.next().await? {
@@ -310,6 +313,16 @@ match state.turso().await {
 }
 ```
 
+`libsql::Error` converts into the framework's `Error::Database(DatabaseError)` automatically, so a bare `?`
+inside a handler is usually all you need. `DatabaseError` carries structured context (`operation`, `kind`,
+`message`, `context`); construct one explicitly when you want to attach your own:
+
+```rust
+// DatabaseError, DatabaseErrorKind, and DatabaseOperation are all in the prelude
+let db = state.turso().await
+    .ok_or_else(|| Error::Database(DatabaseError::connection_failed("Turso not configured")))?;
+```
+
 Error categories with automatic detection:
 - **Authentication errors** - Invalid or expired auth token
 - **Network errors** - Connectivity issues to Turso cloud
@@ -379,15 +392,19 @@ auth_token = "..."
 
 ---
 
-## Comparison: Turso vs PostgreSQL
+## Comparison: Primary Backends
 
-| Feature | Turso | PostgreSQL |
-|---------|-------|------------|
-| **Deployment** | Edge, embedded, cloud | Server-based |
-| **Latency** | Sub-millisecond (local) | Network dependent |
-| **Scaling** | Read replicas at edge | Vertical + read replicas |
-| **Schema** | SQLite-compatible | Full PostgreSQL |
-| **Best for** | Edge apps, mobile backends | Complex queries, ACID |
+acton-service ships three primary database backends. They are **mutually exclusive** - enable exactly one
+of `database`, `turso`, or `surrealdb`.
+
+| Feature | Turso (`turso`) | PostgreSQL (`database`) | SurrealDB (`surrealdb`) |
+|---------|-----------------|-------------------------|-------------------------|
+| **Driver** | `libsql` | `sqlx` | `surrealdb` (`any` engine) |
+| **Deployment** | Edge, embedded, cloud | Server-based | Embedded (`mem://`), server (`ws://`, `http://`) |
+| **Latency** | Sub-millisecond (local) | Network dependent | In-process or network dependent |
+| **Query language** | SQLite-compatible SQL | Full PostgreSQL SQL | SurrealQL |
+| **Accessor** | `state.turso().await` | `state.db().await` | `state.surrealdb().await` |
+| **Best for** | Edge apps, mobile backends | Complex queries, ACID | Multi-model / graph-shaped data |
 
 **Use Turso when:**
 - Building edge or mobile applications
@@ -399,6 +416,16 @@ auth_token = "..."
 - Need advanced SQL features (CTEs, window functions)
 - Have complex relational data
 - Require strong ACID guarantees across distributed writes
+
+**Use SurrealDB when:**
+- Your data is document- or graph-shaped rather than strictly relational
+- You want an embedded (`mem://`) store for tests and a server for production behind one URL scheme
+- SurrealQL suits your access patterns better than SQL
+
+{% callout type="note" title="ClickHouse composes" %}
+The `clickhouse` feature is an *analytical* backend, not a primary one - it can be enabled alongside any of
+the three above. See [ClickHouse (Analytics)](/docs/clickhouse).
+{% /callout %}
 
 ---
 
@@ -418,7 +445,7 @@ async fn list_todos(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<Todo>>> {
     let db = state.turso().await
-        .ok_or(Error::Internal("Database not available"))?;
+        .ok_or_else(|| Error::Internal("Database not available".into()))?;
     let conn = db.connect()?;
 
     let mut rows = conn
@@ -442,7 +469,7 @@ async fn create_todo(
     Json(input): Json<CreateTodo>,
 ) -> Result<Json<Todo>> {
     let db = state.turso().await
-        .ok_or(Error::Internal("Database not available"))?;
+        .ok_or_else(|| Error::Internal("Database not available".into()))?;
     let conn = db.connect()?;
 
     conn.execute(
@@ -455,7 +482,10 @@ async fn create_todo(
         .query("SELECT id, title, completed FROM todos WHERE rowid = last_insert_rowid()", ())
         .await?;
 
-    let row = rows.next().await?.ok_or(Error::Internal("Insert failed"))?;
+    let row = rows
+        .next()
+        .await?
+        .ok_or_else(|| Error::Internal("Insert failed".into()))?;
 
     Ok(Json(Todo {
         id: row.get(0)?,
@@ -554,6 +584,8 @@ turso db tokens list your-database
 ## Related Features
 
 - **[Database (PostgreSQL)](/docs/database)** - PostgreSQL integration
+- **[SurrealDB](/docs/surrealdb)** - Multi-model backend (mutually exclusive with `turso`)
+- **[ClickHouse (Analytics)](/docs/clickhouse)** - Analytical store that composes with any primary backend
 - **[Health Checks](/docs/health-checks)** - Automatic database health monitoring
 - **[Configuration](/docs/configuration)** - Environment-based configuration
 - **[Reactive Architecture](/docs/reactive-architecture)** - Actor-based connection management
