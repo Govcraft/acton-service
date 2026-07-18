@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.28.0] - 2026-07-17
+
 ### Features
 
 - **config**: Both the HTTP and gRPC listeners now honor a configurable
@@ -29,9 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Adding `bind`/`tls` fields to the public `ServiceConfig`/`GrpcConfig`
   structs is source-breaking for consumers that build them with a struct
-  literal (no `#[non_exhaustive]`); the next release should take the minor
-  (0.x breaking) slot. Config files and deserialization are unaffected —
-  every new field is optional or defaulted.
+  literal (no `#[non_exhaustive]`); hence the minor (0.x breaking) bump.
+  Config files and deserialization are unaffected — every new field is
+  optional or defaulted.
 
 ## [acton-service-v0.27.1] - 2026-07-11
 
