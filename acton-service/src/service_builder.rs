@@ -1311,7 +1311,8 @@ where
             app = app.layer(axum::Extension(logger.clone()));
         }
 
-        let listener_addr = std::net::SocketAddr::from(([0, 0, 0, 0], config.service.port));
+        let listener_addr =
+            std::net::SocketAddr::new(config.service.bind, config.service.port);
 
         // Load TLS config once at build time (fail fast on bad certs)
         #[cfg(feature = "tls")]
@@ -1340,6 +1341,36 @@ where
             }
         };
 
+        // Resolve per-listener TLS for the separate-port gRPC listener.
+        // Mirrors the HTTP TLS handling above (log-and-degrade on load error).
+        // A present `[grpc.tls]` section is authoritative for the gRPC
+        // listener — `enabled = false` means plaintext gRPC even when the
+        // shared `[tls]` is active. Only an absent section inherits it.
+        #[cfg(all(feature = "grpc", feature = "tls"))]
+        let grpc_tls_config = match config.grpc.as_ref().and_then(|g| g.tls.as_ref()) {
+            Some(grpc_tls) if grpc_tls.enabled => match crate::tls::load_server_config(grpc_tls) {
+                Ok(sc) => {
+                    tracing::info!(
+                        "gRPC TLS configured (cert: {}, key: {})",
+                        grpc_tls.cert_path.display(),
+                        grpc_tls.key_path.display()
+                    );
+                    Some(sc)
+                }
+                Err(e) => {
+                    tracing::error!("Failed to load gRPC TLS configuration: {}", e);
+                    None
+                }
+            },
+            Some(_) => {
+                tracing::info!(
+                    "gRPC TLS explicitly disabled; separate-port gRPC listener serves plaintext"
+                );
+                None
+            }
+            None => tls_config.clone(),
+        };
+
         ActonService {
             config,
             state: state_clone,
@@ -1349,6 +1380,8 @@ where
             grpc_routes: self.grpc_services,
             #[cfg(feature = "tls")]
             tls_config,
+            #[cfg(all(feature = "grpc", feature = "tls"))]
+            grpc_tls_config,
             agent_runtime: self.agent_runtime,
         }
     }
@@ -1624,6 +1657,10 @@ where
     grpc_routes: Option<tonic::service::Routes>,
     #[cfg(feature = "tls")]
     tls_config: Option<std::sync::Arc<tokio_rustls::rustls::ServerConfig>>,
+    /// Per-listener TLS config for the separate-port gRPC listener. Falls back
+    /// to `tls_config` (the HTTP TLS) when `[grpc.tls]` is not configured.
+    #[cfg(all(feature = "grpc", feature = "tls"))]
+    grpc_tls_config: Option<std::sync::Arc<tokio_rustls::rustls::ServerConfig>>,
     agent_runtime: Option<acton_reactive::prelude::ActorRuntime>,
 }
 
@@ -1688,9 +1725,12 @@ where
                     let grpc_routes = self.grpc_routes.take().unwrap();
 
                     if grpc_config.use_separate_port {
-                        // Dual-port mode: HTTP and gRPC on separate ports
+                        // Dual-port mode: HTTP and gRPC on separate ports.
+                        // The gRPC listener uses its own bind when set, else the
+                        // service-level bind.
                         let grpc_port = grpc_config.port;
-                        let grpc_addr = std::net::SocketAddr::from(([0, 0, 0, 0], grpc_port));
+                        let grpc_bind = grpc_config.effective_bind(self.config.service.bind);
+                        let grpc_addr = std::net::SocketAddr::new(grpc_bind, grpc_port);
 
                         tracing::info!("Starting HTTP service on {}", self.listener_addr);
                         tracing::info!("Starting gRPC service on {}", grpc_addr);
@@ -1701,9 +1741,10 @@ where
                         // Convert Routes to axum router for the gRPC listener
                         let grpc_app = grpc_routes.into_axum_router();
 
-                        // Spawn gRPC server on separate task (with optional TLS)
+                        // Spawn gRPC server on separate task (with optional
+                        // per-listener TLS, falling back to the HTTP TLS config).
                         #[cfg(feature = "tls")]
-                        let grpc_tls_config = self.tls_config.clone();
+                        let grpc_tls_config = self.grpc_tls_config.clone();
 
                         let grpc_handle = tokio::spawn(async move {
                             #[cfg(feature = "tls")]

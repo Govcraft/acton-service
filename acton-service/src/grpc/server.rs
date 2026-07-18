@@ -3,7 +3,7 @@
 use crate::config::GrpcConfig;
 use crate::error::Result;
 use crate::state::AppState;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tonic::server::NamedService;
 use tonic::transport::Server;
 // Reflection types are not used directly, we use the Builder API
@@ -37,9 +37,16 @@ impl GrpcServer {
     }
 
     /// Get the socket address for the gRPC server
+    ///
+    /// A standalone [`GrpcServer`] has no service-level context, so the bind
+    /// address resolves to the gRPC-specific `bind` when set, otherwise
+    /// `0.0.0.0` (all interfaces).
     pub fn socket_addr(&self, http_port: u16) -> SocketAddr {
         let port = self.config.effective_port(http_port);
-        SocketAddr::from(([0, 0, 0, 0], port))
+        let bind = self
+            .config
+            .effective_bind(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        SocketAddr::new(bind, port)
     }
 }
 

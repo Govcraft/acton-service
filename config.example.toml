@@ -3,10 +3,31 @@
 
 [service]
 name = "my-service"
+# bind = "0.0.0.0"  # IP to bind the listener to. Default 0.0.0.0 (all interfaces).
+                    # Set to "127.0.0.1" or "::1" for a loopback-only surface.
 port = 8080
 log_level = "info"  # trace, debug, info, warn, error
 timeout_secs = 30
 environment = "dev"  # dev, staging, production
+
+# ============================================================================
+# gRPC ([grpc] section, requires the `grpc` feature)
+# ============================================================================
+# [grpc]
+# enabled = true
+# use_separate_port = true   # serve gRPC on its own port (below); false = share the HTTP port
+# port = 9090
+# bind = "127.0.0.1"         # gRPC listener bind. Falls back to [service] bind when unset.
+                             # Only applied in separate-port mode.
+#
+# Per-listener TLS for the separate-port gRPC surface (requires the `tls` feature).
+# When present this section is authoritative: enabled = false serves plaintext gRPC
+# even when the shared [tls] is active (e.g. a loopback-only surface).
+# When omitted, the gRPC listener falls back to the shared [tls] config.
+# [grpc.tls]
+# enabled = true
+# cert_path = "./certs/grpc.pem"
+# key_path = "./certs/grpc.key"
 
 # ============================================================================
 # TOKEN AUTHENTICATION ([token] section with format = "paseto" or "jwt")
