@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Features
+
+- **config**: Both the HTTP and gRPC listeners now honor a configurable
+  bind address. `[service] bind` accepts any `IpAddr` (`0.0.0.0`,
+  `127.0.0.1`, `::1`, …) and defaults to `0.0.0.0` for backward
+  compatibility, so downstream services can finally expose a loopback-only
+  surface without hand-rolling their own listener. `[grpc] bind` overrides
+  the service-level bind for the separate-port gRPC listener and falls back
+  to it when unset (`GrpcConfig::effective_bind`). (#38)
+- **grpc**: Per-listener TLS for the separate-port gRPC surface via
+  `[grpc.tls]` (requires the `tls` feature). When the section is present it
+  is authoritative: `enabled = true` terminates TLS with its own
+  certificate/key independently of the HTTP listener, `enabled = false`
+  serves plaintext gRPC even when the shared `[tls]` is active (e.g. a
+  loopback-only sidecar surface). When the section is omitted the gRPC
+  listener falls back to the shared `[tls]` config, preserving prior
+  behavior. Bad gRPC certificates are reported at build time. (#38)
+
+### Notes
+
+- Adding `bind`/`tls` fields to the public `ServiceConfig`/`GrpcConfig`
+  structs is source-breaking for consumers that build them with a struct
+  literal (no `#[non_exhaustive]`); the next release should take the minor
+  (0.x breaking) slot. Config files and deserialization are unaffected —
+  every new field is optional or defaulted.
+
 ## [acton-service-v0.27.1] - 2026-07-11
 
 ### Fixes

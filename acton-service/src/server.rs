@@ -33,7 +33,7 @@ impl Server {
 
     /// Run the server with the given router
     pub async fn serve(self, app: Router) -> Result<()> {
-        let addr = SocketAddr::from(([0, 0, 0, 0], self.config.service.port));
+        let addr = SocketAddr::new(self.config.service.bind, self.config.service.port);
 
         tracing::info!("Starting {} on {}", self.config.service.name, addr);
 

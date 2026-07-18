@@ -12,6 +12,7 @@ use figment::{
     Figment,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -160,6 +161,13 @@ where
 pub struct ServiceConfig {
     /// Service name
     pub name: String,
+
+    /// IP address to bind the listener to.
+    ///
+    /// Defaults to `0.0.0.0` (all interfaces) for backward compatibility.
+    /// Set to `127.0.0.1` or `::1` to expose a loopback-only surface.
+    #[serde(default = "default_bind")]
+    pub bind: IpAddr,
 
     /// Port to listen on
     #[serde(default = "default_port")]
@@ -663,6 +671,26 @@ pub struct GrpcConfig {
     #[serde(default = "default_false")]
     pub use_separate_port: bool,
 
+    /// IP address to bind the gRPC listener to.
+    ///
+    /// When `None` (default), falls back to the service-level `[service] bind`.
+    /// Only used when `use_separate_port` is true; the hybrid single-port mode
+    /// shares the HTTP listener and its bind address.
+    #[serde(default)]
+    pub bind: Option<IpAddr>,
+
+    /// Per-listener TLS configuration for the gRPC surface (requires `tls` feature).
+    ///
+    /// When present, this section is authoritative for the separate-port gRPC
+    /// listener: `enabled = true` terminates TLS using this certificate/key
+    /// independently of the HTTP listener, while `enabled = false` serves
+    /// plaintext gRPC even when the shared `[tls]` is active (useful for a
+    /// loopback-only gRPC surface). When `None`, the gRPC listener falls back
+    /// to the shared `[tls]` configuration.
+    #[cfg(feature = "tls")]
+    #[serde(default)]
+    pub tls: Option<TlsConfig>,
+
     /// gRPC port (only used if use_separate_port is true)
     #[serde(default = "default_grpc_port")]
     pub port: u16,
@@ -748,6 +776,14 @@ impl GrpcConfig {
         } else {
             http_port
         }
+    }
+
+    /// Resolve the effective bind address.
+    ///
+    /// Returns the gRPC-specific bind address when set, otherwise the supplied
+    /// service-level bind address.
+    pub fn effective_bind(&self, service_bind: IpAddr) -> IpAddr {
+        self.bind.unwrap_or(service_bind)
     }
 
     /// Get max message size in bytes
@@ -1179,6 +1215,10 @@ impl LocalRateLimitConfig {
 }
 
 // Default value functions
+fn default_bind() -> IpAddr {
+    IpAddr::V4(Ipv4Addr::UNSPECIFIED) // 0.0.0.0 (all interfaces)
+}
+
 fn default_port() -> u16 {
     8080
 }
@@ -1584,6 +1624,7 @@ where
         Self {
             service: ServiceConfig {
                 name: "acton-service".to_string(),
+                bind: default_bind(),
                 port: default_port(),
                 log_level: default_log_level(),
                 timeout_secs: default_timeout(),
@@ -1673,6 +1714,7 @@ mod tests {
         let config = Config {
             service: ServiceConfig {
                 name: "test-service".to_string(),
+                bind: default_bind(),
                 port: 9090,
                 log_level: "debug".to_string(),
                 timeout_secs: 30,
@@ -1747,6 +1789,7 @@ mod tests {
         let config = Config {
             service: ServiceConfig {
                 name: "test".to_string(),
+                bind: default_bind(),
                 port: 8080,
                 log_level: "info".to_string(),
                 timeout_secs: 30,
@@ -1923,5 +1966,130 @@ key_path = "./keys/paseto.key"
             config.token.is_none(),
             "token sections in config.example.toml must stay commented (JWT needs the `jwt` feature)"
         );
+    }
+
+    #[test]
+    fn test_default_bind_is_unspecified() {
+        // Default must remain 0.0.0.0 for backward compatibility.
+        let config = Config::<()>::default();
+        assert_eq!(config.service.bind, IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    }
+
+    #[test]
+    fn test_service_bind_parses_from_toml() {
+        // Round-trip through Figment (the real load path) so a loopback bind
+        // documented in config.example.toml actually resolves to 127.0.0.1.
+        let toml = r#"
+[service]
+name = "loopback-service"
+bind = "127.0.0.1"
+"#;
+        let config: Config<()> = Figment::new()
+            .merge(Serialized::defaults(Config::<()>::default()))
+            .merge(Toml::string(toml))
+            .extract()
+            .expect("[service] bind = \"127.0.0.1\" must deserialize");
+        assert_eq!(config.service.bind, IpAddr::V4(Ipv4Addr::LOCALHOST));
+    }
+
+    #[test]
+    fn test_service_bind_accepts_ipv6() {
+        let toml = r#"
+[service]
+name = "v6-service"
+bind = "::1"
+"#;
+        let config: Config<()> = Figment::new()
+            .merge(Serialized::defaults(Config::<()>::default()))
+            .merge(Toml::string(toml))
+            .extract()
+            .expect("[service] bind = \"::1\" must deserialize");
+        assert_eq!(
+            config.service.bind,
+            IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)
+        );
+    }
+
+    #[test]
+    fn test_service_bind_rejects_garbage() {
+        // Validation is free: an unparseable address must fail extraction
+        // rather than silently falling back to a default.
+        let toml = r#"
+[service]
+name = "bad-service"
+bind = "not-an-ip"
+"#;
+        let result: std::result::Result<Config<()>, _> = Figment::new()
+            .merge(Serialized::defaults(Config::<()>::default()))
+            .merge(Toml::string(toml))
+            .extract();
+        assert!(result.is_err(), "an invalid bind address must be rejected");
+    }
+
+    #[test]
+    fn test_grpc_effective_bind_falls_back_to_service() {
+        let service_bind = IpAddr::V4(Ipv4Addr::LOCALHOST);
+
+        // No gRPC-specific bind: fall back to the service bind.
+        let unset: GrpcConfig =
+            serde_json::from_str("{}").expect("empty gRPC config must deserialize via defaults");
+        assert_eq!(unset.effective_bind(service_bind), service_bind);
+
+        // Explicit gRPC bind wins over the service bind.
+        let explicit: GrpcConfig = serde_json::from_str(r#"{ "bind": "0.0.0.0" }"#)
+            .expect("gRPC config with bind must deserialize");
+        assert_eq!(
+            explicit.effective_bind(service_bind),
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+        );
+    }
+
+    #[test]
+    fn test_grpc_bind_parses_from_toml() {
+        let toml = r#"
+[service]
+name = "svc"
+
+[grpc]
+use_separate_port = true
+bind = "127.0.0.1"
+port = 9090
+"#;
+        let config: Config<()> = Figment::new()
+            .merge(Serialized::defaults(Config::<()>::default()))
+            .merge(Toml::string(toml))
+            .extract()
+            .expect("[grpc] bind must deserialize");
+        let grpc = config.grpc.expect("grpc section present");
+        assert_eq!(grpc.bind, Some(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+        assert_eq!(grpc.port, 9090);
+    }
+
+    #[cfg(feature = "tls")]
+    #[test]
+    fn test_grpc_tls_parses_from_toml() {
+        let toml = r#"
+[service]
+name = "svc"
+
+[grpc]
+use_separate_port = true
+port = 9090
+
+[grpc.tls]
+enabled = true
+cert_path = "./certs/grpc.pem"
+key_path = "./certs/grpc.key"
+"#;
+        let config: Config<()> = Figment::new()
+            .merge(Serialized::defaults(Config::<()>::default()))
+            .merge(Toml::string(toml))
+            .extract()
+            .expect("[grpc.tls] must deserialize");
+        let grpc = config.grpc.expect("grpc section present");
+        let tls = grpc.tls.expect("grpc tls present");
+        assert!(tls.enabled);
+        assert_eq!(tls.cert_path, PathBuf::from("./certs/grpc.pem"));
+        assert_eq!(tls.key_path, PathBuf::from("./certs/grpc.key"));
     }
 }
