@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.29.0] - 2026-07-19
+
 ### Security
 
 - **tls**: A `[tls]` or `[grpc.tls]` section with `enabled = true` whose
@@ -42,6 +44,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   silently-weaker-than-configured class as the TLS and token-auth degrades
   fixed by #41. (#36)
 
+### Breaking changes
+
+- **observability**: The OpenTelemetry stack moves 0.30 → 0.31
+  (`opentelemetry`, `opentelemetry_sdk`, `opentelemetry-otlp` 0.31;
+  `tracing-opentelemetry` 0.32). These crates are mutually version-locked,
+  so consumers pinned to 0.30 must move together with this bump. The
+  archived `tower-otel-http-metrics` dependency is replaced by the official
+  `opentelemetry-instrumentation-tower`, which also removes a duplicate
+  tonic from the dependency tree. (#42)
+- **resilience**: The retry configuration is removed —
+  `retry_enabled`, `retry_max_attempts`, `retry_base_delay_ms`,
+  `retry_max_delay_ms`, and the `with_retry()` / `with_retry_max_attempts()`
+  builder methods. It never had a consumer: retrying means replaying a
+  request, and an inbound `Request<Body>` wraps a stream that is consumed
+  once, while buffering every body to make it replayable would be a
+  memory-exhaustion risk on a public endpoint. Retry belongs on outbound
+  client stacks, and the docs now say so instead of promising a layer that
+  cannot ship. (#32)
+- **resilience**: `bulkhead_max_queued` is renamed to
+  `bulkhead_max_wait_ms`. The old key had no consumer and no counterpart
+  concept in the bulkhead layer; the new one maps to `max_wait_duration`,
+  which the layer does support and TOML previously could not set. (#32)
+- **resilience**: `circuit_breaker_layer()` loses its type parameters and
+  the spurious `Req: Clone` bound. The old first parameter was the
+  *response* type mislabeled as the request, so any caller who followed the
+  old doctest's turbofish was constructing a nonsense layer. (#33)
+- **grpc**: `build()` now refuses when gRPC services are registered but can
+  never be served — `config.grpc` absent or `enabled = false` previously
+  discarded the registered routes silently and started HTTP-only, with
+  every RPC failing at the client as an opaque transport error. The error
+  is reported through the same deferred path as the TLS and Cedar checks,
+  distinguishes the two causes, and states the remedy. Any code this breaks
+  was already not serving gRPC. `GrpcConfig` also gains the previously
+  missing `Default` impl. (#53)
+- **features**: `full` now includes `audit` and `oauth` — both were
+  missing, which is why CI never compiled the audit subsystem and several
+  shipped audit bugs went undetected. Because audit logging is enabled by
+  default when compiled in, services built with `full` start producing
+  audit events on upgrade; set `[audit] enabled = false` to opt out. (#26)
+
 ### Features
 
 - **builder**: `ServiceBuilder::try_build()` returns
@@ -67,6 +109,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   framework-managed gRPC authentication + Cedar authorization, with demo
   tokens printed at startup and grpcurl commands for the allow, deny, and
   unauthenticated paths. (#36)
+- **observability**: New `prometheus-metrics` feature — a `GET /metrics`
+  Prometheus text-exposition endpoint mounted on the main listener
+  alongside `/health` and `/ready`, backed by an `opentelemetry-prometheus`
+  pull reader on the shared `SdkMeterProvider`. Push (`otel-metrics`) and
+  scrape (`prometheus-metrics`) are independently selectable; enabling both
+  feeds two readers from one meter provider. `ServiceBuilder` initializes
+  the meter provider and applies the HTTP metrics layer automatically from
+  `[middleware.metrics]`. (#42)
+- **audit**: Every declared `AuditEventKind` is now actually emitted.
+  `TypedSession<AuthSession>::logout()` emits `AuthLogout` with the
+  request's resolved `AuditSource`; new decorators wrap app-constructed
+  auth storage so emission lives in one place per family instead of per
+  backend — `AuditedRefreshStorage` (`AuthTokenRefresh` on rotation),
+  `AuditedApiKeyStorage` (`AuthApiKeyCreated` / `AuthApiKeyRevoked`), and
+  `AuditedOAuthProvider` (`AuthOAuthCallback` on code-exchange success and
+  failure). The governor rate limiter now emits `HttpRequestDenied`,
+  matching the token-bucket limiter. (#16)
 
 ### Notes
 
@@ -121,6 +180,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   initializing the hash chain. Previously an unready backend caused the chain
   to restart at sequence 0, which would fork the chain and collide with
   persisted sequence numbers on the first append.
+- **audit**: Events emitted before the hash chain finishes its async
+  initialization are no longer silently dropped. They are buffered in agent
+  state (bounded at 1024) and sealed in emission order the moment the chain
+  loads, ahead of anything received later — so the `ConfigLoaded`
+  compliance event emitted during `build()` reliably reaches storage in a
+  fresh process, and early auth events survive the window while a lazy
+  DB-backed pool connects. On overflow the drop is reported through the
+  storage failure tracker (threshold/cooldown/webhook alerting), never
+  silently. Persistence also moves from a task-per-event to a single
+  sequential writer, so chain seal order is now guaranteed write order.
+  (#61)
+- **audit**: `AuditSource` is resolved once per request by a new
+  `RequestContext` middleware (first `X-Forwarded-For` hop, then
+  `X-Real-IP`, then the TCP peer address) and read from request extensions
+  by every audit emission point. Token-failure events previously built
+  their source from raw headers before enrichment ran and recorded blank
+  client IPs and request IDs. (#17)
+- **builder**: Every remaining `block_in_place` bridge in
+  `ServiceBuilder::build()` — background worker spawn, actor extensions,
+  Cedar initialization, Redis session initialization, and key rotation —
+  is now guarded by a runtime-flavor check. On a current-thread runtime
+  each records a subsystem-named startup error suggesting a multi-threaded
+  runtime or disabling the subsystem, surfaced by `try_build()`/`serve()`,
+  instead of panicking deep inside tokio with an unactionable message. The
+  audit agent and broker received the same guard via #26. (#54)
+- **resilience**: The circuit breaker and bulkhead actually work on axum
+  routers. Beyond the reported unsatisfiable `Req: Clone` bound (fixed by
+  the `tower-resilience` 0.4.7 → 0.10.0 upgrade), the layers were silently
+  inert: axum re-invokes `Layer::layer` per request and `build()` minted
+  fresh state on each application, so the breaker's failure window reset
+  between requests and every request received its own full set of bulkhead
+  permits. Both now share state via `build_with_handle()`. A new
+  `http_circuit_breaker_layer()` ships a 5xx-aware classifier, since
+  inbound axum routes are infallible and the default `Err`-counting
+  classifier can never fire; `apply_resilience()` wires classifier, 503
+  error handling, and bulkhead-inside-breaker ordering. The regression
+  test asserts the breaker actually opens end-to-end, not merely that the
+  stack compiles. (#33)
+- **resilience**: `[middleware.resilience]` is now applied. Its only
+  consumer used to be a startup log line announcing protection that was
+  never attached; `ServiceBuilder` now wires circuit breaker and bulkhead
+  from the section via `apply_resilience`, reports what was actually
+  applied, and warns when the section is present but the `resilience`
+  feature is compiled out. (#32)
+- **grpc**: Health reflection works. `GrpcServicesBuilder::build()` now
+  registers the `grpc.health.v1.Health` descriptor with the reflection
+  service, so `.with_health().with_reflection()` yields a health service
+  that grpcurl and other reflection-driven clients can discover — it was
+  previously routable but invisible. (#53)
+- **examples**: The `single-port` gRPC example actually serves gRPC. It
+  mutated `config.grpc` through an `Option` that `Config::default()` leaves
+  `None`, so the enabling code never executed and every documented grpcurl
+  command failed against an HTTP-only service; it also skipped the health
+  service by building without state and routed its documented GET to the
+  wrong handler. All documented commands are now verified against a
+  running instance. (#53)
+- **oauth**: `generate_state()` compiles again under rand 0.10 — a latent
+  API break that CI never caught because `oauth` was missing from the
+  `full` feature set. (#16)
+
+### Internal
+
+- **ci**: The `full` matrix leg finally compiles the audit subsystem
+  (see the `full` feature change above), and a new `audit-storage` job
+  covers each persistent backend — Turso, SurrealDB, and ClickHouse — in
+  its valid feature combination. (#26)
+- **ci**: protoc is installed from the Ubuntu archive instead of GitHub
+  release downloads, removing a rate-limited external dependency from
+  every run. (#48)
+- **cli**: `acton-cli` is marked `publish = false`; the crate is a project
+  scaffolding tool consumed from the repository, not a library surface
+  worth versioning on crates.io. (#58)
 
 ## [acton-service-v0.28.0] - 2026-07-17
 
