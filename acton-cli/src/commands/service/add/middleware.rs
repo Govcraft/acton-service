@@ -82,7 +82,10 @@ fn show_all_middleware() {
     println!("{}", "3. Metrics (OpenTelemetry)".green().bold());
     println!("   {}: metrics, otel, opentelemetry", "Aliases".yellow());
     println!("   HTTP request metrics and tracing");
-    println!("   {}: otel-metrics", "Feature".cyan());
+    println!(
+        "   {}: otel-metrics (OTLP push), prometheus-metrics (/metrics pull)",
+        "Feature".cyan()
+    );
     println!();
 
     println!("{}", "4. Rate Limiting (Governor)".green().bold());
@@ -218,31 +221,37 @@ fn show_metrics_middleware() {
     println!();
     println!(
         "{}",
-        "HTTP metrics are enabled via the 'otel-metrics' feature.".bold()
+        "HTTP metrics support two export models, selected by feature:".bold()
     );
+    println!("  - otel-metrics:       OTLP push to a collector");
+    println!("  - prometheus-metrics: pull-based GET /metrics endpoint");
     println!();
 
     println!("{}", "1. Enable in Cargo.toml:".green().bold());
     println!();
     println!("   [dependencies]");
+    println!("   # OTLP push:");
     println!(r#"   acton-service = {{ version = "0.2", features = ["otel-metrics"] }}"#);
+    println!("   # Prometheus pull (/metrics endpoint):");
+    println!(r#"   acton-service = {{ version = "0.2", features = ["prometheus-metrics"] }}"#);
     println!();
 
     println!("{}", "2. Configure in config.toml:".green().bold());
     println!();
     println!("   [middleware.metrics]");
     println!("   enabled = true");
-    println!("   endpoint_path = \"/metrics\"  # Prometheus endpoint");
     println!();
-    println!("   # Optional OTLP export");
+    println!("   # Optional OTLP export (otel-metrics feature)");
     println!("   [otlp]");
     println!(r#"   endpoint = "http://localhost:4317""#);
     println!("   service_name = \"my-service\"");
+    println!("   enabled = true");
     println!();
 
     println!("{}", "Automatic integration:".cyan().bold());
-    println!("  Metrics middleware is automatically added when configured.");
-    println!("  Exposes /metrics endpoint for Prometheus scraping.");
+    println!("  Metrics middleware is added automatically when configured.");
+    println!("  With prometheus-metrics, GET /metrics is mounted alongside");
+    println!("  /health and /ready for Prometheus scraping.");
     println!();
 
     println!("{}", "Available metrics:".cyan().bold());

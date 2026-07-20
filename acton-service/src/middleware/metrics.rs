@@ -5,8 +5,8 @@
 
 use std::time::Duration;
 
-#[cfg(feature = "otel-metrics")]
-use tower_otel_http_metrics::HTTPMetricsLayerBuilder;
+#[cfg(feature = "_metrics")]
+use opentelemetry_instrumentation_tower::HTTPMetricsLayerBuilder;
 
 /// Configuration for HTTP metrics
 #[derive(Debug, Clone)]
@@ -151,13 +151,13 @@ pub mod metric_labels {
 ///     .service(my_service);
 /// # */
 /// ```
-#[cfg(feature = "otel-metrics")]
+#[cfg(feature = "_metrics")]
 pub fn create_metrics_layer(
     config: &MetricsConfig,
 ) -> Option<
-    tower_otel_http_metrics::HTTPMetricsLayer<
-        tower_otel_http_metrics::NoOpExtractor,
-        tower_otel_http_metrics::NoOpExtractor,
+    opentelemetry_instrumentation_tower::HTTPMetricsLayer<
+        opentelemetry_instrumentation_tower::NoOpExtractor,
+        opentelemetry_instrumentation_tower::NoOpExtractor,
     >,
 > {
     if !config.enabled {
@@ -188,9 +188,9 @@ pub fn create_metrics_layer(
 }
 
 /// Create the HTTP metrics layer (no-op when feature is disabled)
-#[cfg(not(feature = "otel-metrics"))]
+#[cfg(not(feature = "_metrics"))]
 pub fn create_metrics_layer(_config: &MetricsConfig) -> Option<()> {
-    tracing::info!("HTTP metrics not available (otel-metrics feature disabled)");
+    tracing::info!("HTTP metrics not available (otel-metrics/prometheus-metrics feature disabled)");
     None
 }
 
@@ -262,7 +262,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "otel-metrics")]
+    #[cfg(feature = "_metrics")]
     fn test_create_metrics_layer_without_meter_provider() {
         // Without initializing the meter provider, should return None
         let config = MetricsConfig::new().with_enabled(true);

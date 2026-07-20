@@ -21,7 +21,7 @@ pub mod route_matcher;
 #[cfg(feature = "resilience")]
 pub mod resilience;
 
-#[cfg(feature = "otel-metrics")]
+#[cfg(feature = "_metrics")]
 pub mod metrics;
 
 #[cfg(feature = "governor")]
@@ -60,7 +60,7 @@ pub use route_matcher::{normalize_path, CompiledRoutePatterns};
 #[cfg(feature = "resilience")]
 pub use resilience::ResilienceConfig;
 
-#[cfg(feature = "otel-metrics")]
+#[cfg(feature = "_metrics")]
 pub use metrics::{metric_labels, metric_names, MetricsConfig};
 
 #[cfg(feature = "governor")]

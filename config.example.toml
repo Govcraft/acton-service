@@ -112,7 +112,10 @@ bulkhead_max_queued = 200           # Max queued requests
 
 # ----------------------------------------------------------------------------
 # HTTP Metrics (OpenTelemetry)
-# Requires feature: otel-metrics
+# Requires feature: otel-metrics (OTLP push to a collector) and/or
+#                   prometheus-metrics (pull-based /metrics endpoint).
+# When prometheus-metrics is enabled, metrics are scraped from GET /metrics
+# in Prometheus text-exposition format.
 # ----------------------------------------------------------------------------
 [middleware.metrics]
 enabled = true

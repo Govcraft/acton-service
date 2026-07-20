@@ -4,24 +4,39 @@ Examples demonstrating metrics, tracing, and monitoring integration with acton-s
 
 ## Examples
 
+### test-prometheus-metrics.rs
+
+**Pull-based Prometheus `/metrics` endpoint**
+
+Demonstrates the `prometheus-metrics` feature:
+- A `/metrics` endpoint in Prometheus text-exposition format
+- The OpenTelemetry HTTP metrics tower layer feeding the same meter provider
+- Batteries-included wiring: `ServiceBuilder` initializes the meter provider,
+  applies the metrics layer, and mounts `/metrics` automatically
+
+Run with:
+```bash
+cargo run --manifest-path=../../Cargo.toml --example test-prometheus-metrics --features prometheus-metrics
+```
+
+Generate traffic and scrape metrics:
+```bash
+curl http://localhost:8080/api/v1/hello
+curl http://localhost:8080/metrics
+```
+
 ### test-metrics.rs
 
-**Prometheus Metrics Integration**
+**HTTP metrics tower layer (manual wiring)**
 
-Demonstrates:
-- Prometheus metrics collection
-- Custom metric definitions
-- Automatic metric endpoints
-- Performance monitoring
+Demonstrates constructing the OpenTelemetry HTTP metrics layer directly and
+applying it to a hand-built router. Metrics are collected into a meter provider;
+for OTLP push export enable a collector via the `[otlp]` config and the
+`otel-metrics` feature.
 
 Run with:
 ```bash
 cargo run --manifest-path=../../Cargo.toml --example test-metrics --features otel-metrics
-```
-
-View metrics:
-```bash
-curl http://localhost:8080/metrics
 ```
 
 ### test-observability.rs
@@ -50,7 +65,9 @@ Requires the `observability` feature flag:
 
 ### Metrics
 
-Metrics are automatically exposed at `/metrics` endpoint in Prometheus format.
+With the `prometheus-metrics` feature, metrics are automatically exposed at the
+`/metrics` endpoint in Prometheus text-exposition format (mounted by
+`ServiceBuilder` alongside `/health` and `/ready`).
 
 Common metrics include:
 - Request counts

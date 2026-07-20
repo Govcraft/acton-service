@@ -25,7 +25,7 @@ tokio-stream = { workspace = true, optional = true }
 axum = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
-tower-otel-http-metrics = { workspace = true, optional = true }
+opentelemetry-instrumentation-tower = { workspace = true, optional = true }
 
 # gRPC framework (optional)
 tonic = { workspace = true, optional = true }
@@ -66,6 +66,8 @@ opentelemetry = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true, optional = true }
+opentelemetry-prometheus = { workspace = true, optional = true }
+prometheus = { workspace = true, optional = true }
 
 # Error handling
 thiserror = { workspace = true }
@@ -164,7 +166,14 @@ cache = ["dep:redis", "dep:deadpool-redis"]
 events = ["dep:async-nats"]
 observability = ["dep:opentelemetry", "dep:opentelemetry-otlp", "dep:opentelemetry_sdk", "dep:tracing-opentelemetry"]
 resilience = [ "dep:tower-resilience-circuitbreaker", "dep:tower-resilience-bulkhead"]
-otel-metrics = ["dep:tower-otel-http-metrics", "observability"]
+# Internal umbrella: shared metrics machinery (meter provider + HTTP metrics
+# tower layer). Enabled transitively by otel-metrics and prometheus-metrics;
+# not intended to be enabled directly by downstream crates.
+_metrics = ["dep:opentelemetry-instrumentation-tower", "observability"]
+# OpenTelemetry HTTP metrics with OTLP push export to a collector.
+otel-metrics = ["_metrics"]
+# Pull-based Prometheus metrics exposed at the /metrics endpoint.
+prometheus-metrics = ["_metrics", "dep:opentelemetry-prometheus", "dep:prometheus"]
 governor = ["dep:governor"]
 websocket = []
 openapi = ["dep:utoipa", "dep:utoipa-swagger-ui"]
@@ -176,7 +185,7 @@ auth = ["dep:argon2", "dep:rand", "dep:blake3", "dep:base64"] # Core: password h
 oauth = ["auth", "dep:oauth2", "dep:openidconnect", "dep:base64"]  # OAuth/OIDC providers (requires auth)
 auth-full = ["auth", "oauth", "jwt", "cache", "database", "login-lockout", "accounts"]  # All auth features (excludes turso - mutually exclusive with database)
 
-full = ["http", "grpc", "websocket", "database", "cache", "events", "observability", "resilience", "otel-metrics", "governor", "openapi", "cedar-authz", "jwt", "auth", "session-memory", "session-redis", "htmx", "askama", "sse", "pagination-full", "handlers", "login-lockout", "tls", "accounts", "account-handlers", "journald", "graphql", "graphql-cedar"]
+full = ["http", "grpc", "websocket", "database", "cache", "events", "observability", "resilience", "otel-metrics", "prometheus-metrics", "governor", "openapi", "cedar-authz", "jwt", "auth", "session-memory", "session-redis", "htmx", "askama", "sse", "pagination-full", "handlers", "login-lockout", "tls", "accounts", "account-handlers", "journald", "graphql", "graphql-cedar"]
 tonic-health = ["dep:tonic-health"]
 tonic-reflection = ["dep:tonic-reflection"]
 tower-resilience-circuitbreaker = ["dep:tower-resilience-circuitbreaker"]
@@ -285,6 +294,11 @@ required-features = ["otel-metrics"]
 name = "test-observability"
 path = "examples/observability/test-observability.rs"
 required-features = ["observability"]
+
+[[example]]
+name = "test-prometheus-metrics"
+path = "examples/observability/test-prometheus-metrics.rs"
+required-features = ["prometheus-metrics"]
 
 # Database examples
 [[example]]
