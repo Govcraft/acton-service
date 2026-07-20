@@ -15,9 +15,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      # Installed from the Ubuntu archive rather than downloaded from GitHub
+      # releases: keeps a GitHub outage from failing the build before anything
+      # is compiled. Ubuntu 24.04 ships protoc 3.21.12, which is sufficient --
+      # every .proto here is plain proto3 with no editions or proto3 optional.
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -33,9 +36,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      # Installed from the Ubuntu archive rather than downloaded from GitHub
+      # releases: keeps a GitHub outage from failing the build before anything
+      # is compiled. Ubuntu 24.04 ships protoc 3.21.12, which is sufficient --
+      # every .proto here is plain proto3 with no editions or proto3 optional.
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
