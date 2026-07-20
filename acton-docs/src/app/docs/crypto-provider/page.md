@@ -115,6 +115,7 @@ feature you enabled, not whatever happens to be in the binary.
 
 ## Related
 
+- [TLS / HTTPS](/docs/tls) — configuring the HTTPS listener, mutual TLS, and certificate rotation
 - [Feature Flags](/docs/feature-flags) — the full feature catalog
 - [Production Checklist](/docs/production) — TLS setup at deployment time
 - [Token Generation](/docs/token-generation) — PASETO/JWT crypto context

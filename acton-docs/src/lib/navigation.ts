@@ -22,6 +22,7 @@ export const navigation = [
       { title: 'GraphQL Guide', href: '/docs/graphql-guide' },
       { title: 'Health Checks', href: '/docs/health-checks' },
       { title: 'Configuration', href: '/docs/configuration' },
+      { title: 'TLS / HTTPS', href: '/docs/tls' },
       { title: 'Observability', href: '/docs/observability' },
       { title: 'Request IDs', href: '/docs/request-ids' },
     ],

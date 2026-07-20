@@ -21,7 +21,8 @@ This checklist covers security, observability, performance, and operational cons
 
 - [ ] Set explicit service name in configuration
 - [ ] Configure appropriate port binding (default: 8080)
-- [ ] Enable TLS/HTTPS for production traffic (see [Crypto Provider](/docs/crypto-provider))
+- [ ] Enable TLS/HTTPS for production traffic (see [TLS / HTTPS](/docs/tls) and [Crypto Provider](/docs/crypto-provider))
+- [ ] Configure certificate rotation (`reload_interval_secs` or `reload_on_sighup`) so renewed certificates don't require a restart (see [TLS / HTTPS](/docs/tls#rotating-credentials-without-a-restart))
 - [ ] Set connection timeout values appropriate for workload
 - [ ] Configure graceful shutdown timeout
 - [ ] Review and set request body size limits
