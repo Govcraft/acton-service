@@ -1352,12 +1352,13 @@ where
                             ));
                         }
                         Err(e) => {
-                            tracing::error!(
-                                "PASETO configuration invalid; refusing to start rather than \
-                                 serving unauthenticated: {}",
-                                e
-                            );
-                            record_startup_error(&mut startup_error, e);
+                            let err = crate::error::Error::Internal(format!(
+                                "PASETO authentication is configured but its configuration is \
+                                 invalid; refusing to start rather than serving authenticated \
+                                 routes without authentication: {e}"
+                            ));
+                            tracing::error!("{}", err);
+                            record_startup_error(&mut startup_error, err);
                         }
                     }
                 }
@@ -1378,12 +1379,13 @@ where
                             ));
                         }
                         Err(e) => {
-                            tracing::error!(
-                                "JWT configuration invalid; refusing to start rather than \
-                                 serving unauthenticated: {}",
-                                e
-                            );
-                            record_startup_error(&mut startup_error, e);
+                            let err = crate::error::Error::Internal(format!(
+                                "JWT authentication is configured but its configuration is \
+                                 invalid; refusing to start rather than serving authenticated \
+                                 routes without authentication: {e}"
+                            ));
+                            tracing::error!("{}", err);
+                            record_startup_error(&mut startup_error, err);
                         }
                     }
                 }
@@ -1423,11 +1425,12 @@ where
                             Some(sc)
                         }
                         Err(e) => {
-                            tracing::error!(
-                                "Failed to load TLS configuration; refusing to start: {}",
-                                e
-                            );
-                            record_startup_error(&mut startup_error, e);
+                            let err = crate::error::Error::Internal(format!(
+                                "TLS is enabled but its configuration failed to load; \
+                                 refusing to start a plaintext listener: {e}"
+                            ));
+                            tracing::error!("{}", err);
+                            record_startup_error(&mut startup_error, err);
                             None
                         }
                     }
@@ -1462,11 +1465,12 @@ where
                             Some(sc)
                         }
                         Err(e) => {
-                            tracing::error!(
-                                "Failed to load gRPC TLS configuration; refusing to start: {}",
-                                e
-                            );
-                            record_startup_error(&mut startup_error, e);
+                            let err = crate::error::Error::Internal(format!(
+                                "gRPC TLS is enabled but its configuration failed to load; \
+                                 refusing to start a plaintext gRPC listener: {e}"
+                            ));
+                            tracing::error!("{}", err);
+                            record_startup_error(&mut startup_error, err);
                             None
                         }
                     }
@@ -2193,11 +2197,23 @@ mod tests {
             ..Default::default()
         };
 
-        let result = ServiceBuilder::new().with_config(config).try_build();
+        let error = ServiceBuilder::new()
+            .with_config(config)
+            .try_build()
+            .err()
+            .expect("unloadable TLS material must fail the build, not degrade to plaintext");
 
+        // The returned error must stand on its own. An operator who sees only
+        // this (a crash message, a supervisor log) should not have to go find
+        // the tracing line to learn why startup was refused.
+        let message = error.to_string();
         assert!(
-            result.is_err(),
-            "unloadable TLS material must fail the build, not degrade to plaintext"
+            message.contains("refusing to start a plaintext listener"),
+            "error must explain the refusal, got: {message}"
+        );
+        assert!(
+            message.contains("/nonexistent/cert.pem"),
+            "error must name the material that could not be loaded, got: {message}"
         );
     }
 
