@@ -62,6 +62,16 @@ impl Server {
             tls_enabled,
         );
 
+        // Resilience (circuit breaker + bulkhead) from [middleware.resilience]
+        #[cfg(feature = "resilience")]
+        let app = match self.config.middleware.resilience {
+            Some(ref resilience) => crate::middleware::resilience::apply_resilience(
+                app,
+                &crate::middleware::resilience::ResilienceConfig::from(resilience),
+            ),
+            None => app,
+        };
+
         let app = app
             // Compression - always enabled (minimal overhead)
             .layer(CompressionLayer::new())
@@ -144,13 +154,24 @@ impl Server {
 
         // Log optional advanced middleware
         if let Some(ref resilience) = self.config.middleware.resilience {
-            tracing::info!("  - Resilience configured:");
-            tracing::info!(
-                "    - Circuit breaker: {}",
-                resilience.circuit_breaker_enabled
-            );
-            tracing::info!("    - Retry: {}", resilience.retry_enabled);
-            tracing::info!("    - Bulkhead: {}", resilience.bulkhead_enabled);
+            // Report what was actually applied, not merely what was parsed.
+            #[cfg(feature = "resilience")]
+            {
+                tracing::info!("  - Resilience applied:");
+                tracing::info!(
+                    "    - Circuit breaker: {}",
+                    resilience.circuit_breaker_enabled
+                );
+                tracing::info!("    - Bulkhead: {}", resilience.bulkhead_enabled);
+            }
+            #[cfg(not(feature = "resilience"))]
+            {
+                let _ = resilience;
+                tracing::warn!(
+                    "  - Resilience: [middleware.resilience] is configured but the \
+                     'resilience' feature is disabled -- no resilience middleware is active"
+                );
+            }
         } else {
             tracing::info!("  - Resilience: not configured");
         }

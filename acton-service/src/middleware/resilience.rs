@@ -1,7 +1,12 @@
 //! Resilience middleware for fault tolerance and reliability
 //!
-//! This module provides production-ready circuit breaker, retry, and bulkhead patterns
+//! This module provides production-ready circuit breaker and bulkhead patterns
 //! using tower-resilience to ensure service stability and graceful degradation.
+//!
+//! Retry is deliberately absent. Retrying means replaying a request, and an
+//! inbound `Request<Body>` wraps a stream that is consumed once -- the retry
+//! layer requires `Req: Clone`, which it cannot satisfy. Retry belongs on
+//! outbound client stacks, which callers compose themselves.
 
 use std::convert::Infallible;
 use std::time::Duration;
@@ -50,15 +55,6 @@ pub struct ResilienceConfig {
     /// Duration to wait before attempting to close circuit
     pub circuit_breaker_wait_duration: Duration,
 
-    /// Enable retry logic
-    pub retry_enabled: bool,
-    /// Maximum number of retry attempts
-    pub retry_max_attempts: usize,
-    /// Base delay for exponential backoff
-    pub retry_base_delay: Duration,
-    /// Maximum delay for exponential backoff
-    pub retry_max_delay: Duration,
-
     /// Enable bulkhead (concurrency limiting)
     pub bulkhead_enabled: bool,
     /// Maximum concurrent requests
@@ -75,14 +71,29 @@ impl Default for ResilienceConfig {
             circuit_breaker_min_requests: 10,
             circuit_breaker_wait_duration: Duration::from_secs(30),
 
-            retry_enabled: true,
-            retry_max_attempts: 3,
-            retry_base_delay: Duration::from_millis(100),
-            retry_max_delay: Duration::from_secs(10),
-
             bulkhead_enabled: true,
             bulkhead_max_concurrent: 100,
             bulkhead_max_wait: Duration::from_secs(5),
+        }
+    }
+}
+
+/// Bridge the TOML-facing config to the layer-building config.
+///
+/// [`crate::config::ResilienceConfig`] is what `[middleware.resilience]`
+/// deserializes into and stores its durations as integer seconds/milliseconds;
+/// this type is what actually builds layers and uses [`Duration`].
+impl From<&crate::config::ResilienceConfig> for ResilienceConfig {
+    fn from(config: &crate::config::ResilienceConfig) -> Self {
+        Self {
+            circuit_breaker_enabled: config.circuit_breaker_enabled,
+            circuit_breaker_threshold: config.circuit_breaker_threshold,
+            circuit_breaker_min_requests: config.circuit_breaker_min_requests,
+            circuit_breaker_wait_duration: config.circuit_breaker_wait_duration(),
+
+            bulkhead_enabled: config.bulkhead_enabled,
+            bulkhead_max_concurrent: config.bulkhead_max_concurrent,
+            bulkhead_max_wait: config.bulkhead_max_wait(),
         }
     }
 }
@@ -102,18 +113,6 @@ impl ResilienceConfig {
     /// Set circuit breaker threshold
     pub fn with_circuit_breaker_threshold(mut self, threshold: f64) -> Self {
         self.circuit_breaker_threshold = threshold.clamp(0.0, 1.0);
-        self
-    }
-
-    /// Set retry enabled
-    pub fn with_retry(mut self, enabled: bool) -> Self {
-        self.retry_enabled = enabled;
-        self
-    }
-
-    /// Set maximum retry attempts
-    pub fn with_retry_max_attempts(mut self, attempts: usize) -> Self {
-        self.retry_max_attempts = attempts;
         self
     }
 
@@ -319,7 +318,6 @@ mod tests {
     fn test_default_config() {
         let config = ResilienceConfig::default();
         assert!(config.circuit_breaker_enabled);
-        assert!(config.retry_enabled);
         assert!(config.bulkhead_enabled);
         assert_eq!(config.circuit_breaker_threshold, 0.5);
         assert_eq!(config.bulkhead_max_concurrent, 100);
@@ -329,11 +327,9 @@ mod tests {
     fn test_builder_pattern() {
         let config = ResilienceConfig::new()
             .with_circuit_breaker(false)
-            .with_retry_max_attempts(5)
             .with_bulkhead_max_concurrent(50);
 
         assert!(!config.circuit_breaker_enabled);
-        assert_eq!(config.retry_max_attempts, 5);
         assert_eq!(config.bulkhead_max_concurrent, 50);
     }
 

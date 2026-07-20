@@ -99,16 +99,14 @@ circuit_breaker_threshold = 0.5      # 50% failure rate opens circuit
 circuit_breaker_min_requests = 10    # Minimum requests before calculating
 circuit_breaker_wait_secs = 30       # Wait before attempting to close
 
-# Retry configuration
-retry_enabled = true
-retry_max_attempts = 3
-retry_base_delay_ms = 100           # Initial delay (exponential backoff)
-retry_max_delay_ms = 10000          # Maximum delay (10 seconds)
+# Retry is not server middleware: an inbound request body is a stream that can
+# only be consumed once, so it cannot be replayed. Compose retry into your
+# outbound clients instead.
 
 # Bulkhead configuration (concurrency limiting)
 bulkhead_enabled = true
 bulkhead_max_concurrent = 100       # Max concurrent requests
-bulkhead_max_queued = 200           # Max queued requests
+bulkhead_max_wait_ms = 5000         # Max wait for a slot (5 seconds)
 
 # ----------------------------------------------------------------------------
 # HTTP Metrics (OpenTelemetry)

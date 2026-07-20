@@ -197,14 +197,10 @@ fn show_resilience_middleware() {
     println!("   circuit_breaker_min_requests = 10");
     println!("   circuit_breaker_wait_secs = 30");
     println!();
-    println!("   # Retry");
-    println!("   retry_enabled = true");
-    println!("   retry_max_attempts = 3");
-    println!("   retry_backoff_ms = 100");
-    println!();
     println!("   # Bulkhead");
     println!("   bulkhead_enabled = true");
     println!("   bulkhead_max_concurrent = 100");
+    println!("   bulkhead_max_wait_ms = 5000");
     println!();
 
     println!("{}", "Automatic integration:".cyan().bold());

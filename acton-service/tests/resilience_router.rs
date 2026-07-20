@@ -129,3 +129,43 @@ async fn bulkhead_alone_attaches_to_router() {
 
     assert_eq!(status_of(&app, "/").await, StatusCode::OK);
 }
+
+/// Issue #32: `[middleware.resilience]` was parsed but never reached a layer.
+/// This asserts the TOML-facing config bridges to a working breaker, so the
+/// wiring cannot silently regress to a no-op again.
+#[tokio::test]
+async fn toml_config_bridges_to_a_live_breaker() {
+    let toml_config = acton_service::config::ResilienceConfig {
+        circuit_breaker_enabled: true,
+        circuit_breaker_threshold: 0.5,
+        circuit_breaker_min_requests: 2,
+        circuit_breaker_wait_secs: 60,
+        bulkhead_enabled: false,
+        bulkhead_max_concurrent: 100,
+        bulkhead_max_wait_ms: 5_000,
+    };
+
+    let middleware_config = ResilienceConfig::from(&toml_config);
+    assert_eq!(middleware_config.circuit_breaker_min_requests, 2);
+    assert_eq!(
+        middleware_config.circuit_breaker_wait_duration,
+        Duration::from_secs(60)
+    );
+
+    let app = apply_resilience(
+        Router::new().route("/boom", get(|| async { StatusCode::INTERNAL_SERVER_ERROR })),
+        &middleware_config,
+    );
+
+    for _ in 0..2 {
+        assert_eq!(
+            status_of(&app, "/boom").await,
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+    assert_eq!(
+        status_of(&app, "/boom").await,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "config from [middleware.resilience] did not reach a live circuit breaker"
+    );
+}

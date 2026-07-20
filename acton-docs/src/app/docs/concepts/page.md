@@ -227,12 +227,12 @@ per_user_rpm = 200
 per_client_rpm = 1000
 window_secs = 60
 
-# Resilience: circuit breaker, retry, bulkhead
+# Resilience: circuit breaker, bulkhead
 [middleware.resilience]
 circuit_breaker_enabled = true
 circuit_breaker_threshold = 0.5
-retry_enabled = true
-retry_max_attempts = 3
+bulkhead_enabled = true
+bulkhead_max_concurrent = 100
 ```
 
 Your builder chain stays free of middleware wiring:
@@ -504,11 +504,15 @@ Three resilience patterns solve different problems:
 - In-memory operations
 - Local file access
 
-### Retry
+### Retry (outbound clients only)
 
 **Problem:** Transient errors that might succeed if retried
 
 **Solution:** Automatically retry with exponential backoff
+
+**Where:** Compose this into your **outbound** client stacks. It is not
+available as server middleware — retrying means replaying a request, and an
+inbound request body is a stream that can only be consumed once.
 
 **When to use:**
 - Network timeouts
@@ -537,20 +541,21 @@ Three resilience patterns solve different problems:
 - Fast, lightweight operations (<10ms)
 - Already rate-limited endpoints
 
-### Using All Three Together
+### Using Both Together
 
 ```rust
 ResilienceConfig::new()
     .with_circuit_breaker(true)  // Detect failures
-    .with_retry(true)             // Handle transient errors
     .with_bulkhead(true)          // Prevent resource exhaustion
 ```
 
-Execution order:
-1. **Bulkhead** - Check if capacity available
-2. **Circuit Breaker** - Fail fast if dependency is down
-3. **Retry** - Retry if request failed
-4. **Request** - Execute actual handler
+Execution order (outermost first):
+1. **Circuit Breaker** - Fail fast while the service is unhealthy
+2. **Bulkhead** - Check if capacity is available
+3. **Request** - Execute actual handler
+
+The bulkhead sits inside the breaker so that a capacity rejection is observed
+as a failure, letting sustained overload open the circuit.
 
 ---
 

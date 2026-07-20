@@ -1111,22 +1111,6 @@ pub struct ResilienceConfig {
     #[serde(default = "default_circuit_breaker_wait_secs")]
     pub circuit_breaker_wait_secs: u64,
 
-    /// Enable retry logic
-    #[serde(default = "default_true")]
-    pub retry_enabled: bool,
-
-    /// Maximum number of retry attempts
-    #[serde(default = "default_retry_max_attempts")]
-    pub retry_max_attempts: usize,
-
-    /// Base delay for exponential backoff (milliseconds)
-    #[serde(default = "default_retry_base_delay_ms")]
-    pub retry_base_delay_ms: u64,
-
-    /// Maximum delay for exponential backoff (milliseconds)
-    #[serde(default = "default_retry_max_delay_ms")]
-    pub retry_max_delay_ms: u64,
-
     /// Enable bulkhead (concurrency limiting)
     #[serde(default = "default_true")]
     pub bulkhead_enabled: bool,
@@ -1135,9 +1119,9 @@ pub struct ResilienceConfig {
     #[serde(default = "default_bulkhead_max_concurrent")]
     pub bulkhead_max_concurrent: usize,
 
-    /// Maximum queued requests
-    #[serde(default = "default_bulkhead_max_queued")]
-    pub bulkhead_max_queued: usize,
+    /// Maximum time a request waits for a bulkhead slot (milliseconds)
+    #[serde(default = "default_bulkhead_max_wait_ms")]
+    pub bulkhead_max_wait_ms: u64,
 }
 
 impl ResilienceConfig {
@@ -1146,12 +1130,9 @@ impl ResilienceConfig {
         Duration::from_secs(self.circuit_breaker_wait_secs)
     }
 
-    pub fn retry_base_delay(&self) -> Duration {
-        Duration::from_millis(self.retry_base_delay_ms)
-    }
-
-    pub fn retry_max_delay(&self) -> Duration {
-        Duration::from_millis(self.retry_max_delay_ms)
+    /// Maximum time a request waits for a bulkhead slot.
+    pub fn bulkhead_max_wait(&self) -> Duration {
+        Duration::from_millis(self.bulkhead_max_wait_ms)
     }
 }
 
@@ -1345,24 +1326,12 @@ fn default_circuit_breaker_wait_secs() -> u64 {
     30
 }
 
-fn default_retry_max_attempts() -> usize {
-    3
-}
-
-fn default_retry_base_delay_ms() -> u64 {
-    100
-}
-
-fn default_retry_max_delay_ms() -> u64 {
-    10000 // 10 seconds
-}
-
 fn default_bulkhead_max_concurrent() -> usize {
     100
 }
 
-fn default_bulkhead_max_queued() -> usize {
-    200
+fn default_bulkhead_max_wait_ms() -> u64 {
+    5000 // 5 seconds
 }
 
 // Metrics default functions
