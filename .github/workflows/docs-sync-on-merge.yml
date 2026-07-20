@@ -1,0 +1,168 @@
+name: Docs Sync on Merge
+
+# When a PR merges to main, review what changed and update acton-docs to match,
+# shipping the result as its own PR that self-merges once CI is green.
+#
+# Loop guard: this workflow opens PRs, and those PRs merge, which would retrigger
+# it. Two independent guards prevent the cycle -- the reserved `docs/auto-sync-`
+# branch prefix, and an author check on the bots that open these PRs. Both must
+# stay in place; removing either one is enough to start an infinite loop.
+
+on:
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to sync docs for (manual re-run)'
+        required: true
+        type: string
+
+concurrency:
+  # Serialize on main so two merges cannot race to open conflicting docs PRs.
+  group: docs-sync
+  cancel-in-progress: false
+
+jobs:
+  docs-sync:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true &&
+       !startsWith(github.event.pull_request.head.ref, 'docs/auto-sync-') &&
+       github.event.pull_request.user.login != 'claude[bot]' &&
+       github.event.pull_request.user.login != 'github-actions[bot]')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+      actions: read
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          # Full history: the docs branch is cut from main and pushed, so a
+          # shallow clone would reject the push.
+          fetch-depth: 0
+
+      # The PR number reaches a shell and, downstream, the model's prompt. Pass it
+      # through the environment rather than template interpolation, and reject
+      # anything that is not digits, so neither can be used as an injection sink.
+      - name: Resolve PR number
+        id: pr
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_PR: ${{ inputs.pr_number }}
+          MERGED_PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            number="$DISPATCH_PR"
+          else
+            number="$MERGED_PR"
+          fi
+          case "$number" in
+            ''|*[!0-9]*)
+              echo "::error::Refusing to run: PR number '$number' is not numeric." >&2
+              exit 1
+              ;;
+          esac
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "claude[bot]"
+          git config user.email "claude[bot]@users.noreply.github.com"
+
+      - name: Review PR and sync docs
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          additional_permissions: |
+            actions: read
+          claude_args: |
+            --allowedTools "Bash(gh:*),Bash(git:*),Bash(rg:*),Bash(ls:*),Bash(cat:*),Read,Edit,Write,Glob,Grep"
+            --max-turns 40
+          prompt: |
+            A pull request just merged into `main` of Govcraft/acton-service.
+            Your job is to bring the documentation site in `acton-docs/` back in
+            sync with the code, and to do nothing at all if it is already in sync.
+
+            The merged PR number is ${{ steps.pr.outputs.number }}.
+
+            ## Step 1 -- understand what changed
+
+            Read the PR and its diff:
+
+                gh pr view ${{ steps.pr.outputs.number }} --json title,body,files
+                gh pr diff ${{ steps.pr.outputs.number }}
+
+            Ignore changes confined to `acton-docs/**` -- those are documentation
+            edits, not code changes that need documenting.
+
+            ## Step 2 -- decide whether docs need updating
+
+            Docs need updating when the PR changed user-facing behavior. Concretely:
+            new or changed public API, new or renamed Cargo feature flags, changed
+            configuration keys or environment variables, changed defaults, new
+            capabilities, breaking changes, or corrections to behavior the docs
+            currently describe incorrectly.
+
+            Docs do NOT need updating for internal refactors, test-only changes,
+            dependency bumps with no user-visible effect, CI or tooling changes, or
+            performance work that does not alter any documented contract.
+
+            The documentation site layout:
+              - `acton-docs/src/app/docs/<topic>/page.md` -- 56 Markdoc pages
+              - `acton-docs/src/lib/navigation.ts` -- sidebar navigation; a NEW page
+                is invisible unless you add it here
+              - `acton-docs/src/lib/version.ts` -- exported `VERSION` constant
+              - `acton-docs/src/markdoc/config.js` and `functions.js` -- Markdoc
+                config, which also carry version references
+
+            Search the docs for anything the PR contradicts. Do not assume a topic
+            is undocumented because you did not find it on the first try -- grep for
+            the API names, feature flags, and config keys the PR touched.
+
+            IMPORTANT: if the docs are already accurate, make NO changes, open NO
+            pull request, and say so plainly. A no-op is a correct and expected
+            outcome. Do not invent cosmetic edits to justify a PR.
+
+            Only bump the version files if the PR itself changed the workspace
+            version in the root `Cargo.toml`. Do not bump versions speculatively.
+
+            ## Step 3 -- ship the changes
+
+            Only if you actually edited files:
+
+                git checkout -b docs/auto-sync-pr-${{ steps.pr.outputs.number }}
+                git add acton-docs
+                git commit -m "docs: sync acton-docs with #${{ steps.pr.outputs.number }}"
+                git push -u origin docs/auto-sync-pr-${{ steps.pr.outputs.number }}
+
+            The branch name prefix `docs/auto-sync-` is REQUIRED -- it is the loop
+            guard that stops this workflow retriggering itself. Never use a
+            different prefix, and never commit to `main` directly.
+
+            Follow the Conventional Commits spec, and stage ONLY paths under
+            `acton-docs/`. Never stage Rust sources, `Cargo.toml`, or workflows.
+
+            Then open the PR, explaining what changed in the code and why each doc
+            edit follows from it, and linking the source PR:
+
+                gh pr create \
+                  --base main \
+                  --head docs/auto-sync-pr-${{ steps.pr.outputs.number }} \
+                  --title "docs: sync acton-docs with #${{ steps.pr.outputs.number }}" \
+                  --body "<your explanation here>"
+
+            Finally, queue it to merge once CI passes:
+
+                gh pr merge <new-pr-number> --auto --squash --delete-branch
+
+            If that command fails because auto-merge is not enabled on the
+            repository, do NOT merge the PR by hand and do NOT force it. Leave the
+            PR open and report the failure -- a human will decide.
