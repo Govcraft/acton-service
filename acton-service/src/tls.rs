@@ -1208,6 +1208,18 @@ pub fn load_server_config(tls_config: &TlsConfig) -> Result<Arc<ServerConfig>> {
         crate::error::Error::Internal(format!("Failed to build TLS server config: {}", e))
     })?;
 
+    // Advertise ALPN so the listener answers a client's protocol offer during
+    // the handshake. Without this rustls selects nothing, and a strict gRPC
+    // client — a `tonic` `ClientTlsConfig` that does not set `assume_http2`,
+    // grpcurl, or any non-Rust stack — fails with `H2NotNegotiated` even though
+    // the listener genuinely serves HTTP/2. `[h2, http/1.1]` is correct for
+    // every listener this loads, the dedicated gRPC one included: it serves
+    // both (hyper auto-detects the protocol), rustls picks the best mutual
+    // protocol so h2 wins for a gRPC client, and a client that offers no ALPN is
+    // unaffected because protocol sniffing still applies.
+    let mut config = config;
+    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+
     Ok(Arc::new(config))
 }
 
