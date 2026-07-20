@@ -131,7 +131,8 @@ pub trait AuditStorage: Send + Sync {
     /// Confirm the backend is usable, performing any deferred setup.
     ///
     /// Backends built from an already-connected client are ready immediately.
-    /// Lazily-resolved backends (see [`lazy::LazyAuditStorage`]) return an error
+    /// Lazily-resolved backends (those built from a pool that connects in the
+    /// background) return an error
     /// until their connection pool finishes connecting; the audit agent polls
     /// this before initializing the hash chain so it resumes from the persisted
     /// sequence instead of restarting at zero.

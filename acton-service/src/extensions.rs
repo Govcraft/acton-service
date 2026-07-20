@@ -1,10 +1,10 @@
 //! Actor-backed extensions for custom application state
 //!
-//! This module provides the [`ActorExtension`] trait and supporting types for adding
+//! This module provides the [`ActorExtension`](crate::extensions::ActorExtension) trait and supporting types for adding
 //! custom runtime state to your application. All extensions are backed by supervised
 //! acton-reactive actors, providing:
 //!
-//! - **Supervision**: Automatic restart on failure via configurable [`RestartPolicy`]
+//! - **Supervision**: Automatic restart on failure via configurable [`RestartPolicy`](acton_reactive::prelude::RestartPolicy)
 //! - **Broker subscriptions**: Subscribe to framework-wide broadcast events
 //! - **Observability**: Built-in tracing instrumentation from the actor runtime
 //! - **No mutexes**: State is encapsulated in actors, accessed via message passing
@@ -62,7 +62,8 @@ type SpawnFuture<'a> =
 /// Trait for defining actor-backed extensions.
 ///
 /// Implement this trait on an `#[acton_actor]` struct to register it as a
-/// supervised extension via [`ServiceBuilder::with_actor`].
+/// supervised extension via
+/// [`ServiceBuilder::with_actor`](crate::service_builder::ServiceBuilder::with_actor).
 ///
 /// The [`configure`](ActorExtension::configure) method receives a mutable reference
 /// to the actor builder, where you register message handlers and lifecycle hooks:
@@ -128,7 +129,9 @@ impl<A: ActorExtension> ActorExtensionSpawner for ActorExtensionEntry<A> {
 
 /// Immutable container mapping actor extension types to their handles.
 ///
-/// Constructed during [`ServiceBuilder::build()`] and stored on [`AppState`].
+/// Constructed during
+/// [`ServiceBuilder::build()`](crate::service_builder::ServiceBuilder::build) and stored on
+/// [`AppState`](crate::state::AppState).
 /// Clone is cheap (Arc ref-count bump). When no actor extensions are registered,
 /// the inner map is never allocated.
 #[derive(Clone, Default)]

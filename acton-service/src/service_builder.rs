@@ -254,7 +254,7 @@ where
     /// [`build()`](Self::build). It must implement [`ActorExtension`](crate::extensions::ActorExtension),
     /// which requires configuring message handlers via the `configure` method.
     ///
-    /// Access the actor's handle in request handlers via [`AppState::actor::<A>()`](crate::AppState::actor).
+    /// Access the actor's handle in request handlers via [`AppState::actor::<A>()`](crate::state::AppState::actor).
     ///
     /// # Example
     ///

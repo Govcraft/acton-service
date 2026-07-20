@@ -412,7 +412,7 @@ where
     /// Get the [`ActorHandle`] for a registered actor extension.
     ///
     /// Actor extensions are custom actors registered via
-    /// [`ServiceBuilder::with_actor`](crate::ServiceBuilder::with_actor).
+    /// [`ServiceBuilder::with_actor`](crate::service_builder::ServiceBuilder::with_actor).
     /// They run under a framework-managed supervisor with configurable restart policies.
     ///
     /// # Example

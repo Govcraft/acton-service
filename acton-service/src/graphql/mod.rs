@@ -2,7 +2,7 @@
 //!
 //! This module integrates [`async-graphql`](https://docs.rs/async-graphql) as a
 //! third sibling transport next to HTTP (Axum) and gRPC (Tonic). Schemas are
-//! mounted by [`ServiceBuilder::with_versioned_graphql`] underneath the same
+//! mounted by [`ServiceBuilder::with_versioned_graphql`](crate::service_builder::ServiceBuilder::with_versioned_graphql) underneath the same
 //! versioned Axum router used for REST endpoints, so they inherit the full
 //! middleware stack — authentication, tracing, rate limiting, CORS, and
 //! everything else.
@@ -10,7 +10,7 @@
 //! # Versioning
 //!
 //! GraphQL endpoints are versioned per-path. A schema registered for
-//! [`ApiVersion::V1`] is mounted at `/{base}/v1/graphql`, V2 at
+//! [`ApiVersion::V1`](crate::versioning::ApiVersion::V1) is mounted at `/{base}/v1/graphql`, V2 at
 //! `/{base}/v2/graphql`, and so on. This matches the framework's existing
 //! path-based versioning ([`VersionedApiBuilder`](crate::versioning::VersionedApiBuilder)).
 //!
