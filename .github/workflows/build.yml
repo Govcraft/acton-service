@@ -10,8 +10,66 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Changes that cannot affect compilation or test behaviour do not need the
+  # Rust matrix. Note that skipping a job makes its check disappear entirely
+  # rather than report success, and a required check that never reports blocks
+  # a PR forever -- so the single required check is `ci-gate` below, which
+  # always runs, and never these jobs directly.
+  changes:
+    name: detect code changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.detect.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect whether any code changed
+        id: detect
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # Only pull requests have a well-defined diff to inspect. Pushes to
+          # main and manual dispatches always run the full matrix.
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "Event '$EVENT' is not a pull request; running the full matrix."
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          files=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          echo "Changed files:"
+          echo "$files" | sed 's/^/  /'
+
+          # Anything not matched here counts as code and runs the matrix, so a
+          # new top-level directory fails safe by being tested. build.yml is
+          # deliberately absent from this list: a change to the build matrix
+          # should be exercised by the build matrix.
+          remaining=$(echo "$files" | grep -vE \
+            -e '^acton-docs/' \
+            -e '^[^/]*\.md$' \
+            -e '^\.remember/' \
+            -e '^LICENSE' \
+            -e '^\.gitignore$' \
+            -e '^\.github/(ISSUE_TEMPLATE/|PULL_REQUEST_TEMPLATE|dependabot\.yml|workflows/(claude|claude-code-review|deploy-docs|docs-sync-on-merge)\.yml)' \
+            || true)
+
+          if [ -z "$remaining" ]; then
+            echo "No code changed; skipping the Rust matrix."
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Code changed; running the Rust matrix."
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
+
   aws-lc-rs:
     name: crypto-aws-lc-rs (default)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,6 +91,8 @@ jobs:
 
   ring:
     name: crypto-ring (opt-in)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,6 +118,8 @@ jobs:
   # tests here are pure unit tests — no live services required.
   audit-storage:
     name: audit storage (${{ matrix.backend }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -80,3 +142,27 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - name: Nextest
         run: cargo nextest run -p acton-service ${{ matrix.features }}
+
+  # The single required status check. This always runs, so it always reports a
+  # conclusion -- including on documentation-only pull requests where every
+  # matrix job is skipped. Requiring the matrix jobs directly would deadlock
+  # those PRs, because a skipped job reports nothing at all.
+  ci-gate:
+    name: ci-gate
+    needs: [changes, aws-lc-rs, ring, audit-storage]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify no required job failed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          echo "$RESULTS"
+          # 'skipped' is a pass: it means this PR touched no code. Only real
+          # failures and cancellations block the merge.
+          if echo "$RESULTS" | grep -qE '"result": "(failure|cancelled)"'; then
+            echo "::error::A required build job failed or was cancelled."
+            exit 1
+          fi
+          echo "All required build jobs passed or were legitimately skipped."
