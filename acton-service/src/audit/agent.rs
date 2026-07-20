@@ -17,6 +17,14 @@ use super::failure_tracker::FailureTracker;
 use super::storage::AuditStorage;
 use super::syslog::SyslogSender;
 
+/// Maximum number of events buffered while the hash chain initializes
+///
+/// Events emitted between `AuditAgent::spawn()` and the arrival of
+/// `ChainLoaded` are held here so they can be sealed in order once the chain
+/// exists. The cap bounds memory when storage never becomes ready; overflow is
+/// reported through the failure tracker rather than dropped silently.
+const MAX_PENDING_EVENTS: usize = 1024;
+
 /// State held by the audit agent actor
 #[derive(Default)]
 pub struct AuditAgentState {
@@ -30,6 +38,10 @@ pub struct AuditAgentState {
     pub config: Option<AuditConfig>,
     /// Storage failure tracker (if alerts are configured)
     pub(crate) failure_tracker: Option<Arc<FailureTracker>>,
+    /// Events received before the chain was initialized, in arrival order
+    pub(crate) pending: Vec<AuditEvent>,
+    /// Channel to the sequential writer task that persists sealed events
+    pub(crate) writer: Option<tokio::sync::mpsc::UnboundedSender<AuditEvent>>,
 }
 
 // Manual Debug impl since AuditChain and dyn AuditStorage don't impl Debug
@@ -41,6 +53,7 @@ impl std::fmt::Debug for AuditAgentState {
             .field("syslog", &self.syslog.is_some())
             .field("config", &self.config.is_some())
             .field("failure_tracker", &self.failure_tracker.is_some())
+            .field("pending", &self.pending.len())
             .finish()
     }
 }
@@ -128,6 +141,11 @@ impl AuditAgent {
         agent.model.storage = storage;
         agent.model.syslog = syslog;
         agent.model.failure_tracker = failure_tracker;
+        agent.model.writer = Some(spawn_writer_task(
+            agent.model.storage.clone(),
+            agent.model.syslog.clone(),
+            agent.model.failure_tracker.clone(),
+        ));
 
         // Clone values needed for after_start closure
         let storage_for_start = agent.model.storage.clone();
@@ -143,6 +161,20 @@ impl AuditAgent {
             };
             agent.model.chain = Some(chain);
             tracing::info!("Audit chain initialized at sequence {}", msg.sequence);
+
+            // Drain events that arrived before the chain existed, in arrival
+            // order, so they are sealed ahead of anything received later.
+            let pending = std::mem::take(&mut agent.model.pending);
+            if !pending.is_empty() {
+                tracing::info!(
+                    "Sealing {} audit event(s) buffered during chain initialization",
+                    pending.len()
+                );
+            }
+            for event in pending {
+                seal_and_dispatch(&mut agent.model, event);
+            }
+
             Reply::ready()
         });
 
@@ -150,51 +182,11 @@ impl AuditAgent {
         agent.mutate_on::<AuditEvent>(|agent, envelope| {
             let event = envelope.message().clone();
 
-            // Seal the event with the hash chain
-            let sealed_event = if let Some(ref mut chain) = agent.model.chain {
-                chain.seal(event)
+            if agent.model.chain.is_none() {
+                buffer_pending_event(&mut agent.model, event);
             } else {
-                tracing::warn!("Audit chain not initialized, dropping event");
-                return Reply::ready();
-            };
-
-            // Clone what we need for the async work
-            let storage = agent.model.storage.clone();
-            let syslog = agent.model.syslog.clone();
-            let tracker = agent.model.failure_tracker.clone();
-
-            // Spawn async persistence/export work (not Sync-required)
-            tokio::spawn(async move {
-                // Persist to storage
-                if let Some(ref store) = storage {
-                    match store.append(&sealed_event).await {
-                        Ok(()) => {
-                            if let Some(ref t) = tracker {
-                                t.record_success();
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to persist audit event: {}", e);
-                            if let Some(ref t) = tracker {
-                                t.record_failure(&e.to_string());
-                            }
-                        }
-                    }
-                }
-
-                // Send to syslog
-                if let Some(ref sender) = syslog {
-                    if let Err(e) = sender.send(&sealed_event).await {
-                        tracing::warn!("Failed to send audit event to syslog: {}", e);
-                    }
-                }
-
-                // OTLP export (when observability feature is active)
-                #[cfg(feature = "observability")]
-                {
-                    super::otlp::emit_audit_log(&sealed_event);
-                }
-            });
+                seal_and_dispatch(&mut agent.model, event);
+            }
 
             Reply::ready()
         });
@@ -215,7 +207,12 @@ impl AuditAgent {
             Reply::ready()
         });
 
-        // Load chain state from storage on startup
+        // Load chain state from storage on startup.
+        //
+        // Every branch below ends in a `ChainLoaded` send — including storage
+        // errors and readiness timeouts, which fall back to a fresh chain — so
+        // events buffered in the meantime are always drained rather than
+        // stranded.
         agent.after_start(move |agent| {
             let storage = storage_for_start.clone();
             let service_name = service_name_for_start.clone();
@@ -291,6 +288,110 @@ impl AuditAgent {
 
         Ok(handle)
     }
+}
+
+/// Buffer an event received before the hash chain was initialized
+///
+/// Overflow policy: once [`MAX_PENDING_EVENTS`] events are buffered the
+/// *incoming* (newest) event is dropped, preserving the oldest events and
+/// therefore the earliest part of the chain. The drop is reported through the
+/// failure tracker, so it participates in the same threshold/cooldown alerting
+/// used for storage append failures instead of vanishing silently.
+fn buffer_pending_event(state: &mut AuditAgentState, event: AuditEvent) {
+    if state.pending.len() >= MAX_PENDING_EVENTS {
+        let reason = format!(
+            "audit chain not initialized and pending buffer is full ({MAX_PENDING_EVENTS} events); \
+             dropped event {:?}",
+            event.kind
+        );
+        tracing::error!(
+            audit.severity = "ALERT",
+            pending = MAX_PENDING_EVENTS,
+            "{}",
+            reason
+        );
+        if let Some(ref tracker) = state.failure_tracker {
+            tracker.record_failure(&reason);
+        }
+        return;
+    }
+
+    state.pending.push(event);
+}
+
+/// Seal an event with the hash chain and hand it to the writer task
+///
+/// The writer task persists sequentially, so chain order is also write order.
+fn seal_and_dispatch(state: &mut AuditAgentState, event: AuditEvent) {
+    let Some(chain) = state.chain.as_mut() else {
+        // Unreachable in practice: callers check the chain first.
+        buffer_pending_event(state, event);
+        return;
+    };
+
+    let sealed = chain.seal(event);
+
+    let Some(ref writer) = state.writer else {
+        tracing::error!("Audit writer task missing, event not persisted");
+        return;
+    };
+
+    if writer.send(sealed).is_err() {
+        let reason = "audit writer task terminated; event not persisted".to_string();
+        tracing::error!(audit.severity = "ALERT", "{}", reason);
+        if let Some(ref tracker) = state.failure_tracker {
+            tracker.record_failure(&reason);
+        }
+    }
+}
+
+/// Spawn the task that persists and exports sealed events in order
+///
+/// Persistence runs on a single task fed by an unbounded channel, so events are
+/// written in the exact order the chain sealed them. Events buffered during
+/// chain initialization are enqueued first and therefore land first.
+fn spawn_writer_task(
+    storage: Option<Arc<dyn AuditStorage>>,
+    syslog: Option<SyslogSender>,
+    tracker: Option<Arc<FailureTracker>>,
+) -> tokio::sync::mpsc::UnboundedSender<AuditEvent> {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AuditEvent>();
+
+    tokio::spawn(async move {
+        while let Some(sealed_event) = rx.recv().await {
+            // Persist to storage
+            if let Some(ref store) = storage {
+                match store.append(&sealed_event).await {
+                    Ok(()) => {
+                        if let Some(ref t) = tracker {
+                            t.record_success();
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to persist audit event: {}", e);
+                        if let Some(ref t) = tracker {
+                            t.record_failure(&e.to_string());
+                        }
+                    }
+                }
+            }
+
+            // Send to syslog
+            if let Some(ref sender) = syslog {
+                if let Err(e) = sender.send(&sealed_event).await {
+                    tracing::warn!("Failed to send audit event to syslog: {}", e);
+                }
+            }
+
+            // OTLP export (when observability feature is active)
+            #[cfg(feature = "observability")]
+            {
+                super::otlp::emit_audit_log(&sealed_event);
+            }
+        }
+    });
+
+    tx
 }
 
 /// Longest the agent waits for a connection pool before giving up on chain resumption
@@ -380,4 +481,235 @@ async fn run_cleanup(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
+
+    use async_trait::async_trait;
+
+    use super::*;
+    use crate::audit::alert::{AuditAlertEvent, AuditAlertHook};
+    use crate::audit::config::SyslogConfig;
+    use crate::audit::event::{AuditEventKind, AuditSeverity};
+    use crate::error::Error;
+
+    /// Storage that records appended events, and reports readiness only after a
+    /// delay so events can be emitted while the chain is still initializing.
+    struct SlowCapturingStorage {
+        events: Mutex<Vec<AuditEvent>>,
+        ready_after: tokio::time::Instant,
+    }
+
+    impl SlowCapturingStorage {
+        fn new(delay: Duration) -> Self {
+            Self {
+                events: Mutex::new(Vec::new()),
+                ready_after: tokio::time::Instant::now() + delay,
+            }
+        }
+
+        fn kinds(&self) -> Vec<AuditEventKind> {
+            self.events
+                .lock()
+                .expect("events lock")
+                .iter()
+                .map(|e| e.kind.clone())
+                .collect()
+        }
+    }
+
+    #[async_trait]
+    impl AuditStorage for SlowCapturingStorage {
+        async fn append(&self, event: &AuditEvent) -> Result<(), Error> {
+            self.events.lock().expect("events lock").push(event.clone());
+            Ok(())
+        }
+
+        async fn latest(&self) -> Result<Option<AuditEvent>, Error> {
+            Ok(None)
+        }
+
+        async fn query_range(
+            &self,
+            _from: chrono::DateTime<chrono::Utc>,
+            _to: chrono::DateTime<chrono::Utc>,
+            _limit: usize,
+        ) -> Result<Vec<AuditEvent>, Error> {
+            Ok(Vec::new())
+        }
+
+        async fn verify_chain(&self, _from_sequence: u64) -> Result<Option<u64>, Error> {
+            Ok(None)
+        }
+
+        async fn ensure_ready(&self) -> Result<(), Error> {
+            if tokio::time::Instant::now() >= self.ready_after {
+                Ok(())
+            } else {
+                Err(Error::Internal("pool still connecting".to_string()))
+            }
+        }
+    }
+
+    fn test_config() -> AuditConfig {
+        AuditConfig {
+            syslog: SyslogConfig {
+                transport: "none".to_string(),
+                ..SyslogConfig::default()
+            },
+            ..AuditConfig::default()
+        }
+    }
+
+    fn custom_event(name: &str) -> AuditEvent {
+        AuditEvent::new(
+            AuditEventKind::Custom(name.to_string()),
+            AuditSeverity::Informational,
+            "test-svc".to_string(),
+        )
+    }
+
+    /// Events emitted before chain init are persisted, in emission order.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn events_before_chain_init_are_buffered_and_ordered() {
+        let mut runtime = ActonApp::launch_async().await;
+        let storage = Arc::new(SlowCapturingStorage::new(Duration::from_millis(400)));
+
+        let handle = AuditAgent::spawn(
+            &mut runtime,
+            test_config(),
+            Some(storage.clone() as Arc<dyn AuditStorage>),
+            "test-svc".to_string(),
+        )
+        .await
+        .expect("spawn audit agent");
+
+        // Emit immediately — the chain cannot possibly be initialized yet.
+        let expected: Vec<String> = (0..10).map(|i| format!("early.{i}")).collect();
+        for name in &expected {
+            handle.send(custom_event(name)).await;
+        }
+
+        // Wait for the drain to complete.
+        for _ in 0..100 {
+            if storage.events.lock().expect("events lock").len() >= expected.len() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        let kinds = storage.kinds();
+        let names: Vec<String> = kinds
+            .iter()
+            .map(|k| match k {
+                AuditEventKind::Custom(n) => n.clone(),
+                other => panic!("unexpected kind {other:?}"),
+            })
+            .collect();
+        assert_eq!(names, expected, "all early events persisted in order");
+
+        // Sequence numbers must be contiguous from the chain start.
+        let sequences: Vec<u64> = storage
+            .events
+            .lock()
+            .expect("events lock")
+            .iter()
+            .map(|e| e.sequence)
+            .collect();
+        assert_eq!(sequences, (1..=expected.len() as u64).collect::<Vec<_>>());
+    }
+
+    /// Events emitted after chain init are sealed after buffered ones.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn buffered_events_precede_later_events() {
+        let mut runtime = ActonApp::launch_async().await;
+        let storage = Arc::new(SlowCapturingStorage::new(Duration::from_millis(300)));
+
+        let handle = AuditAgent::spawn(
+            &mut runtime,
+            test_config(),
+            Some(storage.clone() as Arc<dyn AuditStorage>),
+            "test-svc".to_string(),
+        )
+        .await
+        .expect("spawn audit agent");
+
+        handle.send(custom_event("early")).await;
+
+        // Well after chain initialization has completed.
+        tokio::time::sleep(Duration::from_millis(900)).await;
+        handle.send(custom_event("late")).await;
+
+        for _ in 0..100 {
+            if storage.events.lock().expect("events lock").len() >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        let names: Vec<String> = storage
+            .kinds()
+            .iter()
+            .map(|k| match k {
+                AuditEventKind::Custom(n) => n.clone(),
+                other => panic!("unexpected kind {other:?}"),
+            })
+            .collect();
+        assert_eq!(names, vec!["early".to_string(), "late".to_string()]);
+    }
+
+    /// Alert hook that counts storage-unreachable alerts.
+    struct CountingHook {
+        alerts: AtomicU64,
+    }
+
+    #[async_trait]
+    impl AuditAlertHook for CountingHook {
+        async fn on_alert(&self, event: AuditAlertEvent) {
+            if matches!(event, AuditAlertEvent::StorageUnreachable { .. }) {
+                self.alerts.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    }
+
+    /// Overflow drops the newest event and reports it to the failure tracker.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pending_overflow_reports_to_failure_tracker() {
+        let hook = Arc::new(CountingHook {
+            alerts: AtomicU64::new(0),
+        });
+        let tracker = Arc::new(FailureTracker::new(
+            vec![hook.clone()],
+            0, // alert immediately
+            3600,
+            true,
+            "test-svc".to_string(),
+        ));
+
+        let mut state = AuditAgentState {
+            failure_tracker: Some(tracker),
+            ..AuditAgentState::default()
+        };
+
+        for i in 0..MAX_PENDING_EVENTS {
+            buffer_pending_event(&mut state, custom_event(&format!("e{i}")));
+        }
+        assert_eq!(state.pending.len(), MAX_PENDING_EVENTS);
+
+        buffer_pending_event(&mut state, custom_event("overflow"));
+
+        // Newest is dropped; the oldest buffered events are preserved.
+        assert_eq!(state.pending.len(), MAX_PENDING_EVENTS);
+        assert_eq!(
+            state.pending[0].kind,
+            AuditEventKind::Custom("e0".to_string())
+        );
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(hook.alerts.load(Ordering::SeqCst), 1);
+    }
 }
