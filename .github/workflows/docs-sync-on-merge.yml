@@ -83,9 +83,14 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           additional_permissions: |
             actions: read
+          # Reviewing a diff against 56 documentation pages takes real
+          # exploration: a 40-turn budget was exhausted mid-edit, after the
+          # model had already written changes but before it could open a pull
+          # request. The read-only shell utilities are listed explicitly
+          # because anything missing is denied, and each denial burns a turn.
           claude_args: |
-            --allowedTools "Bash(gh:*),Bash(git:*),Bash(rg:*),Bash(ls:*),Bash(cat:*),Read,Edit,Write,Glob,Grep"
-            --max-turns 40
+            --allowedTools "Bash(gh:*),Bash(git:*),Bash(rg:*),Bash(ls:*),Bash(cat:*),Bash(find:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(sed:*),Bash(sort:*),Bash(uniq:*),Bash(cut:*),Bash(tr:*),Bash(test:*),Read,Edit,Write,Glob,Grep,TodoWrite"
+            --max-turns 150
           prompt: |
             A pull request just merged into `main` of Govcraft/acton-service.
             Your job is to bring the documentation site in `acton-docs/` back in
@@ -135,6 +140,18 @@ jobs:
             version in the root `Cargo.toml`. Do not bump versions speculatively.
 
             ## Step 3 -- ship the changes
+
+            Work within a finite turn budget. Survey efficiently: prefer a few
+            targeted greps over reading pages end to end, and stop searching
+            once you can justify the edits you intend to make. Editing a
+            handful of genuinely affected pages beats an exhaustive survey that
+            never reaches this step.
+
+            As soon as you have made your edits, commit, push, and open the
+            pull request BEFORE looking for anything further to improve. A run
+            that ends with edits on disk and no pull request has thrown all of
+            its work away. If more remains afterwards, say so in the PR body
+            rather than delaying the PR.
 
             Only if you actually edited files:
 
