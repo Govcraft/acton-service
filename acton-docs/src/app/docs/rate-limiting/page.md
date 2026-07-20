@@ -47,9 +47,13 @@ Set `auto_apply = false` to wire the middleware manually inside your route closu
 When enabled, the middleware resolves the client IP in this order:
 1. First entry of `X-Forwarded-For` (left-most = original client)
 2. `X-Real-IP`
-3. Direct TCP peer address (`ConnectInfo<SocketAddr>`)
+3. Direct TCP peer address (`ConnectInfo<SocketAddr>`, or
+   `ConnectInfo<TlsConnectInfo>` when the [`tls`](/docs/tls) feature
+   terminates TLS directly on this listener)
 
-When disabled, only the direct peer address is used.
+When disabled, only the direct peer address is used. This means per-IP
+limiting works on a directly-terminated TLS listener with no fronting proxy,
+not only behind one that sets forwarded headers.
 
 {% callout type="warning" title="Breaking change in 0.23" %}
 Route-rate-limit keys now match the **full** request path (e.g. `"POST /api/v1/uploads"`). Configurations that relied on the previous bug — using post-nest keys like `"POST /uploads"` for routes registered under `add_version(V1, ...)` — must be updated. See the [CHANGELOG](https://github.com/Govcraft/acton-service/blob/main/CHANGELOG.md) for details.
