@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.30.0] - 2026-07-20
+
+The mutual-TLS release: inbound client-certificate verification, an outbound
+client identity, and in-place rotation of every credential the framework
+touches — server certificates, client identities, and the trust anchors both
+are verified against — with no socket rebind, no connection-pool loss, and no
+restart. There are no breaking changes; every addition is opt-in.
+
+### Added
+
+- **tls**: Optional client-certificate verification for inbound TLS. Setting
+  `client_ca_path` on `[tls]` or `[grpc.tls]` verifies peers against that CA
+  bundle with `WebPkiClientVerifier`; `client_auth_optional = true` admits
+  connections without a certificate while still rejecting invalid ones.
+  Verified peer certificates reach handlers through the new `TlsConnectInfo`
+  connect-info type, which also gives TLS listeners a real remote address for
+  the first time. Absent a CA bundle, behaviour is unchanged. (#68)
+- **tls**: `TlsConfigSource`, an `ArcSwap`-backed server-credential handle
+  read per handshake, so `reload()` installs rotated certificates without
+  rebinding the socket. Installed via `with_tls_config_source` /
+  `with_grpc_tls_config_source`; the existing setters keep their signatures
+  as static sources. Reload is fail-closed: a failed read keeps the
+  last-good credentials serving, logs at ERROR, and returns the error. (#68)
+- **tls**: Four ways to trigger a server-credential reload, layered on one
+  shared implementation: `ServiceBuilder::with_tls_reload(hook)` hands the
+  hook a `TlsReloadHandle` over every reloadable source;
+  `ActonService::tls_config_source()` / `grpc_tls_config_source()` are
+  unopinionated accessors for callers whose lifecycle does not fit a
+  callback; `reload_interval_secs` opts into a poll that fingerprints file
+  contents (never mtimes, which `cp -p` preserves) and reloads only on
+  change, with failed ticks keeping the baseline so half-written
+  certificates self-heal; and `reload_on_sighup` reloads every reloadable
+  source from one Unix signal handler, without touching the SIGINT/SIGTERM
+  shutdown path. The standalone `Server::serve` path builds a reloadable
+  source and installs the same config-driven triggers. When `[grpc.tls]` is
+  absent the gRPC listener shares the `[tls]` source, and the handle
+  deduplicates that case (`TlsConfigSource::ptr_eq` is public). (#79)
+- **client-tls**: A client-side mutual-TLS identity for outbound calls, the
+  outbound mirror of `[tls]`. `ClientIdentityConfig` names the certificate,
+  key, and optional peer-CA bundle (`root_ca_path`, additive to the webpki
+  roots unless `exclusive_roots` pins trust to the bundle alone), and the
+  new `client_tls` module turns it into a rustls `ClientConfig`, a
+  `reqwest::Identity` or `ClientBuilder`, or a tonic `ClientTlsConfig`.
+  Every entry point validates eagerly — including an explicit `keys_match`
+  check — so a parseable-but-mismatched pair fails at configuration time
+  rather than on the first live handshake, and the concatenated PEM buffer
+  reqwest requires is zeroized on drop. (#71)
+- **client-tls**: `ClientIdentitySource`, a rotatable outbound identity that
+  swaps in place: rustls consults a `ResolvesClientCert` resolver once per
+  handshake, so `reload()` is a pointer store and nothing above the TLS
+  layer is rebuilt. `client()` returns one stable `reqwest::Client` for the
+  source's lifetime — caching it is correct, the connection pool survives a
+  rotation, and `grpc_channel(Endpoint)` builds a tonic channel that rotates
+  the same way. A reload rereads everything the config names, identity and
+  peer trust anchors together, all-or-nothing: a new certificate alongside
+  an unreadable CA bundle installs neither, and any failure keeps the
+  last-good credentials, logs at ERROR, and returns the error. (#71, #90)
+
 ## [acton-service-v0.29.0] - 2026-07-19
 
 ### Security
