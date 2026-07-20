@@ -988,6 +988,18 @@ pub struct TlsConfig {
     /// during startup and otherwise ignored.
     #[serde(default = "default_false")]
     pub reload_on_sighup: bool,
+
+    /// Maximum time to wait for a TLS handshake to complete, in seconds, before
+    /// the connection is dropped. Caps pre-handshake stalls from unauthenticated
+    /// peers (a peer that connects but never completes the handshake). `None`
+    /// (the default) uses the built-in default of
+    /// [`DEFAULT_HANDSHAKE_TIMEOUT`](crate::tls::DEFAULT_HANDSHAKE_TIMEOUT)
+    /// seconds.
+    ///
+    /// A value of `0` is rejected at build time: it would fail every handshake
+    /// instantly.
+    #[serde(default)]
+    pub handshake_timeout_secs: Option<u64>,
 }
 
 /// Client-side mutual-TLS identity (requires `tls` feature)

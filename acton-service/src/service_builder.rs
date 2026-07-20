@@ -1751,6 +1751,44 @@ where
             None => None,
         };
 
+        // Resolve the per-listener handshake timeout. Validation happens here,
+        // alongside the reload-interval validation above, so a zero is reported
+        // by `try_build()` / `serve()` before anything binds. A validation
+        // failure records the startup error and falls back to the default so the
+        // remaining build steps have a usable value to carry.
+        #[cfg(feature = "tls")]
+        let tls_handshake_timeout = match config.tls.as_ref().filter(|t| t.enabled) {
+            Some(tls_cfg) => match crate::tls::validate_handshake_timeout(tls_cfg, "[tls]") {
+                Ok(timeout) => timeout,
+                Err(err) => {
+                    tracing::error!("{}", err);
+                    record_startup_error(&mut startup_error, err);
+                    crate::tls::DEFAULT_HANDSHAKE_TIMEOUT
+                }
+            },
+            None => crate::tls::DEFAULT_HANDSHAKE_TIMEOUT,
+        };
+
+        // The gRPC listener's handshake timeout. A present, enabled `[grpc.tls]`
+        // is authoritative; an absent section inherits the HTTP `[tls]` timeout,
+        // mirroring how it inherits the HTTP credentials above. A disabled
+        // section serves plaintext, so its value is never used.
+        #[cfg(all(feature = "grpc", feature = "tls"))]
+        let grpc_tls_handshake_timeout = match config.grpc.as_ref().and_then(|g| g.tls.as_ref()) {
+            Some(grpc_tls) if grpc_tls.enabled => {
+                match crate::tls::validate_handshake_timeout(grpc_tls, "[grpc.tls]") {
+                    Ok(timeout) => timeout,
+                    Err(err) => {
+                        tracing::error!("{}", err);
+                        record_startup_error(&mut startup_error, err);
+                        crate::tls::DEFAULT_HANDSHAKE_TIMEOUT
+                    }
+                }
+            }
+            Some(_) => crate::tls::DEFAULT_HANDSHAKE_TIMEOUT,
+            None => tls_handshake_timeout,
+        };
+
         // Either section asking for SIGHUP installs the one handler that
         // reloads every listener; see `crate::tls::spawn_sighup_reload`.
         #[cfg(feature = "tls")]
@@ -1853,6 +1891,10 @@ where
             tls_reload_interval,
             #[cfg(all(feature = "grpc", feature = "tls"))]
             grpc_tls_reload_interval,
+            #[cfg(feature = "tls")]
+            tls_handshake_timeout,
+            #[cfg(all(feature = "grpc", feature = "tls"))]
+            grpc_tls_handshake_timeout,
             #[cfg(feature = "tls")]
             tls_reload_on_sighup,
             agent_runtime: self.agent_runtime,
@@ -2269,6 +2311,13 @@ where
     /// Validated poll period for the gRPC credentials, from `[grpc.tls]`.
     #[cfg(all(feature = "grpc", feature = "tls"))]
     grpc_tls_reload_interval: Option<std::time::Duration>,
+    /// Validated per-handshake timeout for the HTTP listener, from `[tls]`.
+    #[cfg(feature = "tls")]
+    tls_handshake_timeout: std::time::Duration,
+    /// Validated per-handshake timeout for the separate-port gRPC listener,
+    /// from `[grpc.tls]` (inheriting `[tls]` when that section is absent).
+    #[cfg(all(feature = "grpc", feature = "tls"))]
+    grpc_tls_handshake_timeout: std::time::Duration,
     /// Whether either TLS section asked for `SIGHUP`-driven reloading.
     #[cfg(feature = "tls")]
     tls_reload_on_sighup: bool,
@@ -2496,6 +2545,8 @@ where
                         // per-listener TLS, falling back to the HTTP TLS config).
                         #[cfg(feature = "tls")]
                         let grpc_tls_config = self.grpc_tls_config.clone();
+                        #[cfg(feature = "tls")]
+                        let grpc_tls_handshake_timeout = self.grpc_tls_handshake_timeout;
 
                         let grpc_handle = tokio::spawn(async move {
                             #[cfg(feature = "tls")]
@@ -2503,7 +2554,8 @@ where
                                 let tls_listener = crate::tls::TlsListener::with_config_source(
                                     grpc_listener,
                                     tls_source.clone(),
-                                );
+                                )
+                                .with_handshake_timeout(grpc_tls_handshake_timeout);
                                 return axum::serve(
                                     tls_listener,
                                     grpc_app.into_make_service_with_connect_info::<
@@ -2527,7 +2579,8 @@ where
                             let tls_listener = crate::tls::TlsListener::with_config_source(
                                 http_listener,
                                 tls_source.clone(),
-                            );
+                            )
+                            .with_handshake_timeout(self.tls_handshake_timeout);
                             tracing::info!("TLS enabled (HTTPS) for both HTTP and gRPC");
                             let http_result = axum::serve(
                                 tls_listener,
@@ -2585,7 +2638,8 @@ where
                             let tls_listener = crate::tls::TlsListener::with_config_source(
                                 listener,
                                 tls_source.clone(),
-                            );
+                            )
+                            .with_handshake_timeout(self.tls_handshake_timeout);
                             tracing::info!("TLS enabled (HTTPS) for hybrid HTTP+gRPC");
                             axum::serve(
                                 tls_listener,
@@ -2642,7 +2696,8 @@ where
         #[cfg(feature = "tls")]
         if let Some(ref tls_source) = self.tls_config {
             let tls_listener =
-                crate::tls::TlsListener::with_config_source(listener, tls_source.clone());
+                crate::tls::TlsListener::with_config_source(listener, tls_source.clone())
+                    .with_handshake_timeout(self.tls_handshake_timeout);
             tracing::info!("TLS enabled (HTTPS)");
             axum::serve(
                 tls_listener,
@@ -2859,6 +2914,7 @@ mod tests {
             client_auth_optional: false,
             reload_interval_secs: None,
             reload_on_sighup: false,
+            handshake_timeout_secs: None,
         }
     }
 
@@ -3124,6 +3180,7 @@ mod tests {
                 client_auth_optional: false,
                 reload_interval_secs: None,
                 reload_on_sighup: false,
+                handshake_timeout_secs: None,
             }),
             ..Default::default()
         };
@@ -3169,6 +3226,7 @@ mod tests {
                 client_auth_optional: false,
                 reload_interval_secs: None,
                 reload_on_sighup: false,
+                handshake_timeout_secs: None,
             }),
             port: 50051,
             reflection_enabled: false,
@@ -3208,6 +3266,7 @@ mod tests {
                 client_auth_optional: false,
                 reload_interval_secs: None,
                 reload_on_sighup: false,
+                handshake_timeout_secs: None,
             }),
             ..Default::default()
         };
@@ -3240,6 +3299,7 @@ mod tests {
                 client_auth_optional: false,
                 reload_interval_secs: None,
                 reload_on_sighup: false,
+                handshake_timeout_secs: None,
             }),
             ..Default::default()
         };
@@ -3473,6 +3533,7 @@ mod tests {
                 client_auth_optional: false,
                 reload_interval_secs: None,
                 reload_on_sighup: false,
+                handshake_timeout_secs: None,
             }),
             ..base
         };

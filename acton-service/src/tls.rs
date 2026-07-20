@@ -49,6 +49,7 @@ use std::time::Duration;
 use arc_swap::ArcSwap;
 use rustls_pki_types::CertificateDer;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc;
 use tokio_rustls::rustls::server::danger::ClientCertVerifier;
 use tokio_rustls::rustls::server::WebPkiClientVerifier;
 use tokio_rustls::rustls::{RootCertStore, ServerConfig};
@@ -618,6 +619,46 @@ impl Drop for TlsReloadTasks {
     }
 }
 
+/// Default cap on how long a single TLS handshake may take before its
+/// connection is dropped, used when `handshake_timeout_secs` is unset.
+///
+/// Ten seconds is comfortably longer than a healthy handshake — which is a
+/// couple of round-trips and completes in milliseconds on a LAN, and in well
+/// under a second even across a slow link — yet short enough that a peer which
+/// completes the TCP connect and then stalls (the pre-authentication denial of
+/// service this bound exists to cap) frees its handshake task promptly instead
+/// of holding it open indefinitely. Operators who terminate TLS behind a proxy
+/// with its own, longer client timeout can raise it via `handshake_timeout_secs`.
+pub const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Validate a section's `handshake_timeout_secs` into a handshake deadline.
+///
+/// `section` names the config section for the diagnostic, so an operator with
+/// both `[tls]` and `[grpc.tls]` configured learns which one to fix.
+///
+/// An unset value resolves to [`DEFAULT_HANDSHAKE_TIMEOUT`]. Callers run this
+/// *before* binding a listener, so a rejected value refuses to start rather than
+/// failing handshakes once traffic arrives — the same posture as
+/// [`validate_reload_interval`].
+///
+/// # Errors
+///
+/// A timeout of `0` is rejected. Taken literally it would elapse before the
+/// handshake could make any progress, failing every connection instantly, so it
+/// can only be a misconfiguration.
+pub(crate) fn validate_handshake_timeout(tls_cfg: &TlsConfig, section: &str) -> Result<Duration> {
+    match tls_cfg.handshake_timeout_secs {
+        None => Ok(DEFAULT_HANDSHAKE_TIMEOUT),
+        Some(0) => Err(crate::error::Error::Internal(format!(
+            "{section} sets handshake_timeout_secs = 0, which would elapse before any \
+             handshake could complete and so fail every connection. Omit the field to use \
+             the default of {} seconds, or set a positive number of seconds.",
+            DEFAULT_HANDSHAKE_TIMEOUT.as_secs()
+        ))),
+        Some(secs) => Ok(Duration::from_secs(secs)),
+    }
+}
+
 /// Validate a section's `reload_interval_secs` into a poll period.
 ///
 /// `section` names the config section for the diagnostic, so an operator with
@@ -749,9 +790,100 @@ pub(crate) fn install_reload_triggers(
 /// Each accepted connection reads the source's current configuration, so
 /// credentials swapped in by [`TlsConfigSource::reload`] apply to the next
 /// handshake without restarting the listener.
+///
+/// # Handshakes run off the accept path
+///
+/// A background *pump* task owns the TCP listener, accepts connections, and runs
+/// each TLS handshake in its own [`tokio::spawn`] task bounded by
+/// [`handshake_timeout`](Self::with_handshake_timeout). Completed streams reach
+/// [`accept`](axum::serve::Listener::accept) through a bounded channel, so one
+/// peer that connects but never sends a ClientHello cannot serialize behind the
+/// accept future and block every other connection — it merely occupies its own
+/// handshake task until the timeout drops it. The pump is spawned lazily on the
+/// first `accept()` call and aborted when the listener is dropped.
 pub struct TlsListener {
-    tcp: TcpListener,
+    /// Shared so the pump task can `accept()` on its own clone while
+    /// [`local_addr`](axum::serve::Listener::local_addr) still reads this one.
+    tcp: Arc<TcpListener>,
     config_source: TlsConfigSource,
+    handshake_timeout: Duration,
+    /// Receiving end of the pump's completed-handshake channel. `None` until the
+    /// first `accept()` lazily spawns the pump.
+    rx: Option<mpsc::Receiver<(TlsStream<TcpStream>, SocketAddr)>>,
+    /// The pump task, kept so `Drop` can abort it rather than let it outlive the
+    /// listener holding the socket open.
+    pump: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for TlsListener {
+    fn drop(&mut self) {
+        if let Some(pump) = self.pump.take() {
+            pump.abort();
+        }
+    }
+}
+
+/// Bounded capacity of the channel carrying completed handshakes to `accept()`.
+///
+/// axum leaves only a small number of accepts outstanding at once, so 1024 is
+/// far more headroom than it ever uses while still bounding how many completed
+/// `TlsStream`s can queue if the serve loop stalls. When it does fill, the
+/// pump's `tx.send().await` parks — applying backpressure to further handshakes
+/// rather than buffering without limit.
+const HANDSHAKE_CHANNEL_CAPACITY: usize = 1024;
+
+/// The background task that owns the listener, accepts TCP connections, and runs
+/// each TLS handshake concurrently in its own task so no single stalled peer can
+/// block the others. Completed streams are sent back to `accept()` over `tx`.
+async fn handshake_pump(
+    tcp: Arc<TcpListener>,
+    config_source: TlsConfigSource,
+    handshake_timeout: Duration,
+    tx: mpsc::Sender<(TlsStream<TcpStream>, SocketAddr)>,
+) {
+    loop {
+        // Accept a TCP connection. Preserve the previous error behaviour: log
+        // and pause briefly so a transient accept failure (e.g. fd exhaustion)
+        // does not spin this loop.
+        let (stream, addr) = match tcp.accept().await {
+            Ok(pair) => pair,
+            Err(e) => {
+                tracing::error!("TCP accept error: {}", e);
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                continue;
+            }
+        };
+
+        // Snapshot the credentials at accept time (an `Arc` clone). A rotation
+        // that lands mid-handshake therefore never changes this connection's
+        // configuration, preserving the per-connection rotation semantics.
+        let acceptor = TlsAcceptor::from(config_source.load());
+        let tx = tx.clone();
+
+        // Each handshake runs in its own task, bounded by the timeout, so a peer
+        // that never sends a ClientHello occupies only its own task and cannot
+        // block accepting or handshaking any other connection.
+        tokio::spawn(async move {
+            match tokio::time::timeout(handshake_timeout, acceptor.accept(stream)).await {
+                Ok(Ok(tls_stream)) => {
+                    // A send error means `accept()` and its receiver are gone —
+                    // the listener was dropped — so this connection is moot.
+                    let _ = tx.send((tls_stream, addr)).await;
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!("TLS handshake failed from {}: {}", addr, e);
+                }
+                Err(_elapsed) => {
+                    tracing::warn!(
+                        "TLS handshake from {} did not complete within {:?}; dropping the \
+                         connection",
+                        addr,
+                        handshake_timeout
+                    );
+                }
+            }
+        });
+    }
 }
 
 impl TlsListener {
@@ -760,6 +892,9 @@ impl TlsListener {
     /// The credentials cannot be rotated. Use
     /// [`with_config_source`](Self::with_config_source) with a source built by
     /// [`TlsConfigSource::from_tls_config`] when they must be.
+    ///
+    /// The handshake timeout defaults to [`DEFAULT_HANDSHAKE_TIMEOUT`]; override
+    /// it with [`with_handshake_timeout`](Self::with_handshake_timeout).
     pub fn new(tcp: TcpListener, server_config: Arc<ServerConfig>) -> Self {
         Self::with_config_source(tcp, TlsConfigSource::from_server_config(server_config))
     }
@@ -769,8 +904,28 @@ impl TlsListener {
     /// Every handshake uses whatever the source holds at that moment, so a
     /// [`reload`](TlsConfigSource::reload) on a clone of the source rotates this
     /// listener's certificate in place.
+    ///
+    /// The handshake timeout defaults to [`DEFAULT_HANDSHAKE_TIMEOUT`]; override
+    /// it with [`with_handshake_timeout`](Self::with_handshake_timeout).
     pub fn with_config_source(tcp: TcpListener, config_source: TlsConfigSource) -> Self {
-        Self { tcp, config_source }
+        Self {
+            tcp: Arc::new(tcp),
+            config_source,
+            handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
+            rx: None,
+            pump: None,
+        }
+    }
+
+    /// Set how long a single TLS handshake may take before it is dropped.
+    ///
+    /// Bounds the pre-handshake stall an unauthenticated peer can impose on its
+    /// own handshake task. Defaults to [`DEFAULT_HANDSHAKE_TIMEOUT`] when not
+    /// called.
+    #[must_use]
+    pub fn with_handshake_timeout(mut self, timeout: Duration) -> Self {
+        self.handshake_timeout = timeout;
+        self
     }
 
     /// The credential source this listener hands to each new handshake.
@@ -785,36 +940,37 @@ impl axum::serve::Listener for TlsListener {
     type Addr = SocketAddr;
 
     fn accept(&mut self) -> impl std::future::Future<Output = (Self::Io, Self::Addr)> + Send {
-        let config_source = self.config_source.clone();
-        let tcp = &mut self.tcp;
+        // Lazily start the background pump on the first accept. Spawning here
+        // rather than in the constructor keeps `new`/`with_config_source`
+        // non-async and means no task and no socket ownership exist until axum
+        // actually begins serving.
+        if self.rx.is_none() {
+            let (tx, rx) = mpsc::channel(HANDSHAKE_CHANNEL_CAPACITY);
+            let pump = tokio::spawn(handshake_pump(
+                Arc::clone(&self.tcp),
+                self.config_source.clone(),
+                self.handshake_timeout,
+                tx,
+            ));
+            self.rx = Some(rx);
+            self.pump = Some(pump);
+        }
+
+        let rx = self
+            .rx
+            .as_mut()
+            .expect("the pump receiver was just installed");
 
         async move {
-            loop {
-                // Accept a TCP connection using the tokio TcpListener method (not
-                // the axum Listener trait method, which handles errors internally).
-                let (stream, addr) = match TcpListener::accept(tcp).await {
-                    Ok((stream, addr)) => (stream, addr),
-                    Err(e) => {
-                        tracing::error!("TCP accept error: {}", e);
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                        continue;
-                    }
-                };
-
-                // Read the credentials per connection so a reload that happened
-                // since the last accept takes effect. Both the load and the
-                // acceptor construction are `Arc` clones, so this costs nothing
-                // measurable against the handshake that follows.
-                let acceptor = TlsAcceptor::from(config_source.load());
-
-                // Perform TLS handshake. On failure, log and try the next connection.
-                match acceptor.accept(stream).await {
-                    Ok(tls_stream) => return (tls_stream, addr),
-                    Err(e) => {
-                        tracing::warn!("TLS handshake failed from {}: {}", addr, e);
-                        continue;
-                    }
-                }
+            match rx.recv().await {
+                Some(conn) => conn,
+                // The pump loops forever holding a `tx`, so the channel can only
+                // close if the pump task itself is gone — unreachable in normal
+                // operation. Returning would hand axum a bogus connection and
+                // busy-loop its serve loop, so park this future forever instead;
+                // a graceful shutdown drops the whole listener rather than
+                // relying on `accept()` to resolve.
+                None => std::future::pending().await,
             }
         }
     }
@@ -1160,6 +1316,7 @@ mod tests {
             client_auth_optional: false,
             reload_interval_secs: None,
             reload_on_sighup: false,
+            handshake_timeout_secs: None,
         };
 
         load_server_config(&config).expect("server-only TLS config must build");
@@ -1181,6 +1338,7 @@ mod tests {
             client_auth_optional: true,
             reload_interval_secs: None,
             reload_on_sighup: false,
+            handshake_timeout_secs: None,
         };
 
         load_server_config(&config).expect("mutual-TLS config must build");
@@ -1200,6 +1358,7 @@ mod tests {
             client_auth_optional: false,
             reload_interval_secs: None,
             reload_on_sighup: false,
+            handshake_timeout_secs: None,
         };
 
         load_server_config(&config)
@@ -1222,6 +1381,7 @@ mod tests {
             client_auth_optional: false,
             reload_interval_secs: None,
             reload_on_sighup: false,
+            handshake_timeout_secs: None,
         }
     }
 
@@ -1238,6 +1398,7 @@ mod tests {
             client_auth_optional: false,
             reload_interval_secs: None,
             reload_on_sighup: false,
+            handshake_timeout_secs: None,
         };
         let server_config = load_server_config(&config).expect("config builds");
 
@@ -1267,6 +1428,7 @@ mod tests {
             client_auth_optional: false,
             reload_interval_secs: None,
             reload_on_sighup: false,
+            handshake_timeout_secs: None,
         };
         let server_config = load_server_config(&config).expect("config builds");
         let source = TlsConfigSource::from_server_config(server_config.clone());
@@ -1525,6 +1687,7 @@ mod tests {
             client_auth_optional: false,
             reload_interval_secs: None,
             reload_on_sighup: false,
+            handshake_timeout_secs: None,
         };
         let source =
             TlsConfigSource::from_server_config(load_server_config(&config).expect("config"));
@@ -1776,6 +1939,44 @@ mod tests {
     }
 
     #[test]
+    fn a_zero_handshake_timeout_is_rejected() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut tls_config = write_credentials(dir.path(), &generate_cert("localhost"));
+        tls_config.handshake_timeout_secs = Some(0);
+
+        let err = validate_handshake_timeout(&tls_config, "[tls]")
+            .expect_err("a zero handshake timeout would fail every connection and must be refused");
+
+        let message = err.to_string();
+        assert!(
+            message.contains("handshake_timeout_secs = 0"),
+            "the error must name the setting: {message}"
+        );
+        assert!(
+            message.contains("[tls]"),
+            "the error must name the section so an operator knows which to fix: {message}"
+        );
+    }
+
+    #[test]
+    fn an_absent_or_positive_handshake_timeout_resolves_to_a_duration() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut tls_config = write_credentials(dir.path(), &generate_cert("localhost"));
+
+        assert_eq!(
+            validate_handshake_timeout(&tls_config, "[tls]").expect("absent is valid"),
+            DEFAULT_HANDSHAKE_TIMEOUT,
+            "omitting the field uses the built-in default"
+        );
+
+        tls_config.handshake_timeout_secs = Some(5);
+        assert_eq!(
+            validate_handshake_timeout(&tls_config, "[tls]").expect("positive is valid"),
+            Duration::from_secs(5)
+        );
+    }
+
+    #[test]
     fn an_absent_or_positive_poll_interval_is_accepted() {
         let dir = tempfile::tempdir().expect("temp dir");
         let mut tls_config = write_credentials(dir.path(), &generate_cert("localhost"));
@@ -1903,6 +2104,164 @@ mod tests {
             !rendered.contains("BEGIN"),
             "Debug must not render PEM material: {rendered}"
         );
+    }
+
+    /// A client-side verifier that accepts any server certificate, borrowing
+    /// only the signature checks from the installed crypto provider. The
+    /// handshake-off-the-accept-path test cares that a real handshake completes,
+    /// not that the self-signed test certificate chains to a trusted root, so
+    /// trust verification is deliberately bypassed here.
+    #[derive(Debug)]
+    struct AcceptAnyServerCert {
+        provider: Arc<tokio_rustls::rustls::crypto::CryptoProvider>,
+    }
+
+    impl tokio_rustls::rustls::client::danger::ServerCertVerifier for AcceptAnyServerCert {
+        fn verify_server_cert(
+            &self,
+            _end_entity: &CertificateDer<'_>,
+            _intermediates: &[CertificateDer<'_>],
+            _server_name: &rustls_pki_types::ServerName<'_>,
+            _ocsp_response: &[u8],
+            _now: rustls_pki_types::UnixTime,
+        ) -> std::result::Result<
+            tokio_rustls::rustls::client::danger::ServerCertVerified,
+            tokio_rustls::rustls::Error,
+        > {
+            Ok(tokio_rustls::rustls::client::danger::ServerCertVerified::assertion())
+        }
+
+        fn verify_tls12_signature(
+            &self,
+            message: &[u8],
+            cert: &CertificateDer<'_>,
+            dss: &tokio_rustls::rustls::DigitallySignedStruct,
+        ) -> std::result::Result<
+            tokio_rustls::rustls::client::danger::HandshakeSignatureValid,
+            tokio_rustls::rustls::Error,
+        > {
+            tokio_rustls::rustls::crypto::verify_tls12_signature(
+                message,
+                cert,
+                dss,
+                &self.provider.signature_verification_algorithms,
+            )
+        }
+
+        fn verify_tls13_signature(
+            &self,
+            message: &[u8],
+            cert: &CertificateDer<'_>,
+            dss: &tokio_rustls::rustls::DigitallySignedStruct,
+        ) -> std::result::Result<
+            tokio_rustls::rustls::client::danger::HandshakeSignatureValid,
+            tokio_rustls::rustls::Error,
+        > {
+            tokio_rustls::rustls::crypto::verify_tls13_signature(
+                message,
+                cert,
+                dss,
+                &self.provider.signature_verification_algorithms,
+            )
+        }
+
+        fn supported_verify_schemes(&self) -> Vec<tokio_rustls::rustls::SignatureScheme> {
+            self.provider
+                .signature_verification_algorithms
+                .supported_schemes()
+        }
+    }
+
+    /// The core regression for issue #94: a peer that completes the TCP connect
+    /// and then never sends a ClientHello must not block a healthy handshake
+    /// behind it. With handshakes run inline on the accept path, the silent peer
+    /// held the single accept future for the whole handshake timeout and stalled
+    /// every new connection — a pre-authentication denial of service.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_stalled_handshake_does_not_block_a_healthy_one() {
+        use axum::serve::Listener as _;
+
+        crate::crypto::ensure_default_crypto_provider();
+
+        // Server credentials with no client-certificate requirement.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let server_cert = generate_cert("localhost");
+        let tls_config = write_credentials(dir.path(), &server_cert);
+        let source = TlsConfigSource::from_tls_config(&tls_config).expect("server config loads");
+
+        let tcp = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ephemeral port");
+        let addr = tcp.local_addr().expect("local addr");
+
+        // Long enough that "the healthy handshake finished first" is unambiguous
+        // and that, if the silent peer ever did block the accept path, this test
+        // would clearly hang rather than pass by luck.
+        let handshake_timeout = Duration::from_secs(30);
+        let mut listener =
+            TlsListener::with_config_source(tcp, source).with_handshake_timeout(handshake_timeout);
+
+        // 1) The silent peer. Held in scope for the whole test so its socket
+        // stays open. The pump is spawned lazily on the first `accept()` below,
+        // so this connection is guaranteed to sit ahead of the healthy one in
+        // the accept backlog.
+        let _silent = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("the silent peer completes the TCP connect");
+
+        // 2) A healthy client that completes a real handshake, driven on its own
+        // task so it runs concurrently with the accept below.
+        let provider = tokio_rustls::rustls::crypto::CryptoProvider::get_default()
+            .expect("a crypto provider is installed")
+            .clone();
+        let client_config = tokio_rustls::rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(AcceptAnyServerCert { provider }))
+            .with_no_client_auth();
+
+        let good_client = tokio::spawn(async move {
+            let stream = tokio::net::TcpStream::connect(addr)
+                .await
+                .expect("the healthy peer connects");
+            let _tls = tokio_rustls::TlsConnector::from(Arc::new(client_config))
+                .connect(
+                    rustls_pki_types::ServerName::try_from("localhost").expect("valid name"),
+                    stream,
+                )
+                .await
+                .expect("the healthy handshake must complete");
+            // Hold the client end open briefly so the server side settles.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        });
+
+        // The healthy connection must reach `accept()` far inside the silent
+        // peer's timeout. A generous 5s outer bound catches a regression (an
+        // inline handshake would hold `accept()` for the full 30s) without
+        // making the test flaky on a slow machine.
+        let started = std::time::Instant::now();
+        let accepted = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+            .await
+            .expect("the healthy handshake must be delivered without waiting on the silent peer");
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "the healthy handshake was delivered in {elapsed:?}, which suggests it queued \
+             behind the silent peer instead of running concurrently"
+        );
+
+        // A real TLS stream reached us: prove it by reading its negotiated state
+        // is available (the connection is established, not a bare TCP socket).
+        let (_stream, peer_addr) = accepted;
+        assert_eq!(
+            peer_addr.ip(),
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            "the delivered connection is the loopback healthy client"
+        );
+
+        good_client
+            .await
+            .expect("the healthy client task must not panic");
     }
 
     #[test]
