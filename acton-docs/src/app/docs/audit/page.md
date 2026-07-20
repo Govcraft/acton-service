@@ -143,7 +143,7 @@ When `audit_auth_events` is enabled (default), the PASETO and JWT middleware aut
 
 > `AuthLoginFailed` is no longer emitted by the auth middleware. It is reserved for application-level login handlers (e.g. `POST /auth/login`) where credentials are submitted. The middleware emits `AuthTokenMissing` or `AuthTokenInvalid` instead, so unauthenticated probes against protected routes (health checks, scanners) no longer drown out real failed-login signal. See the 0.27 release notes for the migration.
 
-No additional code is required. These events include the client IP, user agent, and authenticated subject.
+No additional code is required. These events include the client IP, user agent, request ID, and authenticated subject. The IP and request ID come from the request-context middleware, which resolves them once per request — from `X-Forwarded-For` / `X-Real-IP` when an upstream proxy supplies them, falling back to the direct TCP peer address otherwise — and runs after the request ID is generated. Token-failure events therefore carry a usable source even when a proxy strips forwarding headers (see [Execution Order](/docs/middleware#execution-order)).
 
 ## Per-Route Auditing
 

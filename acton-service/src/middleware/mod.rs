@@ -15,6 +15,7 @@ pub mod revocation;
 pub mod jwt;
 
 pub mod rate_limit;
+pub mod request_context;
 pub mod request_tracking;
 pub mod route_matcher;
 
@@ -51,6 +52,7 @@ pub use jwt::JwtAuth;
 
 // Other middleware exports
 pub use rate_limit::RateLimit;
+pub use request_context::{request_context_middleware, RequestContext};
 pub use request_tracking::{
     request_id_layer, request_id_propagation_layer, sensitive_headers_layer, RequestTrackingConfig,
     PROPAGATE_HEADERS, SENSITIVE_HEADERS,

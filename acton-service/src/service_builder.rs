@@ -1773,6 +1773,15 @@ where
             }
         }
 
+        // Request context - resolves client IP, request ID, and user agent once for
+        // every downstream consumer. Added here so it executes immediately after the
+        // request-tracking layers below (later-added layer = outer = runs first) and
+        // before auth/audit, which would otherwise see a request ID that has not been
+        // generated yet and no ConnectInfo-derived IP (issue #17).
+        app = app.layer(axum::middleware::from_fn(
+            crate::middleware::request_context::request_context_middleware,
+        ));
+
         // Request tracking layers - based on config
         if config.middleware.request_tracking.mask_sensitive_headers {
             app = app.layer(sensitive_headers_layer());

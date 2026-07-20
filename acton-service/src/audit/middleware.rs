@@ -97,28 +97,15 @@ pub async fn audit_middleware(
         return next.run(request).await;
     }
 
-    // Extract source information from request
+    // Extract source information from request. ip/user_agent/request_id come from
+    // the RequestContext extension when present (header fallback otherwise); the
+    // subject is only known here, after auth middleware has injected Claims.
     let source = AuditSource {
-        ip: request
-            .headers()
-            .get("x-forwarded-for")
-            .or_else(|| request.headers().get("x-real-ip"))
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.split(',').next().unwrap_or(s).trim().to_string()),
-        user_agent: request
-            .headers()
-            .get("user-agent")
-            .and_then(|v| v.to_str().ok())
-            .map(String::from),
         subject: request
             .extensions()
             .get::<crate::middleware::Claims>()
             .map(|c| c.sub.clone()),
-        request_id: request
-            .headers()
-            .get("x-request-id")
-            .and_then(|v| v.to_str().ok())
-            .map(String::from),
+        ..crate::middleware::request_context::audit_source_for_request(&request)
     };
 
     let start = Instant::now();
