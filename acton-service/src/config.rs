@@ -940,6 +940,21 @@ pub struct TlsConfig {
 
     /// Path to PEM-encoded private key
     pub key_path: PathBuf,
+
+    /// Path to a PEM-encoded CA bundle used to verify client certificates
+    /// (mutual TLS). When present, the server requests a client certificate
+    /// during the handshake and validates it against these roots. When absent
+    /// (the default), no client certificate is requested.
+    #[serde(default)]
+    pub client_ca_path: Option<PathBuf>,
+
+    /// When `true`, a client certificate is requested but not required:
+    /// connections without one still complete, and a presented certificate is
+    /// still verified against `client_ca_path`. When `false` (the default), a
+    /// certificate that validates against `client_ca_path` is mandatory and
+    /// the handshake fails without one. Ignored when `client_ca_path` is absent.
+    #[serde(default = "default_false")]
+    pub client_auth_optional: bool,
 }
 
 /// Journald logging configuration (requires `journald` feature)
@@ -1678,6 +1693,53 @@ mod tests {
         assert_eq!(config.service.port, 8080);
         assert_eq!(config.service.log_level, "info");
         assert_eq!(config.rate_limit.per_user_rpm, 200);
+    }
+
+    #[cfg(feature = "tls")]
+    #[test]
+    fn tls_config_client_auth_fields_default_to_no_mtls() {
+        let json = r#"{
+            "enabled": true,
+            "cert_path": "/etc/tls/cert.pem",
+            "key_path": "/etc/tls/key.pem"
+        }"#;
+
+        let tls: TlsConfig =
+            serde_json::from_str(json).expect("minimal TLS config must parse");
+
+        assert!(
+            tls.client_ca_path.is_none(),
+            "an absent client CA must default to no mutual TLS"
+        );
+        assert!(
+            !tls.client_auth_optional,
+            "client auth must default to required when a CA is configured"
+        );
+    }
+
+    #[cfg(feature = "tls")]
+    #[test]
+    fn tls_config_parses_mutual_tls_fields() {
+        let json = r#"{
+            "enabled": true,
+            "cert_path": "/etc/tls/cert.pem",
+            "key_path": "/etc/tls/key.pem",
+            "client_ca_path": "/etc/tls/client-ca.pem",
+            "client_auth_optional": true
+        }"#;
+
+        let tls: TlsConfig =
+            serde_json::from_str(json).expect("mutual TLS config must parse");
+
+        assert_eq!(
+            tls.client_ca_path.as_deref(),
+            Some(std::path::Path::new("/etc/tls/client-ca.pem")),
+            "the client CA path must round-trip from configuration"
+        );
+        assert!(
+            tls.client_auth_optional,
+            "the optional client-auth flag must round-trip from configuration"
+        );
     }
 
     #[test]
