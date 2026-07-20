@@ -81,8 +81,8 @@ opentelemetry-prometheus = "0.31"
 prometheus = "0.14"
 
 # Resilience
-tower-resilience-circuitbreaker = "0.4.7"
-tower-resilience-bulkhead = "0.4.7"
+tower-resilience-circuitbreaker = "0.10.0"
+tower-resilience-bulkhead = "0.10.0"
 
 # Error handling
 thiserror = "2.0.17"
