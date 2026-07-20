@@ -231,7 +231,36 @@ impl GovernorRateLimit {
         );
 
         // Check rate limit and get result for headers
-        let result = rate_limit.check_rate_limit(&method, &path, claims.as_ref(), client_ip)?;
+        let result = match rate_limit.check_rate_limit(&method, &path, claims.as_ref(), client_ip)
+        {
+            Ok(result) => result,
+            Err(e) => {
+                // Mirror the Redis rate limiter: rejections are audit-visible
+                // as HttpRequestDenied (issue #16).
+                #[cfg(feature = "audit")]
+                if matches!(e, Error::RateLimitExceeded) {
+                    if let Some(logger) = request
+                        .extensions()
+                        .get::<crate::audit::AuditLogger>()
+                        .cloned()
+                    {
+                        if logger.config().audit_auth_events {
+                            let mut source =
+                                super::request_context::audit_source_for_request(&request);
+                            source.subject = claims.as_ref().map(|c| c.sub.clone());
+                            logger
+                                .log_auth(
+                                    crate::audit::event::AuditEventKind::HttpRequestDenied,
+                                    crate::audit::event::AuditSeverity::Warning,
+                                    source,
+                                )
+                                .await;
+                        }
+                    }
+                }
+                return Err(e);
+            }
+        };
 
         // Run the request
         let mut response = next.run(request).await;

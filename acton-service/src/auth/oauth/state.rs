@@ -43,8 +43,7 @@ pub trait OAuthStateManager: Send + Sync {
 
 /// Generate a cryptographically secure random state value
 pub fn generate_state() -> String {
-    use rand::Rng;
-    let bytes: [u8; 32] = rand::rng().random();
+    let bytes: [u8; 32] = rand::random();
     base64_url_encode(&bytes)
 }
 

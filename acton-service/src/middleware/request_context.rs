@@ -134,7 +134,7 @@ pub(crate) fn audit_source_for_request<B>(
 /// Unlike [`extract_client_ip`] this does not parse the IP, so a malformed
 /// `X-Forwarded-For` still round-trips verbatim into the audit record.
 #[cfg(feature = "audit")]
-fn audit_source_from_headers(headers: &HeaderMap) -> crate::audit::event::AuditSource {
+pub(crate) fn audit_source_from_headers(headers: &HeaderMap) -> crate::audit::event::AuditSource {
     crate::audit::event::AuditSource {
         ip: headers
             .get("x-forwarded-for")

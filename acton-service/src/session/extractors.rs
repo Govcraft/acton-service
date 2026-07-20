@@ -62,6 +62,10 @@ use crate::error::Error;
 pub struct TypedSession<T> {
     session: Session,
     data: T,
+    /// Captured at extraction so session methods can emit audit events
+    /// without access to the request (issue #16).
+    #[cfg(feature = "audit")]
+    audit: Option<(crate::audit::AuditLogger, crate::audit::event::AuditSource)>,
 }
 
 impl<T> TypedSession<T>
@@ -169,6 +173,43 @@ where
     }
 }
 
+impl TypedSession<AuthSession> {
+    /// Log the user out: clear the authentication data, persist the cleared
+    /// session, and emit an `AuthLogout` audit event whose subject is the
+    /// previously authenticated user ID.
+    ///
+    /// This is the audited logout path. Calling [`AuthSession::logout`] on
+    /// the data directly performs the same state change without the audit
+    /// event; combine with [`destroy`](Self::destroy) afterwards if the
+    /// session ID itself should be invalidated.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the cleared session cannot be written.
+    pub async fn logout(&mut self) -> Result<(), Error> {
+        #[cfg(feature = "audit")]
+        let subject = self.data.user_id.clone();
+        self.data.logout();
+        self.save().await?;
+
+        #[cfg(feature = "audit")]
+        if let Some((logger, source)) = &self.audit {
+            if logger.config().audit_auth_events {
+                let mut source = source.clone();
+                source.subject = subject;
+                let event = crate::audit::event::AuditEvent::new(
+                    crate::audit::event::AuditEventKind::AuthLogout,
+                    crate::audit::event::AuditSeverity::Notice,
+                    logger.service_name().to_string(),
+                )
+                .with_source(source);
+                logger.log(event).await;
+            }
+        }
+        Ok(())
+    }
+}
+
 impl<S, T> FromRequestParts<S> for TypedSession<T>
 where
     S: Send + Sync,
@@ -191,7 +232,30 @@ where
             .map_err(|e| Error::Session(format!("Failed to read session data: {e}")))?
             .unwrap_or_default();
 
-        Ok(Self { session, data })
+        #[cfg(feature = "audit")]
+        let audit = parts
+            .extensions
+            .get::<crate::audit::AuditLogger>()
+            .cloned()
+            .map(|logger| {
+                let source = parts
+                    .extensions
+                    .get::<crate::middleware::request_context::RequestContext>()
+                    .map(crate::middleware::request_context::RequestContext::audit_source)
+                    .unwrap_or_else(|| {
+                        crate::middleware::request_context::audit_source_from_headers(
+                            &parts.headers,
+                        )
+                    });
+                (logger, source)
+            });
+
+        Ok(Self {
+            session,
+            data,
+            #[cfg(feature = "audit")]
+            audit,
+        })
     }
 }
 

@@ -105,26 +105,9 @@ impl RateLimit {
                 .cloned();
             #[cfg(feature = "audit")]
             let audit_source = {
-                use crate::audit::event::AuditSource;
-                AuditSource {
-                    ip: request
-                        .headers()
-                        .get("x-forwarded-for")
-                        .or_else(|| request.headers().get("x-real-ip"))
-                        .and_then(|v| v.to_str().ok())
-                        .map(|s| s.split(',').next().unwrap_or(s).trim().to_string()),
-                    user_agent: request
-                        .headers()
-                        .get("user-agent")
-                        .and_then(|v| v.to_str().ok())
-                        .map(String::from),
-                    subject: claims.as_ref().map(|c| c.sub.clone()),
-                    request_id: request
-                        .headers()
-                        .get("x-request-id")
-                        .and_then(|v| v.to_str().ok())
-                        .map(String::from),
-                }
+                let mut source = super::request_context::audit_source_for_request(&request);
+                source.subject = claims.as_ref().map(|c| c.sub.clone());
+                source
             };
 
             // Check rate limit and get result for headers
