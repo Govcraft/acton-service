@@ -720,6 +720,34 @@ pub struct GrpcConfig {
     pub proto: ProtoConfig,
 }
 
+impl Default for GrpcConfig {
+    /// Every field reuses the serde default function that backs it, so a
+    /// programmatically constructed `GrpcConfig` and one deserialized from a
+    /// `[grpc]` section that omits those keys agree exactly.
+    ///
+    /// `enabled` is the one deliberate divergence. Deserialization defaults it
+    /// to `true` because writing a `[grpc]` section at all is a statement of
+    /// intent, whereas `GrpcConfig::default()` is only a starting point for
+    /// building one up — it must not silently stand up a gRPC surface the
+    /// caller never asked for. Set `enabled: true` explicitly to serve gRPC.
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            use_separate_port: default_false(),
+            bind: None,
+            #[cfg(feature = "tls")]
+            tls: None,
+            port: default_grpc_port(),
+            reflection_enabled: default_true(),
+            health_check_enabled: default_true(),
+            max_message_size_mb: default_grpc_max_message_mb(),
+            connection_timeout_secs: default_connection_timeout(),
+            timeout_secs: default_timeout(),
+            proto: ProtoConfig::default(),
+        }
+    }
+}
+
 /// Protocol buffer runtime configuration
 ///
 /// NOTE: This is RUNTIME configuration only. Proto compilation happens at build time.

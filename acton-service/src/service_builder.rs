@@ -1536,6 +1536,17 @@ where
         // Token auth (outermost) validates the `authorization` metadata and
         // injects Claims; Cedar (inner) then authorizes each method. Health
         // and reflection services are exempt, as are `public_paths` prefixes.
+        // Registering gRPC services that no listener will ever expose is a
+        // misconfiguration, not a preference. Caught here, before the routes
+        // are consumed, so `try_build()` / `serve()` report it without binding.
+        #[cfg(feature = "grpc")]
+        if let Some(err) =
+            grpc_registration_error(self.grpc_services.is_some(), config.grpc.as_ref())
+        {
+            tracing::error!("{}", err);
+            record_startup_error(&mut startup_error, err);
+        }
+
         #[cfg(feature = "grpc")]
         let grpc_router: Option<axum::Router> = match self.grpc_services {
             Some(routes) => {
@@ -1896,6 +1907,41 @@ fn record_startup_error(slot: &mut Option<crate::error::Error>, error: crate::er
     if slot.is_none() {
         *slot = Some(error);
     }
+}
+
+/// Detect gRPC services registered against a build that can never serve them.
+///
+/// `with_grpc_services` is an explicit statement that this process serves gRPC.
+/// If `[grpc]` is absent or `enabled = false`, those services are unreachable:
+/// the listener only ever speaks HTTP, and every RPC the caller registered
+/// fails at the client with a transport error that points nowhere near the
+/// cause. Dropping them silently is the same fail-unsafe direction as serving
+/// plaintext where TLS was configured, so it is fatal at build time instead.
+///
+/// Pure: derives the verdict solely from its two arguments.
+#[cfg(feature = "grpc")]
+fn grpc_registration_error(
+    services_registered: bool,
+    grpc: Option<&crate::config::GrpcConfig>,
+) -> Option<crate::error::Error> {
+    let grpc_enabled = grpc.is_some_and(|g| g.enabled);
+    if !services_registered || grpc_enabled {
+        return None;
+    }
+
+    let cause = match grpc {
+        Some(_) => "the `[grpc]` section sets `enabled = false`",
+        None => "no `[grpc]` section is configured",
+    };
+
+    Some(crate::error::Error::Internal(format!(
+        "gRPC services were registered with `with_grpc_services`, but gRPC is not enabled: \
+         {cause}. Those services would be silently discarded and every RPC would fail at the \
+         client, so the build is refused. To fix, either set `enabled = true` under `[grpc]` in \
+         your config file, or supply a config whose `grpc` field is \
+         `Some(GrpcConfig {{ enabled: true, ..Default::default() }})`. If gRPC is not wanted, \
+         remove the `with_grpc_services` call."
+    )))
 }
 
 impl<T> Default for ServiceBuilder<T>
@@ -2574,5 +2620,134 @@ mod tests {
                 .with_single_cert(vec![cert.cert.der().clone()], key.into())
                 .expect("server config"),
         )
+    }
+
+    /// `GrpcConfig::default()` must not stand up a gRPC surface on its own.
+    /// Callers reach for it to fill in ports and timeouts, not to opt in.
+    #[cfg(feature = "grpc")]
+    #[test]
+    fn grpc_config_default_is_disabled() {
+        use crate::config::GrpcConfig;
+
+        let config = GrpcConfig::default();
+
+        assert!(
+            !config.enabled,
+            "GrpcConfig::default() must be disabled so it cannot enable gRPC by accident"
+        );
+        assert_eq!(
+            config.port, 9090,
+            "the Default impl must agree with the serde default for `port`"
+        );
+    }
+
+    /// Registering gRPC services with no `[grpc]` section at all must fail the
+    /// build rather than start an HTTP-only service that drops every RPC.
+    #[cfg(feature = "grpc")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn grpc_services_without_grpc_config_is_fatal() {
+        use crate::config::Config;
+        use crate::prelude::ServiceBuilder;
+
+        let config = Config::<()> {
+            grpc: None,
+            ..Default::default()
+        };
+
+        let error = ServiceBuilder::new()
+            .with_config(config)
+            .with_grpc_services(tonic::service::Routes::default())
+            .try_build()
+            .err()
+            .expect("registering gRPC services with no [grpc] section must fail the build");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("no `[grpc]` section is configured"),
+            "error must name the cause, got: {message}"
+        );
+        assert!(
+            message.contains("enabled = true"),
+            "error must state the fix, got: {message}"
+        );
+    }
+
+    /// An explicitly disabled `[grpc]` section is equally fatal when services
+    /// were registered — the services still have nowhere to be served.
+    #[cfg(feature = "grpc")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn grpc_services_with_disabled_grpc_config_is_fatal() {
+        use crate::config::{Config, GrpcConfig};
+        use crate::prelude::ServiceBuilder;
+
+        let config = Config::<()> {
+            grpc: Some(GrpcConfig {
+                enabled: false,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let error = ServiceBuilder::new()
+            .with_config(config)
+            .with_grpc_services(tonic::service::Routes::default())
+            .try_build()
+            .err()
+            .expect("registering gRPC services against `enabled = false` must fail the build");
+
+        assert!(
+            error
+                .to_string()
+                .contains("the `[grpc]` section sets `enabled = false`"),
+            "error must name the cause, got: {error}"
+        );
+    }
+
+    /// The happy path: services registered against an enabled `[grpc]` section
+    /// builds, so the new check cannot regress working configurations.
+    #[cfg(feature = "grpc")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn grpc_services_with_enabled_grpc_config_builds() {
+        use crate::config::{Config, GrpcConfig};
+        use crate::prelude::ServiceBuilder;
+
+        let config = Config::<()> {
+            grpc: Some(GrpcConfig {
+                enabled: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        assert!(
+            ServiceBuilder::new()
+                .with_config(config)
+                .with_grpc_services(tonic::service::Routes::default())
+                .try_build()
+                .is_ok(),
+            "an enabled [grpc] section with registered services must build"
+        );
+    }
+
+    /// No services registered means nothing to lose, whatever `[grpc]` says.
+    /// Guards against the check firing on plain HTTP services.
+    #[cfg(feature = "grpc")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn no_grpc_services_without_grpc_config_builds() {
+        use crate::config::Config;
+        use crate::prelude::ServiceBuilder;
+
+        let config = Config::<()> {
+            grpc: None,
+            ..Default::default()
+        };
+
+        assert!(
+            ServiceBuilder::new()
+                .with_config(config)
+                .try_build()
+                .is_ok(),
+            "an HTTP-only service must not be affected by the gRPC registration check"
+        );
     }
 }
