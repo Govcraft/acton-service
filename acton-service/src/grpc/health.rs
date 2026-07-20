@@ -1,7 +1,7 @@
 //! gRPC health check service
 //!
 //! Implements the standard gRPC health checking protocol.
-//! See: https://github.com/grpc/grpc/blob/master/doc/health-checking.md
+//! See: <https://github.com/grpc/grpc/blob/master/doc/health-checking.md>
 
 use tonic::{Request, Response, Status};
 use tonic_health::pb::health_check_response::ServingStatus;

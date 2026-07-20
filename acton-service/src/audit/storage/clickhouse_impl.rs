@@ -327,6 +327,23 @@ impl AuditStorage for ClickHouseAuditStorage {
     }
 }
 
+#[async_trait]
+impl super::lazy::InitializableStorage for ClickHouseAuditStorage {
+    type Conn = clickhouse::Client;
+
+    fn from_conn(conn: Self::Conn) -> Self {
+        Self::new(conn)
+    }
+
+    async fn init_schema(&self) -> Result<(), Error> {
+        self.initialize().await
+    }
+
+    fn backend_name() -> &'static str {
+        "ClickHouse"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -775,22 +792,5 @@ mod tests {
         let event = make_event(AuditEventKind::AuthLoginFailed, AuditSeverity::Warning, ts);
         let row = AuditInsertRow::from(&event);
         assert_eq!(row.kind, "auth.login.failed");
-    }
-}
-
-#[async_trait]
-impl super::lazy::InitializableStorage for ClickHouseAuditStorage {
-    type Conn = clickhouse::Client;
-
-    fn from_conn(conn: Self::Conn) -> Self {
-        Self::new(conn)
-    }
-
-    async fn init_schema(&self) -> Result<(), Error> {
-        self.initialize().await
-    }
-
-    fn backend_name() -> &'static str {
-        "ClickHouse"
     }
 }

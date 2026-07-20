@@ -59,7 +59,8 @@ use tower_http::{
 /// This type can ONLY be created by `VersionedApiBuilder::build_routes()`.
 /// It cannot be constructed manually, ensuring all routes are versioned.
 ///
-/// Uses an enum to support both stateless routes (Router<()>) and stateful routes (Router<AppState<T>>)
+/// Uses an enum to support both stateless routes (`Router<()>`) and stateful
+/// routes (`Router<AppState<T>>`)
 #[derive(Debug)]
 pub enum VersionedRoutes<T = ()>
 where
@@ -142,6 +143,10 @@ where
     /// verbatim and never reads `[grpc.tls]` cert/key files.
     #[cfg(all(feature = "grpc", feature = "tls"))]
     grpc_tls_config_override: Option<crate::tls::TlsConfigSource>,
+    /// Caller-supplied callback handed the resolved reloadable TLS sources at
+    /// serve time. See [`ServiceBuilder::with_tls_reload`].
+    #[cfg(feature = "tls")]
+    tls_reload_hook: Option<Box<dyn FnOnce(crate::tls::TlsReloadHandle) + Send>>,
 }
 
 impl<T> ServiceBuilder<T>
@@ -168,6 +173,8 @@ where
             tls_config_override: None,
             #[cfg(all(feature = "grpc", feature = "tls"))]
             grpc_tls_config_override: None,
+            #[cfg(feature = "tls")]
+            tls_reload_hook: None,
         }
     }
 
@@ -245,6 +252,66 @@ where
     #[cfg(all(feature = "grpc", feature = "tls"))]
     pub fn with_grpc_tls_config_source(mut self, source: crate::tls::TlsConfigSource) -> Self {
         self.grpc_tls_config_override = Some(source);
+        self
+    }
+
+    /// Drive TLS credential rotation from your own trigger.
+    ///
+    /// `f` is called once by [`ActonService::serve`], as the listeners come up,
+    /// with a [`TlsReloadHandle`](crate::tls::TlsReloadHandle) over every
+    /// reloadable source the service resolved. Spawn whatever watches your
+    /// rotation source — a Vault lease renewal, a Kubernetes secret watch, an
+    /// admin endpoint, a message queue — and call
+    /// [`TlsReloadHandle::reload_all`](crate::tls::TlsReloadHandle::reload_all)
+    /// when the credential files change.
+    ///
+    /// This is the preferred way to reach the credentials. The alternative,
+    /// [`ActonService::tls_config_source`], requires cloning the handle out
+    /// before `serve()` consumes the service; a hook registered here is invoked
+    /// by `serve()` itself, so that ordering cannot be got wrong.
+    ///
+    /// For the common cases — poll the files on an interval, or reload on
+    /// `SIGHUP` — prefer the built-in triggers: set `reload_interval_secs` or
+    /// `reload_on_sighup` on the `[tls]` config section and write no code at
+    /// all. This hook is for triggers the framework does not model.
+    ///
+    /// # When it is not called
+    ///
+    /// The hook is skipped, with a `WARN` explaining why, when no reloadable
+    /// source resolved: TLS is disabled entirely, or every source was injected
+    /// as an already-loaded `ServerConfig`
+    /// ([`with_tls_config`](Self::with_tls_config)) and so has no files to
+    /// reread. Registering a hook and silently never calling it would leave a
+    /// service that believes it can rotate and cannot.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let service = ServiceBuilder::new()
+    ///     .with_config(config)
+    ///     .with_routes(routes)
+    ///     .with_tls_reload(|handle| {
+    ///         tokio::spawn(async move {
+    ///             let mut events = watch_secret_store().await;
+    ///             while events.next().await.is_some() {
+    ///                 for (listener, result) in handle.reload_all() {
+    ///                     if let Err(e) = result {
+    ///                         tracing::error!("{listener} TLS reload failed: {e}");
+    ///                     }
+    ///                 }
+    ///             }
+    ///         });
+    ///     })
+    ///     .build();
+    ///
+    /// service.serve().await?;
+    /// ```
+    #[cfg(feature = "tls")]
+    pub fn with_tls_reload<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(crate::tls::TlsReloadHandle) + Send + 'static,
+    {
+        self.tls_reload_hook = Some(Box::new(f));
         self
     }
 
@@ -1635,6 +1702,74 @@ where
             }
         };
 
+        // Resolve the built-in credential-rotation triggers. Validation happens
+        // here so an interval that would spin the runtime is reported by
+        // `try_build()` / `serve()` before anything binds, in the same way a
+        // failed TLS load is.
+        #[cfg(feature = "tls")]
+        let tls_reload_interval = match config.tls.as_ref().filter(|t| t.enabled) {
+            Some(tls_cfg) => match crate::tls::validate_reload_interval(tls_cfg, "[tls]") {
+                Ok(interval) => {
+                    crate::tls::warn_if_reload_config_is_unusable(
+                        tls_config.as_ref(),
+                        tls_cfg,
+                        "[tls]",
+                    );
+                    interval
+                }
+                Err(err) => {
+                    tracing::error!("{}", err);
+                    record_startup_error(&mut startup_error, err);
+                    None
+                }
+            },
+            None => None,
+        };
+
+        #[cfg(all(feature = "grpc", feature = "tls"))]
+        let grpc_tls_reload_interval = match config
+            .grpc
+            .as_ref()
+            .and_then(|g| g.tls.as_ref())
+            .filter(|t| t.enabled)
+        {
+            Some(grpc_tls) => match crate::tls::validate_reload_interval(grpc_tls, "[grpc.tls]") {
+                Ok(interval) => {
+                    crate::tls::warn_if_reload_config_is_unusable(
+                        grpc_tls_config.as_ref(),
+                        grpc_tls,
+                        "[grpc.tls]",
+                    );
+                    interval
+                }
+                Err(err) => {
+                    tracing::error!("{}", err);
+                    record_startup_error(&mut startup_error, err);
+                    None
+                }
+            },
+            None => None,
+        };
+
+        // Either section asking for SIGHUP installs the one handler that
+        // reloads every listener; see `crate::tls::spawn_sighup_reload`.
+        #[cfg(feature = "tls")]
+        let tls_reload_on_sighup = {
+            let http = config
+                .tls
+                .as_ref()
+                .is_some_and(|t| t.enabled && t.reload_on_sighup);
+            #[cfg(feature = "grpc")]
+            let grpc = config
+                .grpc
+                .as_ref()
+                .and_then(|g| g.tls.as_ref())
+                .is_some_and(|t| t.enabled && t.reload_on_sighup);
+            #[cfg(not(feature = "grpc"))]
+            let grpc = false;
+            http || grpc
+        };
+
         // Convert gRPC routes to an axum router and apply their own auth and
         // authorization stack. Merged routers do not inherit each other's
         // layers, so without this the gRPC listener would serve every method
@@ -1712,6 +1847,14 @@ where
             tls_config,
             #[cfg(all(feature = "grpc", feature = "tls"))]
             grpc_tls_config,
+            #[cfg(feature = "tls")]
+            tls_reload_hook: self.tls_reload_hook.take(),
+            #[cfg(feature = "tls")]
+            tls_reload_interval,
+            #[cfg(all(feature = "grpc", feature = "tls"))]
+            grpc_tls_reload_interval,
+            #[cfg(feature = "tls")]
+            tls_reload_on_sighup,
             agent_runtime: self.agent_runtime,
             startup_error,
         }
@@ -2117,6 +2260,18 @@ where
     /// back to `tls_config` (the HTTP TLS) when `[grpc.tls]` is not configured.
     #[cfg(all(feature = "grpc", feature = "tls"))]
     grpc_tls_config: Option<crate::tls::TlsConfigSource>,
+    /// Caller-registered rotation hook, invoked once by `serve()`.
+    #[cfg(feature = "tls")]
+    tls_reload_hook: Option<Box<dyn FnOnce(crate::tls::TlsReloadHandle) + Send>>,
+    /// Validated poll period for the HTTP credentials, from `[tls]`.
+    #[cfg(feature = "tls")]
+    tls_reload_interval: Option<std::time::Duration>,
+    /// Validated poll period for the gRPC credentials, from `[grpc.tls]`.
+    #[cfg(all(feature = "grpc", feature = "tls"))]
+    grpc_tls_reload_interval: Option<std::time::Duration>,
+    /// Whether either TLS section asked for `SIGHUP`-driven reloading.
+    #[cfg(feature = "tls")]
+    tls_reload_on_sighup: bool,
     agent_runtime: Option<acton_reactive::prelude::ActorRuntime>,
     /// Fatal misconfiguration recorded during `build()`. `serve()` returns this
     /// before binding any listener, so a service that could not honour its
@@ -2128,6 +2283,126 @@ impl<T> ActonService<T>
 where
     T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
 {
+    /// The HTTP listener's TLS credentials, if TLS resolved.
+    ///
+    /// **Clone this before calling [`serve`](Self::serve).** `serve` consumes
+    /// the service, so a handle not taken beforehand cannot be taken at all.
+    /// Move the clone into whatever task drives rotation:
+    ///
+    /// ```rust,ignore
+    /// let service = builder.build();
+    /// let tls = service.tls_config_source();          // before serve()
+    /// tokio::spawn(async move {
+    ///     if let Some(tls) = tls {
+    ///         watch_for_new_certs().await;
+    ///         let _ = tls.reload();
+    ///     }
+    /// });
+    /// service.serve().await?;                          // consumes the service
+    /// ```
+    ///
+    /// Prefer [`ServiceBuilder::with_tls_reload`], which hands the same handles
+    /// to a callback at serve time and so has no ordering to get wrong, or the
+    /// `reload_interval_secs` / `reload_on_sighup` config triggers, which need
+    /// no code at all.
+    ///
+    /// `None` means no TLS resolved for the HTTP listener: no `[tls]` section,
+    /// `enabled = false`, and no injected override.
+    ///
+    /// A returned source is not necessarily reloadable. One injected via
+    /// [`ServiceBuilder::with_tls_config`] holds an already-loaded
+    /// `ServerConfig` with no files behind it, and
+    /// [`reload`](crate::tls::TlsConfigSource::reload) on it returns an error;
+    /// check [`is_reloadable`](crate::tls::TlsConfigSource::is_reloadable)
+    /// first if the source could be either.
+    #[cfg(feature = "tls")]
+    #[must_use]
+    pub fn tls_config_source(&self) -> Option<crate::tls::TlsConfigSource> {
+        self.tls_config.clone()
+    }
+
+    /// The separate-port gRPC listener's TLS credentials, if TLS resolved.
+    ///
+    /// The gRPC twin of [`tls_config_source`](Self::tls_config_source), with
+    /// the same ordering constraint: clone it out **before**
+    /// [`serve`](Self::serve) consumes the service.
+    ///
+    /// When `[grpc.tls]` is absent the gRPC listener inherits the `[tls]`
+    /// credentials, and this returns the same source
+    /// [`tls_config_source`](Self::tls_config_source) does — reloading either
+    /// rotates both. Use
+    /// [`TlsConfigSource::ptr_eq`](crate::tls::TlsConfigSource::ptr_eq) to tell
+    /// that case from two genuinely separate sets of credentials.
+    ///
+    /// `None` means the gRPC listener resolved no TLS: it serves plaintext, or
+    /// single-port mode is in use and the HTTP listener terminates TLS for both.
+    #[cfg(all(feature = "grpc", feature = "tls"))]
+    #[must_use]
+    pub fn grpc_tls_config_source(&self) -> Option<crate::tls::TlsConfigSource> {
+        self.grpc_tls_config.clone()
+    }
+
+    /// Start the configured credential-rotation triggers.
+    ///
+    /// Called once from [`serve`](Self::serve), before any listener binds, so
+    /// every serve path — dual-port gRPC, single-port hybrid, and HTTP-only —
+    /// gets the same triggers without each having to remember to start them.
+    ///
+    /// The returned guard owns the spawned tasks and aborts them when `serve`
+    /// returns.
+    #[cfg(feature = "tls")]
+    fn install_tls_reload_triggers(&mut self) -> crate::tls::TlsReloadTasks {
+        let http_source = self.tls_config.clone();
+        #[cfg(feature = "grpc")]
+        let grpc_source = self.grpc_tls_config.clone();
+        #[cfg(not(feature = "grpc"))]
+        let grpc_source: Option<crate::tls::TlsConfigSource> = None;
+        #[cfg(feature = "grpc")]
+        let grpc_interval = self.grpc_tls_reload_interval;
+        #[cfg(not(feature = "grpc"))]
+        let grpc_interval = None;
+
+        let tls_resolved = http_source.is_some() || grpc_source.is_some();
+        // `new` keeps only sources a reload could act on, and drops a gRPC
+        // source that is really the HTTP one inherited.
+        let handle = crate::tls::TlsReloadHandle::new(http_source, grpc_source);
+
+        // The config-driven triggers are shared with `Server::serve`, so the
+        // same config file produces the same rotation behaviour on both paths.
+        let tasks = crate::tls::install_reload_triggers(
+            &handle,
+            self.tls_reload_interval,
+            grpc_interval,
+            self.tls_reload_on_sighup,
+        );
+
+        // Caller-registered hook, invoked last so the built-in triggers are
+        // already running when it takes over.
+        if let Some(hook) = self.tls_reload_hook.take() {
+            if handle.is_empty() {
+                if tls_resolved {
+                    tracing::warn!(
+                        "a with_tls_reload hook is registered, but every resolved TLS \
+                         source was supplied as an already-loaded ServerConfig and has \
+                         no files to reread. The hook will not be called. Use \
+                         with_tls_config_source or the [tls] section so the credentials \
+                         can be reloaded."
+                    );
+                } else {
+                    tracing::warn!(
+                        "a with_tls_reload hook is registered, but no TLS is configured, \
+                         so there are no credentials to reload and the hook will not be \
+                         called"
+                    );
+                }
+            } else {
+                hook(handle);
+            }
+        }
+
+        tasks
+    }
+
     /// Serve the application
     ///
     /// This runs the HTTP server (and optionally gRPC server) with graceful shutdown support.
@@ -2158,6 +2433,14 @@ where
         if let Some(e) = self.startup_error.take() {
             return Err(e);
         }
+
+        // Start credential rotation before binding, so a certificate that
+        // rotates during startup is picked up rather than missed. The guard is
+        // held for the whole of `serve`; dropping it on any return path aborts
+        // the trigger tasks, which would otherwise outlive the listeners they
+        // rotate. Every serve path below is covered by this one call.
+        #[cfg(feature = "tls")]
+        let _tls_reload_tasks = self.install_tls_reload_triggers();
 
         // Graceful shutdown signal
         async fn shutdown_signal() {
@@ -2558,6 +2841,271 @@ mod tests {
             .expect("a disabled cedar section must not fail the build");
     }
 
+    /// Build a `[tls]` section over real, loadable credentials in `dir`.
+    #[cfg(feature = "tls")]
+    fn loadable_tls_section(dir: &std::path::Path) -> crate::config::TlsConfig {
+        let certified = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
+            .expect("self-signed cert generation");
+        let cert_path = dir.join("server.pem");
+        let key_path = dir.join("server.key");
+        std::fs::write(&cert_path, certified.cert.pem()).expect("write cert");
+        std::fs::write(&key_path, certified.signing_key.serialize_pem()).expect("write key");
+
+        crate::config::TlsConfig {
+            enabled: true,
+            cert_path,
+            key_path,
+            client_ca_path: None,
+            client_auth_optional: false,
+            reload_interval_secs: None,
+            reload_on_sighup: false,
+        }
+    }
+
+    /// `reload_interval_secs = 0` cannot mean "never" — omitting the field does
+    /// — and taken literally it polls the disk without pause. It must be caught
+    /// at build time, not discovered as a hot task in production.
+    #[cfg(feature = "tls")]
+    #[test]
+    fn zero_reload_interval_is_rejected_at_build() {
+        use crate::config::Config;
+        use crate::prelude::ServiceBuilder;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut tls = loadable_tls_section(dir.path());
+        tls.reload_interval_secs = Some(0);
+
+        let error = ServiceBuilder::new()
+            .with_config(Config::<()> {
+                tls: Some(tls),
+                ..Default::default()
+            })
+            .try_build()
+            .err()
+            .expect("a zero poll interval must fail the build");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("reload_interval_secs = 0"),
+            "the error must name the offending setting, got: {message}"
+        );
+        assert!(
+            message.contains("[tls]"),
+            "the error must name the section to fix, got: {message}"
+        );
+    }
+
+    /// The same validation on the gRPC section, which carries its own interval.
+    #[cfg(all(feature = "grpc", feature = "tls"))]
+    #[test]
+    fn zero_grpc_reload_interval_is_rejected_at_build() {
+        use crate::config::{Config, GrpcConfig};
+        use crate::prelude::ServiceBuilder;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut tls = loadable_tls_section(dir.path());
+        tls.reload_interval_secs = Some(0);
+
+        let error = ServiceBuilder::new()
+            .with_config(Config::<()> {
+                grpc: Some(GrpcConfig {
+                    enabled: true,
+                    use_separate_port: true,
+                    bind: None,
+                    tls: Some(tls),
+                    port: 50051,
+                    reflection_enabled: false,
+                    health_check_enabled: false,
+                    max_message_size_mb: 4,
+                    connection_timeout_secs: 10,
+                    timeout_secs: 30,
+                    proto: Default::default(),
+                }),
+                ..Default::default()
+            })
+            .try_build()
+            .err()
+            .expect("a zero gRPC poll interval must fail the build");
+
+        assert!(
+            error.to_string().contains("[grpc.tls]"),
+            "the error must name the gRPC section, got: {error}"
+        );
+    }
+
+    /// A positive interval builds, so the validation rejects only the value
+    /// that cannot work rather than the feature.
+    #[cfg(feature = "tls")]
+    #[test]
+    fn a_positive_reload_interval_builds() {
+        use crate::config::Config;
+        use crate::prelude::ServiceBuilder;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut tls = loadable_tls_section(dir.path());
+        tls.reload_interval_secs = Some(30);
+        tls.reload_on_sighup = true;
+
+        ServiceBuilder::new()
+            .with_config(Config::<()> {
+                tls: Some(tls),
+                ..Default::default()
+            })
+            .try_build()
+            .expect("a positive interval and SIGHUP reloading must build");
+    }
+
+    /// The hook exists so callers need not clone handles out before `serve()`
+    /// consumes the service. It must actually receive the config-driven source.
+    #[cfg(feature = "tls")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tls_reload_hook_receives_the_config_driven_source() {
+        use crate::config::Config;
+        use crate::prelude::ServiceBuilder;
+        use std::sync::mpsc;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let tls = loadable_tls_section(dir.path());
+        let (tx, rx) = mpsc::channel();
+
+        let mut service = ServiceBuilder::new()
+            .with_config(Config::<()> {
+                tls: Some(tls),
+                ..Default::default()
+            })
+            .with_tls_reload(move |handle| {
+                let _ = tx.send(handle);
+            })
+            .try_build()
+            .expect("build");
+
+        // What `serve()` does with the triggers, without binding a socket.
+        let _tasks = service.install_tls_reload_triggers();
+
+        let handle = rx
+            .try_recv()
+            .expect("the hook must be called when a reloadable source resolved");
+        assert!(
+            handle.http().is_some(),
+            "the hook must receive the HTTP listener's credentials"
+        );
+        assert!(
+            handle
+                .http()
+                .is_some_and(crate::tls::TlsConfigSource::is_reloadable),
+            "the source handed over must be one a reload can act on"
+        );
+    }
+
+    /// A hook over credentials that can never be reloaded would leave the
+    /// caller believing rotation is wired up. It is skipped, and the skip is
+    /// audible.
+    #[cfg(feature = "tls")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tls_reload_hook_is_skipped_when_only_static_sources_exist() {
+        use crate::config::Config;
+        use crate::prelude::ServiceBuilder;
+        use std::sync::mpsc;
+
+        let (tx, rx) = mpsc::channel();
+
+        let mut service = ServiceBuilder::new()
+            .with_config(Config::<()>::default())
+            // An injected `ServerConfig` has no files behind it.
+            .with_tls_config(test_server_config())
+            .with_tls_reload(move |handle| {
+                let _ = tx.send(handle);
+            })
+            .try_build()
+            .expect("build");
+
+        let _tasks = service.install_tls_reload_triggers();
+
+        assert!(
+            rx.try_recv().is_err(),
+            "a hook that could only ever fail to reload must not be called"
+        );
+    }
+
+    /// No TLS at all is the other way the hook has nothing to work with.
+    #[cfg(feature = "tls")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tls_reload_hook_is_skipped_when_no_tls_is_configured() {
+        use crate::config::Config;
+        use crate::prelude::ServiceBuilder;
+        use std::sync::mpsc;
+
+        let (tx, rx) = mpsc::channel();
+
+        let mut service = ServiceBuilder::new()
+            .with_config(Config::<()>::default())
+            .with_tls_reload(move |handle| {
+                let _ = tx.send(handle);
+            })
+            .try_build()
+            .expect("build");
+
+        let _tasks = service.install_tls_reload_triggers();
+
+        assert!(
+            rx.try_recv().is_err(),
+            "with no TLS resolved there is nothing to reload and the hook must be skipped"
+        );
+    }
+
+    /// The accessor is the escape hatch for callers not using the hook. It must
+    /// hand back the same credentials the listener will serve.
+    #[cfg(feature = "tls")]
+    #[test]
+    fn tls_config_source_accessor_exposes_the_resolved_credentials() {
+        use crate::config::Config;
+        use crate::prelude::ServiceBuilder;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let tls = loadable_tls_section(dir.path());
+
+        let service = ServiceBuilder::new()
+            .with_config(Config::<()> {
+                tls: Some(tls),
+                ..Default::default()
+            })
+            .try_build()
+            .expect("build");
+
+        let source = service
+            .tls_config_source()
+            .expect("an enabled [tls] section must expose a source");
+        assert!(
+            source.is_reloadable(),
+            "credentials loaded from the config must be rotatable"
+        );
+
+        // Clones observe one another, which is what makes grabbing the handle
+        // before `serve()` useful at all.
+        let second = service.tls_config_source().expect("source");
+        assert!(
+            source.ptr_eq(&second),
+            "the accessor must not clone the state"
+        );
+    }
+
+    #[cfg(feature = "tls")]
+    #[test]
+    fn tls_config_source_accessor_is_none_without_tls() {
+        use crate::config::Config;
+        use crate::prelude::ServiceBuilder;
+
+        let service = ServiceBuilder::new()
+            .with_config(Config::<()>::default())
+            .try_build()
+            .expect("build");
+
+        assert!(
+            service.tls_config_source().is_none(),
+            "no TLS resolved must read as None, not as an unusable source"
+        );
+    }
+
     /// A `[tls]` section pointing at cert material that cannot be loaded must be
     /// a hard failure. Serving plaintext where the operator configured TLS is a
     /// silent downgrade of the configured security posture.
@@ -2574,6 +3122,8 @@ mod tests {
                 key_path: "/nonexistent/key.pem".into(),
                 client_ca_path: None,
                 client_auth_optional: false,
+                reload_interval_secs: None,
+                reload_on_sighup: false,
             }),
             ..Default::default()
         };
@@ -2617,6 +3167,8 @@ mod tests {
                 key_path: "/nonexistent/key.pem".into(),
                 client_ca_path: None,
                 client_auth_optional: false,
+                reload_interval_secs: None,
+                reload_on_sighup: false,
             }),
             port: 50051,
             reflection_enabled: false,
@@ -2654,6 +3206,8 @@ mod tests {
                 key_path: "/nonexistent/key.pem".into(),
                 client_ca_path: None,
                 client_auth_optional: false,
+                reload_interval_secs: None,
+                reload_on_sighup: false,
             }),
             ..Default::default()
         };
@@ -2684,6 +3238,8 @@ mod tests {
                 key_path: "/nonexistent/key.pem".into(),
                 client_ca_path: None,
                 client_auth_optional: false,
+                reload_interval_secs: None,
+                reload_on_sighup: false,
             }),
             ..Default::default()
         };
@@ -2915,6 +3471,8 @@ mod tests {
                 key_path: "/nonexistent/key.pem".into(),
                 client_ca_path: None,
                 client_auth_optional: false,
+                reload_interval_secs: None,
+                reload_on_sighup: false,
             }),
             ..base
         };

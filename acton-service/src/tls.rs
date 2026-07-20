@@ -6,11 +6,45 @@
 //! Credentials reach the listener through a [`TlsConfigSource`], a handle whose
 //! contents can be replaced while the listener is running so certificates can be
 //! rotated without dropping the socket.
+//!
+//! # What actually triggers a rotation
+//!
+//! [`TlsConfigSource::reload`] is the mechanism; something has to call it. Four
+//! ways to arrange that, from most to least automatic:
+//!
+//! - **Poll the files.** Set `reload_interval_secs` on the `[tls]` (or
+//!   `[grpc.tls]`) config section. The service then hashes the credential files
+//!   on an interval and reloads only when their *contents* change. Nothing to
+//!   write; suits any rotation scheme that ends in "the files on disk are
+//!   different now", including Kubernetes secret projections and cert-manager.
+//! - **Send `SIGHUP`.** Set `reload_on_sighup = true`. One signal reloads every
+//!   reloadable source in the process. Suits rotation drivers that already know
+//!   when they finished writing and would rather say so than be discovered.
+//! - **Register a hook.** `ServiceBuilder::with_tls_reload` hands your callback
+//!   a [`TlsReloadHandle`] at serve time, from which you can drive
+//!   [`TlsReloadHandle::reload_all`] on whatever schedule or event you like:
+//!   a Vault lease renewal, a watch on a ConfigMap, an admin endpoint.
+//! - **Hold the source yourself.** `ActonService::tls_config_source` clones the
+//!   handle out before `serve()` consumes the service. The most direct route,
+//!   and the one with an ordering constraint to get wrong; prefer the hook.
+//!
+//! Every path converges on the same fail-closed [`TlsConfigSource::reload`]: a
+//! rotation that produced unusable credentials leaves the previous ones serving.
+//!
+//! The two config-driven triggers work identically whether the listener came up
+//! through `ServiceBuilder` / `ActonService::serve` or through the plainer
+//! [`crate::server::Server::serve`] — both call the same installer, so one
+//! config file means one rotation behaviour. The hook and the credential
+//! accessors are `ServiceBuilder`-only, since `Server` has no builder to
+//! register them on.
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::io;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use rustls_pki_types::CertificateDer;
@@ -125,6 +159,16 @@ impl TlsConfigSource {
         self.inner.origin.as_ref()
     }
 
+    /// Whether two handles are clones of the same source.
+    ///
+    /// Distinguishes "the gRPC listener inherited the HTTP credentials" from
+    /// "the gRPC listener has its own credentials that happen to name the same
+    /// files". Reload machinery uses this to avoid driving one source twice.
+    #[must_use]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
     /// Reread the credential files and install them for new handshakes.
     ///
     /// On success every subsequent handshake uses the new configuration.
@@ -189,6 +233,511 @@ impl From<Arc<ServerConfig>> for TlsConfigSource {
     fn from(server_config: Arc<ServerConfig>) -> Self {
         Self::from_server_config(server_config)
     }
+}
+
+/// Which listener a set of TLS credentials belongs to.
+///
+/// Reload outcomes are reported per listener so an operator reading the log of
+/// a partially-successful rotation can tell which surface is still serving the
+/// old certificate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TlsListenerKind {
+    /// The HTTP listener, configured by the `[tls]` section.
+    Http,
+    /// The separate-port gRPC listener, configured by `[grpc.tls]`.
+    Grpc,
+}
+
+impl TlsListenerKind {
+    /// A short lowercase name for logs and error messages.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Http => "http",
+            Self::Grpc => "grpc",
+        }
+    }
+}
+
+impl std::fmt::Display for TlsListenerKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// The reloadable TLS credentials a running service resolved, handed to a
+/// `ServiceBuilder::with_tls_reload` callback at serve time.
+///
+/// Exists to remove an ordering hazard. `ActonService::serve` consumes the
+/// service, so reaching the credential handles through
+/// `ActonService::tls_config_source` means remembering to clone them out
+/// *before* serving. A registered hook is called by `serve()` itself, so there
+/// is no "before" to miss.
+///
+/// # What is in it
+///
+/// Only **reloadable** sources appear. A source injected as an already-loaded
+/// `ServerConfig` has no files to reread and is omitted rather than handed over
+/// as something that would error on every reload.
+///
+/// [`grpc`](Self::grpc) is populated only when the gRPC listener has credentials
+/// *distinct* from the HTTP listener's. When `[grpc.tls]` is absent the gRPC
+/// listener inherits the `[tls]` source, and handing the same source back under
+/// two names would make [`reload_all`](Self::reload_all) reread the same files
+/// twice and report two outcomes for one rotation.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let service = ServiceBuilder::new()
+///     .with_config(config)
+///     .with_routes(routes)
+///     .with_tls_reload(|handle| {
+///         tokio::spawn(async move {
+///             while let Some(()) = vault_lease_renewed().await {
+///                 for (listener, result) in handle.reload_all() {
+///                     if let Err(e) = result {
+///                         tracing::error!("{listener} TLS reload failed: {e}");
+///                     }
+///                 }
+///             }
+///         });
+///     })
+///     .build();
+///
+/// service.serve().await?;
+/// ```
+#[derive(Clone, Default)]
+pub struct TlsReloadHandle {
+    http: Option<TlsConfigSource>,
+    grpc: Option<TlsConfigSource>,
+}
+
+impl TlsReloadHandle {
+    /// Build a handle from the sources a service resolved.
+    ///
+    /// Non-reloadable sources are dropped, and `grpc` is dropped when it is the
+    /// same source as `http`, so the handle only ever describes work that a
+    /// reload would actually do.
+    #[must_use]
+    pub fn new(http: Option<TlsConfigSource>, grpc: Option<TlsConfigSource>) -> Self {
+        let http = http.filter(TlsConfigSource::is_reloadable);
+        let grpc = grpc
+            .filter(TlsConfigSource::is_reloadable)
+            .filter(|g| http.as_ref().is_none_or(|h| !h.ptr_eq(g)));
+        Self { http, grpc }
+    }
+
+    /// The HTTP listener's reloadable credentials, if it has any.
+    #[must_use]
+    pub fn http(&self) -> Option<&TlsConfigSource> {
+        self.http.as_ref()
+    }
+
+    /// The gRPC listener's own reloadable credentials.
+    ///
+    /// `None` both when the gRPC listener serves plaintext and when it inherits
+    /// the HTTP credentials — in the latter case reloading [`http`](Self::http)
+    /// already rotates it.
+    #[must_use]
+    pub fn grpc(&self) -> Option<&TlsConfigSource> {
+        self.grpc.as_ref()
+    }
+
+    /// Whether this handle carries anything a reload could act on.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.http.is_none() && self.grpc.is_none()
+    }
+
+    /// Every source in the handle, paired with the listener it serves.
+    #[must_use]
+    pub fn sources(&self) -> Vec<(TlsListenerKind, TlsConfigSource)> {
+        let mut out = Vec::with_capacity(2);
+        if let Some(ref http) = self.http {
+            out.push((TlsListenerKind::Http, http.clone()));
+        }
+        if let Some(ref grpc) = self.grpc {
+            out.push((TlsListenerKind::Grpc, grpc.clone()));
+        }
+        out
+    }
+
+    /// Reload every source in the handle, reporting each outcome separately.
+    ///
+    /// One source failing does not stop the others: a rotation that succeeded
+    /// for HTTP and failed for gRPC should leave HTTP rotated and say so, not
+    /// roll back into a uniformly stale state. Each failure is already logged
+    /// at `ERROR` by [`TlsConfigSource::reload`], and each failing listener
+    /// keeps serving its last-good credentials.
+    ///
+    /// Returns an empty vector when the handle is empty.
+    pub fn reload_all(&self) -> Vec<(TlsListenerKind, Result<()>)> {
+        self.sources()
+            .into_iter()
+            .map(|(listener, source)| {
+                let result = source.reload();
+                match result {
+                    Ok(()) => tracing::info!(
+                        listener = listener.as_str(),
+                        "TLS credentials rotated for the {listener} listener"
+                    ),
+                    Err(ref e) => tracing::error!(
+                        listener = listener.as_str(),
+                        error = %e,
+                        "TLS reload failed for the {listener} listener; \
+                         it continues to serve its previous certificate"
+                    ),
+                }
+                (listener, result)
+            })
+            .collect()
+    }
+}
+
+impl std::fmt::Debug for TlsReloadHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Describe which listeners are covered, not the key material behind them.
+        f.debug_struct("TlsReloadHandle")
+            .field("http", &self.http.is_some())
+            .field("grpc", &self.grpc.is_some())
+            .finish()
+    }
+}
+
+/// A content hash of the credential files a source reloads from.
+///
+/// Only ever compared against another fingerprint of the same files, so a fast
+/// non-cryptographic hash is the right tool: this detects *change*, and makes
+/// no claim about integrity. An attacker who can rewrite the certificate files
+/// has already won regardless of which hash reads them.
+///
+/// Returns an error when any file cannot be read. A caller must treat that as
+/// "unknown, try again", not as "unchanged" (which would strand a rotation) and
+/// not as "changed" (which would reload from a half-written file every tick).
+fn fingerprint_credentials(tls_config: &TlsConfig) -> std::io::Result<u64> {
+    let mut hasher = DefaultHasher::new();
+
+    // Hash the paths as well as the bytes: a config edit that repoints at a
+    // different file with identical contents is not a rotation, but a config
+    // that swaps which of two files is authoritative should not alias.
+    for path in [
+        Some(&tls_config.cert_path),
+        Some(&tls_config.key_path),
+        tls_config.client_ca_path.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        path.hash(&mut hasher);
+        // Length-prefix each file so concatenation cannot forge equality
+        // between different splits of the same total bytes.
+        let bytes = std::fs::read(path)?;
+        bytes.len().hash(&mut hasher);
+        bytes.hash(&mut hasher);
+    }
+
+    Ok(hasher.finish())
+}
+
+/// What one poll tick concluded about a source's credential files.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReloadTick {
+    /// The files hash to what they hashed last tick; nothing was reloaded.
+    Unchanged,
+    /// The files changed and the new credentials are installed. The caller
+    /// stores this fingerprint as the new baseline.
+    Reloaded { fingerprint: u64 },
+    /// The files could not be read. The baseline is deliberately left alone so
+    /// the next tick retries.
+    ReadFailed,
+    /// The files changed but failed to load or parse; the previous credentials
+    /// keep serving. The baseline is left alone so the next tick retries even
+    /// if the (still broken) files do not change again — a truncated file that
+    /// is later completed in place must not be mistaken for "already seen".
+    ReloadFailed,
+}
+
+/// Run one poll tick against a source: read, hash, compare, reload on change.
+///
+/// Split out from the timer loop so the decision logic is testable without
+/// waiting on real clocks. `last_seen` is the fingerprint this source was last
+/// known to be serving, or `None` if that is not yet established.
+///
+/// Never panics and never propagates an error: a poll task that dies takes
+/// rotation down silently and leaves the service to expire, which is a worse
+/// failure than any single bad tick.
+pub(crate) fn reload_tick(
+    source: &TlsConfigSource,
+    listener: TlsListenerKind,
+    last_seen: Option<u64>,
+) -> ReloadTick {
+    let Some(origin) = source.origin() else {
+        // Callers filter static sources out before spawning a poll task; if one
+        // reaches here, doing nothing is the only correct answer.
+        return ReloadTick::Unchanged;
+    };
+
+    let fingerprint = match fingerprint_credentials(origin) {
+        Ok(fingerprint) => fingerprint,
+        Err(e) => {
+            tracing::warn!(
+                listener = listener.as_str(),
+                cert_path = %origin.cert_path.display(),
+                error = %e,
+                "could not read TLS credential files while polling for rotation; \
+                 continuing to serve the current certificate and retrying next tick"
+            );
+            return ReloadTick::ReadFailed;
+        }
+    };
+
+    if last_seen == Some(fingerprint) {
+        return ReloadTick::Unchanged;
+    }
+
+    match source.reload() {
+        Ok(()) => {
+            tracing::info!(
+                listener = listener.as_str(),
+                cert_path = %origin.cert_path.display(),
+                "TLS credential files changed on disk; the {listener} listener now \
+                 serves the new certificate"
+            );
+            ReloadTick::Reloaded { fingerprint }
+        }
+        // `reload` has already logged the failure at ERROR with the cause.
+        Err(_) => ReloadTick::ReloadFailed,
+    }
+}
+
+/// Poll a source's credential files on an interval, reloading on content change.
+///
+/// The returned task runs until it is aborted. It holds only a clone of the
+/// source, so it never keeps a listener alive.
+///
+/// The first tick establishes a baseline from the files as they are now, so a
+/// service that starts and never rotates does no reloading at all.
+pub(crate) fn spawn_reload_poll(
+    source: TlsConfigSource,
+    listener: TlsListenerKind,
+    period: Duration,
+) -> tokio::task::JoinHandle<()> {
+    // Seed the baseline from the files the source was just built from. A read
+    // failure here leaves it unset, so the first successful tick establishes it
+    // — reloading once, redundantly, rather than missing a rotation.
+    let mut last_seen = source
+        .origin()
+        .and_then(|o| fingerprint_credentials(o).ok());
+
+    tracing::info!(
+        listener = listener.as_str(),
+        interval_secs = period.as_secs(),
+        "polling TLS credential files for rotation"
+    );
+
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(period);
+        // A tick missed because a reload ran long should not be made up for by
+        // a burst of back-to-back ticks; rotation is not time-critical to the
+        // second.
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // The first tick of a tokio interval completes immediately; consume it
+        // so the first real check happens one period in, after the baseline.
+        ticker.tick().await;
+
+        loop {
+            ticker.tick().await;
+            if let ReloadTick::Reloaded { fingerprint } = reload_tick(&source, listener, last_seen)
+            {
+                last_seen = Some(fingerprint);
+            }
+        }
+    })
+}
+
+/// Reload every source in `handle` when the process receives `SIGHUP`.
+///
+/// One handler covers every listener: a signal that rotated HTTP but not gRPC
+/// would leave an operator guessing which surface is stale.
+///
+/// This installs an additional handler for `SIGHUP` only; the shutdown handling
+/// on `SIGINT` and `SIGTERM` is untouched, and a `SIGHUP` never initiates
+/// shutdown.
+///
+/// # Errors
+///
+/// Returns an error if the signal handler cannot be registered, which is fatal
+/// to the *trigger*, not to the service: the caller logs it and serves on with
+/// rotation available through the other triggers.
+#[cfg(unix)]
+pub(crate) fn spawn_sighup_reload(handle: TlsReloadHandle) -> Result<tokio::task::JoinHandle<()>> {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    let mut hangup = signal(SignalKind::hangup()).map_err(|e| {
+        crate::error::Error::Internal(format!(
+            "failed to install the SIGHUP handler for TLS credential reload: {e}"
+        ))
+    })?;
+
+    tracing::info!("SIGHUP will reload TLS credentials for every configured listener");
+
+    Ok(tokio::spawn(async move {
+        while hangup.recv().await.is_some() {
+            tracing::info!("received SIGHUP; reloading TLS credentials");
+            // Outcomes are logged per listener by `reload_all`. A failure keeps
+            // the previous credentials serving and the handler installed, so a
+            // later SIGHUP after fixing the files still works.
+            let _ = handle.reload_all();
+        }
+    }))
+}
+
+/// Background tasks driving credential rotation, aborted when the service stops.
+///
+/// The tasks loop forever by construction, so something has to end them. Tying
+/// that to this guard's lifetime keeps them alive exactly as long as the
+/// listeners they rotate, and aborting rather than signalling keeps shutdown
+/// from waiting on a task whose only job is to sleep.
+#[derive(Default)]
+pub(crate) struct TlsReloadTasks {
+    handles: Vec<tokio::task::JoinHandle<()>>,
+}
+
+impl TlsReloadTasks {
+    pub(crate) fn push(&mut self, handle: tokio::task::JoinHandle<()>) {
+        self.handles.push(handle);
+    }
+}
+
+impl Drop for TlsReloadTasks {
+    fn drop(&mut self) {
+        for handle in &self.handles {
+            handle.abort();
+        }
+    }
+}
+
+/// Validate a section's `reload_interval_secs` into a poll period.
+///
+/// `section` names the config section for the diagnostic, so an operator with
+/// both `[tls]` and `[grpc.tls]` configured learns which one to fix.
+///
+/// Callers must run this *before* binding a listener, so a rejected value is
+/// reported the way every other fatal misconfiguration is: as a refusal to
+/// start, not as a task that misbehaves once traffic is arriving.
+///
+/// # Errors
+///
+/// An interval of `0` is rejected. It cannot mean "never" — that is what
+/// omitting the field means — and taken literally it would busy-loop a task
+/// rereading certificates as fast as the disk allows, so treating it as a
+/// misconfiguration is the only reading that leaves the service healthy.
+pub(crate) fn validate_reload_interval(
+    tls_cfg: &TlsConfig,
+    section: &str,
+) -> Result<Option<Duration>> {
+    match tls_cfg.reload_interval_secs {
+        None => Ok(None),
+        Some(0) => Err(crate::error::Error::Internal(format!(
+            "{section} sets reload_interval_secs = 0, which would poll the certificate \
+             files without pause. Omit the field to disable polling, or set a positive \
+             number of seconds."
+        ))),
+        Some(secs) => Ok(Some(Duration::from_secs(secs))),
+    }
+}
+
+/// Warn when a section configures rotation triggers that its source cannot honour.
+///
+/// A caller-injected `ServerConfig` has no files to reread, so polling it or
+/// signalling it can never do anything. Silence here would leave an operator
+/// believing rotation is armed when it is not, and only finding out when the
+/// certificate expires.
+pub(crate) fn warn_if_reload_config_is_unusable(
+    resolved: Option<&TlsConfigSource>,
+    tls_cfg: &TlsConfig,
+    section: &str,
+) {
+    let requested = tls_cfg.reload_interval_secs.is_some() || tls_cfg.reload_on_sighup;
+    if !requested {
+        return;
+    }
+
+    if resolved.is_some_and(|s| !s.is_reloadable()) {
+        tracing::warn!(
+            "{section} configures TLS credential reloading, but the credentials for this \
+             listener were supplied directly to the builder as an already-loaded \
+             ServerConfig. There are no files to reread, so the reload triggers are \
+             ignored. Use with_tls_config_source with a source built from a TlsConfig, \
+             or let the [tls] section load the files, to make rotation possible."
+        );
+    }
+}
+
+/// Start the config-driven rotation triggers for a set of resolved credentials.
+///
+/// The single implementation of "what `reload_interval_secs` and
+/// `reload_on_sighup` actually do", shared by every serve path: the
+/// `ServiceBuilder`/`ActonService` paths and the plain [`crate::server::Server`]
+/// path. Keeping it in one place is what stops the two from drifting into
+/// different rotation behaviour for the same config file.
+///
+/// `http_interval` and `grpc_interval` are the already-validated periods for
+/// their respective listeners; a `None` disables polling for that one. `sighup`
+/// installs the single all-listeners signal handler.
+///
+/// The returned guard owns the spawned tasks and aborts them when dropped, so
+/// callers must hold it for as long as the listeners run.
+pub(crate) fn install_reload_triggers(
+    handle: &TlsReloadHandle,
+    http_interval: Option<Duration>,
+    grpc_interval: Option<Duration>,
+    sighup: bool,
+) -> TlsReloadTasks {
+    let mut tasks = TlsReloadTasks::default();
+
+    // Poll triggers. Each listener polls on its own section's interval; when
+    // gRPC inherits the `[tls]` credentials there is no `[grpc.tls]` section to
+    // carry a second interval, and the handle has already dropped the duplicate
+    // source, so the one HTTP poll task covers both listeners.
+    if let (Some(source), Some(period)) = (handle.http().cloned(), http_interval) {
+        tasks.push(spawn_reload_poll(source, TlsListenerKind::Http, period));
+    }
+    if let (Some(source), Some(period)) = (handle.grpc().cloned(), grpc_interval) {
+        tasks.push(spawn_reload_poll(source, TlsListenerKind::Grpc, period));
+    }
+
+    // SIGHUP trigger: one handler for every listener.
+    if sighup {
+        if handle.is_empty() {
+            tracing::warn!(
+                "TLS reload_on_sighup is enabled, but no listener has reloadable \
+                 credentials, so SIGHUP will not reload anything"
+            );
+        } else {
+            #[cfg(unix)]
+            match spawn_sighup_reload(handle.clone()) {
+                Ok(task) => tasks.push(task),
+                // The service is serving correctly; only this one trigger is
+                // unavailable, so log it and leave the others working rather
+                // than refusing to serve over a rotation convenience.
+                Err(e) => tracing::error!(
+                    error = %e,
+                    "could not install the SIGHUP TLS reload handler; \
+                     other reload triggers are unaffected"
+                ),
+            }
+            #[cfg(not(unix))]
+            tracing::warn!(
+                "TLS reload_on_sighup is enabled, but signals are not supported on \
+                 this platform; use reload_interval_secs or \
+                 ServiceBuilder::with_tls_reload instead"
+            );
+        }
+    }
+
+    tasks
 }
 
 /// A TLS-enabled listener wrapping a [`TcpListener`], terminating TLS with the
@@ -609,6 +1158,8 @@ mod tests {
             key_path: key_file.path().to_path_buf(),
             client_ca_path: None,
             client_auth_optional: false,
+            reload_interval_secs: None,
+            reload_on_sighup: false,
         };
 
         load_server_config(&config).expect("server-only TLS config must build");
@@ -628,6 +1179,8 @@ mod tests {
             key_path: key_file.path().to_path_buf(),
             client_ca_path: Some(ca_file.path().to_path_buf()),
             client_auth_optional: true,
+            reload_interval_secs: None,
+            reload_on_sighup: false,
         };
 
         load_server_config(&config).expect("mutual-TLS config must build");
@@ -645,6 +1198,8 @@ mod tests {
             key_path: key_file.path().to_path_buf(),
             client_ca_path: Some(PathBuf::from("/nonexistent/client-ca.pem")),
             client_auth_optional: false,
+            reload_interval_secs: None,
+            reload_on_sighup: false,
         };
 
         load_server_config(&config)
@@ -665,6 +1220,8 @@ mod tests {
             key_path,
             client_ca_path: None,
             client_auth_optional: false,
+            reload_interval_secs: None,
+            reload_on_sighup: false,
         }
     }
 
@@ -679,6 +1236,8 @@ mod tests {
             key_path: key_file.path().to_path_buf(),
             client_ca_path: None,
             client_auth_optional: false,
+            reload_interval_secs: None,
+            reload_on_sighup: false,
         };
         let server_config = load_server_config(&config).expect("config builds");
 
@@ -706,6 +1265,8 @@ mod tests {
             key_path: key_file.path().to_path_buf(),
             client_ca_path: None,
             client_auth_optional: false,
+            reload_interval_secs: None,
+            reload_on_sighup: false,
         };
         let server_config = load_server_config(&config).expect("config builds");
         let source = TlsConfigSource::from_server_config(server_config.clone());
@@ -811,6 +1372,536 @@ mod tests {
         assert!(
             !Arc::ptr_eq(&listener_side.load(), &before),
             "the clone held by the listener must see the rotation"
+        );
+    }
+
+    // --- Poll-driven rotation -------------------------------------------
+    //
+    // The tick logic is exercised directly rather than through
+    // `spawn_reload_poll`, so these tests assert what the poll decides without
+    // waiting on a real clock. What the timer loop adds on top — call
+    // `reload_tick` on an interval, carry the fingerprint forward on success —
+    // is the whole of the loop body and is visible in one screen.
+
+    #[test]
+    fn poll_reloads_when_the_certificate_files_change() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let first = generate_cert("localhost");
+        let tls_config = write_credentials(dir.path(), &first);
+
+        let source = TlsConfigSource::from_tls_config(&tls_config).expect("initial load");
+        let baseline = fingerprint_credentials(&tls_config).expect("baseline fingerprint");
+        let before = source.load();
+
+        let second = generate_cert("localhost");
+        std::fs::write(&tls_config.cert_path, &second.cert_pem).expect("rewrite cert");
+        std::fs::write(&tls_config.key_path, &second.key_pem).expect("rewrite key");
+
+        let tick = reload_tick(&source, TlsListenerKind::Http, Some(baseline));
+
+        let ReloadTick::Reloaded { fingerprint } = tick else {
+            panic!("rewritten credentials must be detected and installed, got {tick:?}");
+        };
+        assert_ne!(
+            fingerprint, baseline,
+            "the new fingerprint must differ from the one that triggered the reload"
+        );
+        assert!(
+            !Arc::ptr_eq(&source.load(), &before),
+            "the reloaded config must be the one the listener now serves"
+        );
+    }
+
+    #[test]
+    fn poll_does_not_reload_when_the_files_are_untouched() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let cert = generate_cert("localhost");
+        let tls_config = write_credentials(dir.path(), &cert);
+
+        let source = TlsConfigSource::from_tls_config(&tls_config).expect("initial load");
+        let baseline = fingerprint_credentials(&tls_config).expect("baseline fingerprint");
+        let before = source.load();
+
+        let tick = reload_tick(&source, TlsListenerKind::Http, Some(baseline));
+
+        assert_eq!(
+            tick,
+            ReloadTick::Unchanged,
+            "unchanged files must not cost a reload on every tick"
+        );
+        assert!(
+            Arc::ptr_eq(&source.load(), &before),
+            "an unchanged tick must not swap the served config"
+        );
+    }
+
+    /// Rewriting a certificate is not atomic. A tick that lands mid-write must
+    /// leave the last-good credentials serving *and* leave the baseline alone,
+    /// so the next tick retries rather than recording the broken state as seen.
+    #[test]
+    fn poll_survives_a_half_written_certificate_and_recovers() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let good = generate_cert("localhost");
+        let tls_config = write_credentials(dir.path(), &good);
+
+        let source = TlsConfigSource::from_tls_config(&tls_config).expect("initial load");
+        let baseline = fingerprint_credentials(&tls_config).expect("baseline fingerprint");
+        let last_good = source.load();
+
+        // Tick 1: the writer got as far as a truncated PEM body.
+        std::fs::write(
+            &tls_config.cert_path,
+            "-----BEGIN CERTIFICATE-----\ntruncated",
+        )
+        .expect("write partial cert");
+
+        let tick = reload_tick(&source, TlsListenerKind::Http, Some(baseline));
+
+        assert_eq!(
+            tick,
+            ReloadTick::ReloadFailed,
+            "an unparseable certificate must fail the tick, not the task"
+        );
+        assert!(
+            Arc::ptr_eq(&source.load(), &last_good),
+            "a failed tick must keep serving the last-good credentials"
+        );
+
+        // Tick 2: the writer finished. The baseline is still the original, so
+        // the retry happens even though the tick-1 state was never recorded.
+        let replacement = generate_cert("localhost");
+        std::fs::write(&tls_config.cert_path, &replacement.cert_pem).expect("finish cert");
+        std::fs::write(&tls_config.key_path, &replacement.key_pem).expect("finish key");
+
+        let tick = reload_tick(&source, TlsListenerKind::Http, Some(baseline));
+
+        assert!(
+            matches!(tick, ReloadTick::Reloaded { .. }),
+            "the next tick must retry and succeed, got {tick:?}"
+        );
+        assert!(
+            !Arc::ptr_eq(&source.load(), &last_good),
+            "the recovered tick must install the completed credentials"
+        );
+    }
+
+    /// A file that vanishes between ticks — a secret remount, a symlink swap
+    /// caught mid-flight — is "unknown", not "changed" and not "unchanged".
+    #[test]
+    fn poll_reports_a_read_failure_without_touching_the_served_config() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let cert = generate_cert("localhost");
+        let tls_config = write_credentials(dir.path(), &cert);
+
+        let source = TlsConfigSource::from_tls_config(&tls_config).expect("initial load");
+        let baseline = fingerprint_credentials(&tls_config).expect("baseline fingerprint");
+        let last_good = source.load();
+
+        std::fs::remove_file(&tls_config.cert_path).expect("remove cert");
+
+        let tick = reload_tick(&source, TlsListenerKind::Http, Some(baseline));
+
+        assert_eq!(
+            tick,
+            ReloadTick::ReadFailed,
+            "an unreadable file must be reported as a read failure"
+        );
+        assert!(
+            Arc::ptr_eq(&source.load(), &last_good),
+            "a read failure must never disturb the credentials already serving"
+        );
+    }
+
+    #[test]
+    fn poll_on_a_static_source_does_nothing() {
+        let server = generate_cert("localhost");
+        let cert_file = write_temp(&server.cert_pem);
+        let key_file = write_temp(&server.key_pem);
+        let config = TlsConfig {
+            enabled: true,
+            cert_path: cert_file.path().to_path_buf(),
+            key_path: key_file.path().to_path_buf(),
+            client_ca_path: None,
+            client_auth_optional: false,
+            reload_interval_secs: None,
+            reload_on_sighup: false,
+        };
+        let source =
+            TlsConfigSource::from_server_config(load_server_config(&config).expect("config"));
+
+        assert_eq!(
+            reload_tick(&source, TlsListenerKind::Http, None),
+            ReloadTick::Unchanged,
+            "a source with no files must not be reported as a failure every tick"
+        );
+    }
+
+    /// Detection is by content, not by modification time.
+    ///
+    /// Asserted from the direction that needs no clock control: rewriting a
+    /// file with byte-identical contents bumps its mtime, so an mtime-based
+    /// check would call that a rotation. A content hash does not. The property
+    /// this protects is the mirror image — `cp -p` and most certificate tooling
+    /// preserve mtimes across a *real* rotation, which an mtime check would
+    /// then miss entirely.
+    #[test]
+    fn rewriting_identical_bytes_is_not_a_rotation() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let cert = generate_cert("localhost");
+        let tls_config = write_credentials(dir.path(), &cert);
+
+        let source = TlsConfigSource::from_tls_config(&tls_config).expect("initial load");
+        let baseline = fingerprint_credentials(&tls_config).expect("baseline fingerprint");
+        let before = source.load();
+
+        // Same bytes, new mtime.
+        std::fs::write(&tls_config.cert_path, &cert.cert_pem).expect("rewrite cert");
+        std::fs::write(&tls_config.key_path, &cert.key_pem).expect("rewrite key");
+
+        assert_eq!(
+            fingerprint_credentials(&tls_config).expect("fingerprint"),
+            baseline,
+            "identical contents must fingerprint identically however recently written"
+        );
+        assert_eq!(
+            reload_tick(&source, TlsListenerKind::Http, Some(baseline)),
+            ReloadTick::Unchanged,
+            "a touched-but-unchanged file must not be mistaken for a rotation"
+        );
+        assert!(Arc::ptr_eq(&source.load(), &before));
+    }
+
+    /// Contents of the same total length must not collide, so a rotation to a
+    /// same-size certificate is still seen.
+    #[test]
+    fn fingerprint_distinguishes_same_length_contents() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let cert = generate_cert("localhost");
+        let tls_config = write_credentials(dir.path(), &cert);
+        let before = fingerprint_credentials(&tls_config).expect("fingerprint");
+
+        // Flip one byte, keeping the file length identical.
+        let mut bytes = std::fs::read(&tls_config.cert_path).expect("read cert");
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0xff;
+        std::fs::write(&tls_config.cert_path, &bytes).expect("rewrite cert");
+
+        assert_ne!(
+            before,
+            fingerprint_credentials(&tls_config).expect("fingerprint"),
+            "a same-length change must still change the fingerprint"
+        );
+    }
+
+    #[test]
+    fn fingerprint_covers_the_client_ca_bundle() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let server = generate_cert("localhost");
+        let mut tls_config = write_credentials(dir.path(), &server);
+        let ca_path = dir.path().join("client-ca.pem");
+        std::fs::write(&ca_path, generate_cert("ca-one").cert_pem).expect("write ca");
+        tls_config.client_ca_path = Some(ca_path.clone());
+
+        let before = fingerprint_credentials(&tls_config).expect("fingerprint");
+
+        // Rotating only the trust anchors, leaving cert and key alone, must
+        // still count as a rotation: it changes which clients are accepted.
+        std::fs::write(&ca_path, generate_cert("ca-two").cert_pem).expect("rewrite ca");
+
+        assert_ne!(
+            before,
+            fingerprint_credentials(&tls_config).expect("fingerprint"),
+            "a changed client-CA bundle must be detected as a rotation"
+        );
+    }
+
+    // --- The reload handle ------------------------------------------------
+
+    #[test]
+    fn handle_keeps_only_sources_a_reload_can_act_on() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let cert = generate_cert("localhost");
+        let tls_config = write_credentials(dir.path(), &cert);
+        let reloadable = TlsConfigSource::from_tls_config(&tls_config).expect("load");
+        let static_source =
+            TlsConfigSource::from_server_config(load_server_config(&tls_config).expect("config"));
+
+        let handle = TlsReloadHandle::new(Some(reloadable), Some(static_source));
+
+        assert!(handle.http().is_some(), "the file-backed source is kept");
+        assert!(
+            handle.grpc().is_none(),
+            "a static source has no files to reread and must not be handed out"
+        );
+        assert!(!handle.is_empty());
+    }
+
+    #[test]
+    fn handle_is_empty_when_every_source_is_static() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let cert = generate_cert("localhost");
+        let tls_config = write_credentials(dir.path(), &cert);
+        let static_source =
+            TlsConfigSource::from_server_config(load_server_config(&tls_config).expect("config"));
+
+        let handle = TlsReloadHandle::new(Some(static_source), None);
+
+        assert!(
+            handle.is_empty(),
+            "a handle over only static sources must report that it can do nothing, \
+             so callers can warn instead of silently never reloading"
+        );
+        assert!(handle.reload_all().is_empty());
+    }
+
+    /// When `[grpc.tls]` is absent the gRPC listener inherits the `[tls]`
+    /// source. Listing it twice would reread one set of files twice and report
+    /// two outcomes for a single rotation.
+    #[test]
+    fn handle_does_not_list_an_inherited_grpc_source_twice() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let cert = generate_cert("localhost");
+        let tls_config = write_credentials(dir.path(), &cert);
+        let shared = TlsConfigSource::from_tls_config(&tls_config).expect("load");
+
+        let handle = TlsReloadHandle::new(Some(shared.clone()), Some(shared));
+
+        assert!(
+            handle.grpc().is_none(),
+            "the inherited source is not listed"
+        );
+        assert_eq!(
+            handle.sources().len(),
+            1,
+            "one set of credentials must produce one reload"
+        );
+    }
+
+    #[test]
+    fn handle_lists_genuinely_separate_grpc_credentials() {
+        let http_dir = tempfile::tempdir().expect("temp dir");
+        let grpc_dir = tempfile::tempdir().expect("temp dir");
+        let http_config = write_credentials(http_dir.path(), &generate_cert("localhost"));
+        let grpc_config = write_credentials(grpc_dir.path(), &generate_cert("grpc.internal"));
+
+        let handle = TlsReloadHandle::new(
+            Some(TlsConfigSource::from_tls_config(&http_config).expect("load")),
+            Some(TlsConfigSource::from_tls_config(&grpc_config).expect("load")),
+        );
+
+        assert_eq!(
+            handle.sources().len(),
+            2,
+            "two independently-configured listeners must both be reloadable"
+        );
+    }
+
+    /// This is the function the `SIGHUP` handler calls. Delivering a real
+    /// signal to the test process would race every other test in the binary,
+    /// so the handler's wiring (install a `SignalKind::hangup` stream, call
+    /// `reload_all` per signal) is left to review and the behaviour that
+    /// matters is asserted here.
+    #[test]
+    fn reload_all_rotates_every_listener_and_reports_each_outcome() {
+        let http_dir = tempfile::tempdir().expect("temp dir");
+        let grpc_dir = tempfile::tempdir().expect("temp dir");
+        let http_config = write_credentials(http_dir.path(), &generate_cert("localhost"));
+        let grpc_config = write_credentials(grpc_dir.path(), &generate_cert("grpc.internal"));
+        let http_source = TlsConfigSource::from_tls_config(&http_config).expect("load");
+        let grpc_source = TlsConfigSource::from_tls_config(&grpc_config).expect("load");
+        let handle = TlsReloadHandle::new(Some(http_source.clone()), Some(grpc_source.clone()));
+
+        let http_before = http_source.load();
+        let grpc_before = grpc_source.load();
+
+        // Rotate HTTP cleanly; corrupt gRPC so one succeeds and one fails.
+        let rotated = generate_cert("localhost");
+        std::fs::write(&http_config.cert_path, &rotated.cert_pem).expect("rewrite cert");
+        std::fs::write(&http_config.key_path, &rotated.key_pem).expect("rewrite key");
+        std::fs::write(&grpc_config.cert_path, "-----BEGIN CERTIFICATE-----\nbad")
+            .expect("corrupt cert");
+
+        let outcomes = handle.reload_all();
+
+        assert_eq!(outcomes.len(), 2, "every listener must be reported on");
+        let http_result = outcomes
+            .iter()
+            .find(|(listener, _)| *listener == TlsListenerKind::Http)
+            .map(|(_, result)| result.is_ok());
+        let grpc_result = outcomes
+            .iter()
+            .find(|(listener, _)| *listener == TlsListenerKind::Grpc)
+            .map(|(_, result)| result.is_ok());
+        assert_eq!(http_result, Some(true), "the valid rotation must succeed");
+        assert_eq!(
+            grpc_result,
+            Some(false),
+            "the broken rotation must be reported, not swallowed by its sibling"
+        );
+
+        assert!(
+            !Arc::ptr_eq(&http_source.load(), &http_before),
+            "the listener whose rotation succeeded must serve the new certificate"
+        );
+        assert!(
+            Arc::ptr_eq(&grpc_source.load(), &grpc_before),
+            "the listener whose rotation failed must keep its last-good certificate"
+        );
+    }
+
+    // --- Shared trigger wiring -------------------------------------------
+    //
+    // `validate_reload_interval` and `install_reload_triggers` are the single
+    // implementation behind both the `ServiceBuilder` path and `Server::serve`,
+    // so they are asserted here rather than once per caller.
+
+    #[test]
+    fn a_zero_poll_interval_is_rejected() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut tls_config = write_credentials(dir.path(), &generate_cert("localhost"));
+        tls_config.reload_interval_secs = Some(0);
+
+        let err = validate_reload_interval(&tls_config, "[tls]")
+            .expect_err("zero would poll without pause and must be refused");
+
+        let message = err.to_string();
+        assert!(
+            message.contains("reload_interval_secs = 0"),
+            "the error must name the setting: {message}"
+        );
+        assert!(
+            message.contains("[tls]"),
+            "the error must name the section so an operator knows which to fix: {message}"
+        );
+    }
+
+    #[test]
+    fn an_absent_or_positive_poll_interval_is_accepted() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut tls_config = write_credentials(dir.path(), &generate_cert("localhost"));
+
+        assert_eq!(
+            validate_reload_interval(&tls_config, "[tls]").expect("absent is valid"),
+            None,
+            "omitting the field is how polling is disabled"
+        );
+
+        tls_config.reload_interval_secs = Some(30);
+        assert_eq!(
+            validate_reload_interval(&tls_config, "[tls]").expect("positive is valid"),
+            Some(Duration::from_secs(30))
+        );
+    }
+
+    /// Configuring rotation for credentials that have no files behind them
+    /// cannot work. It must be audible rather than silently ignored.
+    #[test]
+    fn reload_config_on_a_static_source_is_detected_as_unusable() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut tls_config = write_credentials(dir.path(), &generate_cert("localhost"));
+        tls_config.reload_interval_secs = Some(30);
+        let static_source =
+            TlsConfigSource::from_server_config(load_server_config(&tls_config).expect("config"));
+        let file_source = TlsConfigSource::from_tls_config(&tls_config).expect("load");
+
+        // The warning is a tracing side effect; what is asserted here is the
+        // condition that drives it, which is the part that could regress.
+        assert!(
+            !static_source.is_reloadable(),
+            "an injected ServerConfig has no files to reread"
+        );
+        assert!(file_source.is_reloadable());
+
+        // Exercised for absence of panic on both source kinds and on the
+        // no-triggers-configured early return.
+        warn_if_reload_config_is_unusable(Some(&static_source), &tls_config, "[tls]");
+        warn_if_reload_config_is_unusable(Some(&file_source), &tls_config, "[tls]");
+        tls_config.reload_interval_secs = None;
+        tls_config.reload_on_sighup = false;
+        warn_if_reload_config_is_unusable(Some(&static_source), &tls_config, "[tls]");
+    }
+
+    /// The `Server::serve` shape: one listener, HTTP slot only, no gRPC
+    /// interval. Must arm the poll task rather than silently doing nothing.
+    #[tokio::test]
+    async fn install_reload_triggers_arms_a_single_listener_path() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let tls_config = write_credentials(dir.path(), &generate_cert("localhost"));
+        let source = TlsConfigSource::from_tls_config(&tls_config).expect("load");
+        let handle = TlsReloadHandle::new(Some(source), None);
+
+        let tasks = install_reload_triggers(&handle, Some(Duration::from_secs(30)), None, false);
+
+        assert_eq!(
+            tasks.handles.len(),
+            1,
+            "a polled single-listener path must arm exactly one poll task"
+        );
+    }
+
+    /// No triggers configured must spawn nothing at all, so a service that does
+    /// not ask for rotation pays nothing for the feature existing.
+    #[tokio::test]
+    async fn install_reload_triggers_spawns_nothing_when_unconfigured() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let tls_config = write_credentials(dir.path(), &generate_cert("localhost"));
+        let source = TlsConfigSource::from_tls_config(&tls_config).expect("load");
+        let handle = TlsReloadHandle::new(Some(source), None);
+
+        let tasks = install_reload_triggers(&handle, None, None, false);
+
+        assert!(tasks.handles.is_empty());
+    }
+
+    /// Dropping the guard must abort the tasks, so triggers cannot outlive the
+    /// listener they rotate or hold up a graceful shutdown.
+    #[tokio::test]
+    async fn dropping_the_task_guard_aborts_the_triggers() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let tls_config = write_credentials(dir.path(), &generate_cert("localhost"));
+        let source = TlsConfigSource::from_tls_config(&tls_config).expect("load");
+        let handle = TlsReloadHandle::new(Some(source), None);
+
+        let tasks = install_reload_triggers(&handle, Some(Duration::from_secs(30)), None, false);
+        let spawned: Vec<_> = tasks
+            .handles
+            .iter()
+            .map(tokio::task::JoinHandle::abort_handle)
+            .collect();
+        assert_eq!(spawned.len(), 1);
+
+        drop(tasks);
+        // Give the runtime a chance to process the abort.
+        tokio::task::yield_now().await;
+
+        assert!(
+            spawned[0].is_finished(),
+            "the poll task must not outlive the guard that owns it"
+        );
+    }
+
+    #[test]
+    fn listener_kind_names_are_stable_for_logs() {
+        assert_eq!(TlsListenerKind::Http.as_str(), "http");
+        assert_eq!(TlsListenerKind::Grpc.as_str(), "grpc");
+        assert_eq!(TlsListenerKind::Grpc.to_string(), "grpc");
+    }
+
+    /// The handle's `Debug` reports coverage, never key material.
+    #[test]
+    fn handle_debug_does_not_leak_key_material() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let cert = generate_cert("localhost");
+        let tls_config = write_credentials(dir.path(), &cert);
+        let source = TlsConfigSource::from_tls_config(&tls_config).expect("load");
+        let handle = TlsReloadHandle::new(Some(source), None);
+
+        let rendered = format!("{handle:?}");
+
+        assert!(rendered.contains("http: true"));
+        assert!(
+            !rendered.contains("BEGIN"),
+            "Debug must not render PEM material: {rendered}"
         );
     }
 
