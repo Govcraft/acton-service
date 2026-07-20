@@ -32,10 +32,39 @@ impl Server {
     }
 
     /// Run the server with the given router
+    ///
+    /// # TLS credential rotation
+    ///
+    /// When `[tls]` sets `reload_interval_secs` or `reload_on_sighup`, this
+    /// path installs the same triggers the `ServiceBuilder` path does, over the
+    /// same shared implementation, and the listener's credentials rotate in
+    /// place without a restart.
+    ///
+    /// The one difference is that [`Server`] has no builder, so there is no
+    /// equivalent of `ServiceBuilder::with_tls_reload` and no way to drive a
+    /// reload from your own trigger here. Rotation on this path is
+    /// config-driven only. A service that needs to reload from a Vault lease,
+    /// a secret watch or an admin endpoint should use `ServiceBuilder`, which
+    /// exposes both the hook and the credential handles.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error before binding the listener if `[tls]` is enabled but
+    /// its credentials cannot be loaded, or if `reload_interval_secs` is `0`.
     pub async fn serve(self, app: Router) -> Result<()> {
         let addr = SocketAddr::new(self.config.service.bind, self.config.service.port);
 
         tracing::info!("Starting {} on {}", self.config.service.name, addr);
+
+        // Validate the rotation settings before anything binds, so a bad
+        // interval is a refusal to start rather than a task that misbehaves
+        // once traffic is arriving. Matches how the ServiceBuilder path reports
+        // the same misconfiguration from `build()`.
+        #[cfg(feature = "tls")]
+        let tls_reload_interval = match self.config.tls.as_ref().filter(|t| t.enabled) {
+            Some(tls_cfg) => crate::tls::validate_reload_interval(tls_cfg, "[tls]")?,
+            None => None,
+        };
 
         // Log middleware configuration
         self.log_middleware_config();
@@ -107,8 +136,25 @@ impl Server {
         #[cfg(feature = "tls")]
         if let Some(ref tls_config) = self.config.tls {
             if tls_config.enabled {
-                let server_config = crate::tls::load_server_config(tls_config)?;
-                let tls_listener = crate::tls::TlsListener::new(listener, server_config);
+                // A reloadable source rather than a fixed `ServerConfig`: the
+                // listener rereads it per handshake, which is what lets the
+                // triggers below rotate the certificate without rebinding.
+                let source = crate::tls::TlsConfigSource::from_tls_config(tls_config)?;
+                crate::tls::warn_if_reload_config_is_unusable(Some(&source), tls_config, "[tls]");
+
+                // This path serves one listener, so the handle carries only the
+                // HTTP slot and there is no gRPC interval to pass.
+                let reload_handle = crate::tls::TlsReloadHandle::new(Some(source.clone()), None);
+                // Held across the serve await; dropping it on return aborts the
+                // trigger tasks so they cannot outlive the listener.
+                let _tls_reload_tasks = crate::tls::install_reload_triggers(
+                    &reload_handle,
+                    tls_reload_interval,
+                    None,
+                    tls_config.reload_on_sighup,
+                );
+
+                let tls_listener = crate::tls::TlsListener::with_config_source(listener, source);
                 tracing::info!("TLS enabled (HTTPS)");
                 axum::serve(
                     tls_listener,
@@ -291,5 +337,48 @@ mod tests {
         let config = Config::default();
         let server = Server::new(config.clone());
         assert_eq!(server.config().service.port, config.service.port);
+    }
+
+    /// `Server` is public API and the example in the crate docs, so it must
+    /// reject the same TLS misconfiguration the `ServiceBuilder` path does —
+    /// and reject it *before* binding, not after traffic can arrive.
+    ///
+    /// Asserting from the failure side is what makes this testable at all: the
+    /// success path would bind a real socket and serve forever. That the error
+    /// arrives despite the cert paths not existing is itself the ordering
+    /// proof — validation runs ahead of the credential load, which runs ahead
+    /// of the bind.
+    #[cfg(feature = "tls")]
+    #[tokio::test]
+    async fn serve_rejects_a_zero_reload_interval_before_binding() {
+        use crate::config::TlsConfig;
+
+        let config = Config {
+            tls: Some(TlsConfig {
+                enabled: true,
+                cert_path: "/nonexistent/cert.pem".into(),
+                key_path: "/nonexistent/key.pem".into(),
+                client_ca_path: None,
+                client_auth_optional: false,
+                reload_interval_secs: Some(0),
+                reload_on_sighup: false,
+            }),
+            ..Default::default()
+        };
+
+        let error = Server::new(config)
+            .serve(Router::new())
+            .await
+            .expect_err("a zero poll interval must refuse to start the server");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("reload_interval_secs = 0"),
+            "the error must name the offending setting, got: {message}"
+        );
+        assert!(
+            message.contains("[tls]"),
+            "the error must name the section to fix, got: {message}"
+        );
     }
 }

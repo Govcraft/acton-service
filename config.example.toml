@@ -28,6 +28,8 @@ environment = "dev"  # dev, staging, production
 # enabled = true
 # cert_path = "./certs/grpc.pem"
 # key_path = "./certs/grpc.key"
+# reload_interval_secs = 300             # poll these files; see [tls] below
+# reload_on_sighup = true                # reloads BOTH listeners, not just gRPC
 
 # ============================================================================
 # TOKEN AUTHENTICATION ([token] section with format = "paseto" or "jwt")
@@ -161,6 +163,44 @@ referrer_policy = "strict-origin-when-cross-origin"
 # enabled = true
 # cert_path = "./certs/server.pem"       # PEM-encoded certificate chain
 # key_path = "./certs/server-key.pem"    # PEM-encoded private key
+#
+# --- Mutual TLS: verifying client certificates ------------------------------
+# Point client_ca_path at a PEM bundle of CA certificates to require connecting
+# clients to present a certificate signed by one of them. Omit it to accept all
+# clients without a certificate (server-only TLS, the default).
+# client_ca_path = "./certs/client-ca.pem"
+#
+# With client_auth_optional = true, clients WITHOUT a certificate are still
+# accepted, but a certificate that is presented must verify — optional means
+# "absent is allowed", never "invalid is allowed". Handlers can distinguish the
+# two through TlsConnectInfo. Ignored unless client_ca_path is set.
+# client_auth_optional = false
+#
+# --- Certificate rotation without a restart ---------------------------------
+# Both triggers below reload the files named above and apply the new certificate
+# to the NEXT handshake; connections already established are undisturbed. A
+# reload that fails (missing, unparseable, or half-written files) is logged at
+# ERROR and leaves the previous certificate serving — rotation can never take
+# the listener down.
+#
+# Poll the files every N seconds and reload when their CONTENTS change. Change
+# is detected by hashing the bytes, not by comparing mtimes, so rotations that
+# preserve modification times (cp -p, most cert tooling) are still seen.
+# Omit to disable polling; 0 is rejected at startup.
+# reload_interval_secs = 300
+#
+# Reload when the process receives SIGHUP. Setting this on EITHER [tls] or
+# [grpc.tls] installs one handler that reloads BOTH listeners — a signal that
+# rotated only half the surfaces would be confusing during an incident.
+# Unix only; configured elsewhere it warns at startup and is ignored.
+# reload_on_sighup = true
+#
+# For triggers the framework does not model (a Vault lease renewal, a watch on
+# a ConfigMap, an admin endpoint), register a callback with
+# ServiceBuilder::with_tls_reload and call TlsReloadHandle::reload_all yourself.
+# Note that reloading only works for credentials the framework loaded from these
+# files. Credentials injected via ServiceBuilder::with_tls_config are static;
+# configuring the triggers above for them warns at startup and does nothing.
 
 # ----------------------------------------------------------------------------
 # CLIENT mTLS IDENTITY (Optional) — the certificate this service PRESENTS when

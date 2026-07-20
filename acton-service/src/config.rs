@@ -955,6 +955,39 @@ pub struct TlsConfig {
     /// the handshake fails without one. Ignored when `client_ca_path` is absent.
     #[serde(default = "default_false")]
     pub client_auth_optional: bool,
+
+    /// Poll the credential files this often, in seconds, and reload them when
+    /// their contents change. `None` (the default) disables polling.
+    ///
+    /// Change is detected by hashing the file contents, not by comparing
+    /// modification times: `cp -p` and most certificate-management tools
+    /// preserve mtimes, so an mtime check would silently miss real rotations.
+    /// A tick whose files are missing, unreadable or half-written is logged and
+    /// retried on the next tick rather than being treated as a rotation, so an
+    /// in-progress write heals itself without operator involvement.
+    ///
+    /// Only meaningful for credentials this service loaded from disk. A
+    /// caller-injected [`crate::tls::TlsConfigSource`] built from an
+    /// already-loaded `ServerConfig` has no files to reread; configuring an
+    /// interval for one is reported at `WARN` and ignored.
+    ///
+    /// An interval of `0` is rejected at build time rather than spinning.
+    #[serde(default)]
+    pub reload_interval_secs: Option<u64>,
+
+    /// Reload the credential files when the process receives `SIGHUP`
+    /// (default: `false`).
+    ///
+    /// Enabling this on *either* the `[tls]` or `[grpc.tls]` section installs a
+    /// single handler that reloads **every** reloadable source, HTTP and gRPC
+    /// alike. One signal reloading only half the listeners would be a confusing
+    /// state to reason about during an incident, so the signal is deliberately
+    /// all-or-nothing.
+    ///
+    /// Unix only. On other platforms a configured value is reported at `WARN`
+    /// during startup and otherwise ignored.
+    #[serde(default = "default_false")]
+    pub reload_on_sighup: bool,
 }
 
 /// Client-side mutual-TLS identity (requires `tls` feature)
