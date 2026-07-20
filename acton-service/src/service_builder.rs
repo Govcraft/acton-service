@@ -752,10 +752,24 @@ where
             if audit_config.enabled {
                 let service_name = config.service.name.clone();
 
-                // Storage is None by default. DB-backed storage is initialized lazily
-                // after the pool connects. The agent works with in-memory chain + syslog
-                // until storage becomes available.
-                let storage: Option<std::sync::Arc<dyn crate::audit::AuditStorage>> = None;
+                // Attach DB-backed storage for whichever database feature is active.
+                // Pool agents connect asynchronously, so the selected backend resolves
+                // lazily: it holds the shared pool handle and builds the concrete
+                // storage (running its append-only DDL) on first use, once connected.
+                // Until then the agent runs on the in-memory chain + syslog.
+                let storage: Option<std::sync::Arc<dyn crate::audit::AuditStorage>> =
+                    crate::audit::wiring::select_audit_storage(
+                        &crate::audit::wiring::AuditStorageHandles {
+                            #[cfg(feature = "database")]
+                            db_pool: shared_db_pool.clone(),
+                            #[cfg(feature = "turso")]
+                            turso_db: shared_turso_db.clone(),
+                            #[cfg(feature = "surrealdb")]
+                            surrealdb_client: shared_surrealdb_client.clone(),
+                            #[cfg(feature = "clickhouse")]
+                            clickhouse_client: shared_clickhouse_client.clone(),
+                        },
+                    );
 
                 if let Ok(_handle) = tokio::runtime::Handle::try_current() {
                     let result = tokio::task::block_in_place(|| {

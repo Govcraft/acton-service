@@ -46,6 +46,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unknowingly relying on the degrade will now fail to start — which is the
   point, and the failure names the cert path that could not be loaded.
 
+### Fixes
+
+- **audit**: Database-backed audit storage is now actually attached. The
+  builder previously hardcoded the audit logger's storage to `None`, so a
+  service enabling `audit` plus a database feature got tracing/syslog-only
+  auditing and persisted nothing — the append-only backends were fully
+  implemented but never wired. `ServiceBuilder::build()` now selects the
+  backend matching the enabled database feature (PostgreSQL, Turso,
+  SurrealDB, or ClickHouse) and attaches it. (#34)
+- **audit**: Storage resolves lazily rather than eagerly. Pool agents connect
+  asynchronously and are still unconnected when the audit agent spawns, so
+  reading a connected pool at build time would observe `None` and latch a
+  storage-less logger permanently. The selected backend now holds the shared
+  pool handle and constructs the concrete storage — running its append-only
+  DDL exactly once — on first use after the pool connects.
+- **audit**: The agent now waits (up to 30s) for storage readiness before
+  initializing the hash chain. Previously an unready backend caused the chain
+  to restart at sequence 0, which would fork the chain and collide with
+  persisted sequence numbers on the first append.
+
 ## [acton-service-v0.28.0] - 2026-07-17
 
 ### Features
