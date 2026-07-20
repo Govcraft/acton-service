@@ -806,7 +806,7 @@ Tamper-evident audit logging with BLAKE3 hash chaining.
 - Alerting via `AuditAlertHook` / `AlertConfig`
 - Automatic integration with `login-lockout` and `accounts` when those are enabled
 
-`audit` is part of the `full` feature set. When the feature is compiled in, audit logging is **enabled by default** (set `[audit] enabled = false` to opt out), and the audit agent requires a multi-threaded tokio runtime — on a current-thread runtime (such as a default `#[tokio::test]`), `build()` records a startup error and `serve()` refuses to start rather than running without the configured audit trail.
+`audit` is part of the `full` feature set. When the feature is compiled in, audit logging is **enabled by default** (set `[audit] enabled = false` to opt out), and the audit agent requires a multi-threaded tokio runtime — on a current-thread runtime (such as a default `#[tokio::test]`), `build()` records a startup error and `serve()` refuses to start rather than running without the configured audit trail. The same requirement applies to every actor-backed subsystem — background workers, actor extensions, Cedar authorization, Redis sessions, and key rotation — each of which records its own subsystem-named startup error on a current-thread runtime instead of panicking inside tokio.
 
 ```toml
 {% $dep.auditOnly %}

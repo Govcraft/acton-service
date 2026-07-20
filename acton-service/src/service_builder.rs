@@ -862,6 +862,10 @@ where
                             );
 
                             let logger_clone = logger.clone();
+                            // Transitively guarded: an `AuditLogger` only exists
+                            // when the audit-agent spawn above took its
+                            // `Some(true)` (multi-threaded) branch, so the
+                            // runtime flavor is already known to be safe here.
                             tokio::task::block_in_place(|| {
                                 tokio::runtime::Handle::current()
                                     .block_on(async { logger_clone.log(event).await })
@@ -911,6 +915,7 @@ where
                     &shared_surrealdb_client,
                     #[cfg(feature = "audit")]
                     &audit_logger,
+                    &mut startup_error,
                 )
             } else {
                 None
@@ -921,8 +926,8 @@ where
         let background_worker: Option<crate::agents::BackgroundWorker> = {
             let bw_config = config.background_worker.clone().unwrap_or_default();
             if bw_config.enabled {
-                if let Ok(_handle) = tokio::runtime::Handle::try_current() {
-                    let result = tokio::task::block_in_place(|| {
+                match runtime_supports_block_in_place() {
+                    Some(true) => tokio::task::block_in_place(|| {
                         tokio::runtime::Handle::current().block_on(async {
                             if self.agent_runtime.is_none() {
                                 self.agent_runtime =
@@ -951,11 +956,24 @@ where
                                 None
                             }
                         })
-                    });
-                    result
-                } else {
-                    tracing::warn!("No tokio runtime available for background worker");
-                    None
+                    }),
+                    Some(false) => {
+                        let err = crate::error::Error::Internal(
+                            "the background worker is enabled but the tokio runtime is \
+                             single-threaded, so its agent cannot be spawned from \
+                             ServiceBuilder::build(); use a multi-threaded runtime \
+                             (#[tokio::main], or #[tokio::test(flavor = \"multi_thread\")] in \
+                             tests) or set [background_worker] enabled = false"
+                                .to_string(),
+                        );
+                        tracing::error!("{}", err);
+                        record_startup_error(&mut startup_error, err);
+                        None
+                    }
+                    None => {
+                        tracing::warn!("No tokio runtime available for background worker");
+                        None
+                    }
                 }
             } else {
                 None
@@ -965,8 +983,8 @@ where
         // Spawn actor extensions under a supervisor if any were registered
         let pending_extensions = std::mem::take(&mut self.actor_extensions);
         let actor_extensions = if !pending_extensions.is_empty() {
-            if let Ok(_handle) = tokio::runtime::Handle::try_current() {
-                tokio::task::block_in_place(|| {
+            match runtime_supports_block_in_place() {
+                Some(true) => tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(async {
                         // Initialize agent runtime if not already done (e.g., no pool features enabled)
                         if self.agent_runtime.is_none() {
@@ -1003,12 +1021,26 @@ where
 
                         crate::extensions::ActorExtensions::from(handles)
                     })
-                })
-            } else {
-                tracing::warn!(
-                    "No tokio runtime available, skipping actor extension spawning"
-                );
-                crate::extensions::ActorExtensions::default()
+                }),
+                Some(false) => {
+                    let err = crate::error::Error::Internal(
+                        "actor extensions are registered but the tokio runtime is \
+                         single-threaded, so they cannot be spawned from \
+                         ServiceBuilder::build(); use a multi-threaded runtime \
+                         (#[tokio::main], or #[tokio::test(flavor = \"multi_thread\")] in \
+                         tests) or stop registering actor extensions"
+                            .to_string(),
+                    );
+                    tracing::error!("{}", err);
+                    record_startup_error(&mut startup_error, err);
+                    crate::extensions::ActorExtensions::default()
+                }
+                None => {
+                    tracing::warn!(
+                        "No tokio runtime available, skipping actor extension spawning"
+                    );
+                    crate::extensions::ActorExtensions::default()
+                }
             }
         } else {
             crate::extensions::ActorExtensions::default()
@@ -1166,8 +1198,8 @@ where
                 Some(cedar)
             } else if let Some(ref cedar_config) = config.cedar {
                 if cedar_config.enabled {
-                    match tokio::runtime::Handle::try_current() {
-                        Ok(_handle) => {
+                    match runtime_supports_block_in_place() {
+                        Some(true) => {
                             let cedar_path_normalizer = self.cedar_path_normalizer;
                             match tokio::task::block_in_place(|| {
                                 tokio::runtime::Handle::current().block_on(async {
@@ -1200,7 +1232,21 @@ where
                                 }
                             }
                         }
-                        Err(_) => {
+                        Some(false) => {
+                            let err = crate::error::Error::Internal(
+                                "Cedar authorization is enabled but the tokio runtime is \
+                                 single-threaded, so its policy set cannot be loaded from \
+                                 ServiceBuilder::build(); use a multi-threaded runtime \
+                                 (#[tokio::main], or #[tokio::test(flavor = \"multi_thread\")] \
+                                 in tests) or set [cedar] enabled = false. Refusing to start \
+                                 rather than serving routes without policy enforcement"
+                                    .to_string(),
+                            );
+                            tracing::error!("{}", err);
+                            record_startup_error(&mut startup_error, err);
+                            None
+                        }
+                        None => {
                             let err = crate::error::Error::Internal(
                                 "Cedar authorization is enabled but no tokio runtime is \
                                  available to initialize it; refusing to start rather than \
@@ -1288,8 +1334,11 @@ where
                     use crate::session::create_redis_session_layer;
                     if let Some(ref redis_url) = session_config.redis_url {
                         tracing::info!("Initializing Redis session store");
-                        match tokio::runtime::Handle::try_current() {
-                            Ok(_handle) => {
+                        // Checked before any connection attempt, so a
+                        // single-threaded runtime fails fast rather than
+                        // reaching Redis and then panicking in tokio.
+                        match runtime_supports_block_in_place() {
+                            Some(true) => {
                                 let session_config_clone = session_config.clone();
                                 let redis_url_clone = redis_url.clone();
                                 match tokio::task::block_in_place(|| {
@@ -1312,7 +1361,20 @@ where
                                     }
                                 }
                             }
-                            Err(_) => {
+                            Some(false) => {
+                                let err = crate::error::Error::Internal(
+                                    "Redis-backed sessions are enabled but the tokio runtime \
+                                     is single-threaded, so the session store cannot be \
+                                     initialized from ServiceBuilder::build(); use a \
+                                     multi-threaded runtime (#[tokio::main], or \
+                                     #[tokio::test(flavor = \"multi_thread\")] in tests) or \
+                                     set [session] storage = \"memory\""
+                                        .to_string(),
+                                );
+                                tracing::error!("{}", err);
+                                record_startup_error(&mut startup_error, err);
+                            }
+                            None => {
                                 tracing::error!(
                                     "No tokio runtime available for Redis session initialization"
                                 );
@@ -1673,12 +1735,36 @@ where
             crate::agents::SharedSurrealDb,
         >,
         #[cfg(feature = "audit")] audit_logger: &Option<crate::audit::AuditLogger>,
+        startup_error: &mut Option<crate::error::Error>,
     ) -> Option<std::sync::Arc<crate::auth::key_rotation::KeyManager>> {
         let kr_config = config
             .auth
             .as_ref()
             .and_then(|a| a.key_rotation.as_ref())
             .cloned()?;
+
+        // Checked up front, before storage resolution, so an unusable runtime
+        // is reported even when no database backend has connected yet.
+        match runtime_supports_block_in_place() {
+            Some(true) => {}
+            Some(false) => {
+                let err = crate::error::Error::Internal(
+                    "key rotation is enabled but the tokio runtime is single-threaded, so its \
+                     storage cannot be initialized and its agent cannot be spawned from \
+                     ServiceBuilder::build(); use a multi-threaded runtime (#[tokio::main], or \
+                     #[tokio::test(flavor = \"multi_thread\")] in tests) or set \
+                     [auth.key_rotation] enabled = false"
+                        .to_string(),
+                );
+                tracing::error!("{}", err);
+                record_startup_error(startup_error, err);
+                return None;
+            }
+            None => {
+                tracing::warn!("No tokio runtime available for key rotation initialization");
+                return None;
+            }
+        }
 
         let service_name = config.service.name.clone();
 
@@ -1758,61 +1844,55 @@ where
             kr_config.clone(),
         );
 
-        if let Ok(_handle) = tokio::runtime::Handle::try_current() {
-            let init_result = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    // Initialize storage (create tables/indexes)
-                    key_manager.storage().initialize().await?;
+        // The runtime flavor was verified above, so `block_in_place` is safe here.
+        let init_result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                // Initialize storage (create tables/indexes)
+                key_manager.storage().initialize().await?;
 
-                    // Populate the in-memory cache from storage
-                    key_manager.refresh_cache().await?;
+                // Populate the in-memory cache from storage
+                key_manager.refresh_cache().await?;
 
-                    Ok::<(), crate::error::Error>(())
-                })
-            });
+                Ok::<(), crate::error::Error>(())
+            })
+        });
 
-            if let Err(e) = init_result {
-                tracing::error!("Failed to initialize key rotation storage: {}", e);
-                return None;
-            }
-        } else {
-            tracing::warn!("No tokio runtime available for key rotation initialization");
+        if let Err(e) = init_result {
+            tracing::error!("Failed to initialize key rotation storage: {}", e);
             return None;
         }
 
         let km_arc = std::sync::Arc::new(key_manager.clone());
 
-        // Spawn the KeyRotationAgent
-        if let Ok(_handle) = tokio::runtime::Handle::try_current() {
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    // Initialize agent runtime if not already done
-                    if builder.agent_runtime.is_none() {
-                        builder.agent_runtime =
-                            Some(acton_reactive::prelude::ActonApp::launch_async().await);
-                    }
+        // Spawn the KeyRotationAgent. The runtime flavor was verified above.
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                // Initialize agent runtime if not already done
+                if builder.agent_runtime.is_none() {
+                    builder.agent_runtime =
+                        Some(acton_reactive::prelude::ActonApp::launch_async().await);
+                }
 
-                    if let Some(ref mut runtime) = builder.agent_runtime {
-                        match crate::auth::key_rotation::KeyRotationAgent::spawn(
-                            runtime,
-                            key_manager,
-                            kr_config,
-                            #[cfg(feature = "audit")]
-                            audit_logger.clone(),
-                        )
-                        .await
-                        {
-                            Ok(_handle) => {
-                                tracing::info!("Key rotation agent spawned");
-                            }
-                            Err(e) => {
-                                tracing::error!("Failed to spawn key rotation agent: {}", e);
-                            }
+                if let Some(ref mut runtime) = builder.agent_runtime {
+                    match crate::auth::key_rotation::KeyRotationAgent::spawn(
+                        runtime,
+                        key_manager,
+                        kr_config,
+                        #[cfg(feature = "audit")]
+                        audit_logger.clone(),
+                    )
+                    .await
+                    {
+                        Ok(_handle) => {
+                            tracing::info!("Key rotation agent spawned");
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to spawn key rotation agent: {}", e);
                         }
                     }
-                });
+                }
             });
-        }
+        });
 
         Some(km_arc)
     }
@@ -1928,16 +2008,8 @@ where
 /// check this up front rather than discovering the flavor as a panic inside
 /// tokio during `build()`.
 ///
-/// Gated to match its call sites: every caller sits inside the agent-runtime
-/// block, which only exists when one of these features pulls in a pool agent.
-#[cfg(any(
-    feature = "database",
-    feature = "cache",
-    feature = "events",
-    feature = "turso",
-    feature = "surrealdb",
-    feature = "clickhouse"
-))]
+/// Ungated: the background-worker and actor-extension call sites carry no
+/// feature gate of their own, so this is reachable in every build.
 fn runtime_supports_block_in_place() -> Option<bool> {
     tokio::runtime::Handle::try_current()
         .ok()
@@ -2603,6 +2675,166 @@ mod tests {
         assert!(
             err.to_string().contains("audit"),
             "error must name the audit subsystem: {err}"
+        );
+    }
+
+    /// Base config for the current-thread guard tests below.
+    ///
+    /// Audit is enabled by default and its own guard fires first, so it is
+    /// switched off here — otherwise the audit startup error would mask the
+    /// subsystem actually under test.
+    #[cfg(test)]
+    fn config_without_audit() -> crate::config::Config<()> {
+        let base = crate::config::Config::<()>::default();
+        crate::config::Config::<()> {
+            service: crate::config::ServiceConfig {
+                port: 0,
+                ..base.service.clone()
+            },
+            #[cfg(feature = "audit")]
+            audit: Some(crate::audit::AuditConfig {
+                enabled: false,
+                ..Default::default()
+            }),
+            ..base
+        }
+    }
+
+    /// A configured background worker cannot spawn its agent on a
+    /// current-thread runtime; `try_build()` must say so instead of letting
+    /// `block_in_place` panic inside tokio.
+    #[tokio::test]
+    async fn build_refuses_background_worker_on_current_thread_runtime() {
+        use crate::prelude::ServiceBuilder;
+
+        let config = crate::config::Config::<()> {
+            background_worker: Some(crate::agents::BackgroundWorkerConfig {
+                enabled: true,
+                ..Default::default()
+            }),
+            ..config_without_audit()
+        };
+
+        let Err(err) = ServiceBuilder::new().with_config(config).try_build() else {
+            panic!("try_build() must refuse a background worker it cannot spawn");
+        };
+        assert!(
+            err.to_string().contains("background worker"),
+            "error must name the background worker subsystem: {err}"
+        );
+    }
+
+    /// Registered actor extensions cannot be spawned on a current-thread
+    /// runtime, so the build must fail with a message naming them.
+    #[tokio::test]
+    async fn build_refuses_actor_extensions_on_current_thread_runtime() {
+        use crate::extensions::ActorExtension;
+        use crate::prelude::ServiceBuilder;
+        use acton_reactive::prelude::{Idle, ManagedActor};
+
+        #[derive(Debug, Default, Clone)]
+        struct NoopActor;
+
+        impl ActorExtension for NoopActor {
+            fn configure(_actor: &mut ManagedActor<Idle, Self>) {}
+        }
+
+        let Err(err) = ServiceBuilder::new()
+            .with_config(config_without_audit())
+            .with_actor::<NoopActor>()
+            .try_build()
+        else {
+            panic!("try_build() must refuse actor extensions it cannot spawn");
+        };
+        assert!(
+            err.to_string().contains("actor extensions"),
+            "error must name the actor-extension subsystem: {err}"
+        );
+    }
+
+    /// Cedar cannot load its policy set on a current-thread runtime. Failing
+    /// closed matters most here: silently continuing would serve routes with
+    /// no policy enforcement at all.
+    #[cfg(feature = "cedar-authz")]
+    #[tokio::test]
+    async fn build_refuses_cedar_on_current_thread_runtime() {
+        use crate::prelude::ServiceBuilder;
+
+        let config = crate::config::Config::<()> {
+            cedar: Some(crate::config::CedarConfig {
+                enabled: true,
+                // Never read: the flavor guard fires before any policy load.
+                policy_path: "/nonexistent/policies.cedar".into(),
+                hot_reload: false,
+                hot_reload_interval_secs: 30,
+                cache_enabled: false,
+                cache_ttl_secs: 60,
+                fail_open: false,
+            }),
+            ..config_without_audit()
+        };
+
+        let Err(err) = ServiceBuilder::new().with_config(config).try_build() else {
+            panic!("try_build() must refuse Cedar it cannot initialize");
+        };
+        assert!(
+            err.to_string().contains("Cedar"),
+            "error must name the Cedar subsystem: {err}"
+        );
+    }
+
+    /// Redis-backed sessions must fail on the runtime flavor *before* any
+    /// connection is attempted, so this test needs no Redis instance — the
+    /// URL below is never dialed.
+    #[cfg(feature = "session-redis")]
+    #[tokio::test]
+    async fn build_refuses_redis_sessions_on_current_thread_runtime() {
+        use crate::prelude::ServiceBuilder;
+
+        let config = crate::config::Config::<()> {
+            session: Some(crate::session::SessionConfig {
+                storage: crate::session::SessionStorage::Redis,
+                // Unreachable on purpose: the guard must fire before dialing.
+                redis_url: Some("redis://127.0.0.1:1/".to_string()),
+                ..Default::default()
+            }),
+            ..config_without_audit()
+        };
+
+        let Err(err) = ServiceBuilder::new().with_config(config).try_build() else {
+            panic!("try_build() must refuse Redis sessions it cannot initialize");
+        };
+        assert!(
+            err.to_string().contains("Redis-backed sessions"),
+            "error must name the Redis session subsystem: {err}"
+        );
+    }
+
+    /// Key rotation checks the runtime flavor before it resolves a storage
+    /// backend, so the guard fires even with no database configured and the
+    /// test needs no infrastructure.
+    #[cfg(feature = "auth")]
+    #[tokio::test]
+    async fn build_refuses_key_rotation_on_current_thread_runtime() {
+        use crate::prelude::ServiceBuilder;
+
+        let config = crate::config::Config::<()> {
+            auth: Some(crate::auth::AuthConfig {
+                key_rotation: Some(crate::auth::key_rotation::KeyRotationConfig {
+                    enabled: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..config_without_audit()
+        };
+
+        let Err(err) = ServiceBuilder::new().with_config(config).try_build() else {
+            panic!("try_build() must refuse key rotation it cannot initialize");
+        };
+        assert!(
+            err.to_string().contains("key rotation"),
+            "error must name the key rotation subsystem: {err}"
         );
     }
 
