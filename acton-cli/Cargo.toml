@@ -12,6 +12,11 @@ readme = "README.md"
 keywords = ["microservice", "cli", "scaffolding", "codegen", "framework"]
 categories = ["command-line-utilities", "development-tools::build-utils"]
 
+# The CLI is being deprecated and will not receive further crates.io releases.
+# `cargo publish` refuses this crate outright rather than relying on whoever
+# runs the release to remember to skip it.
+publish = false
+
 [[bin]]
 name = "acton"
 path = "src/main.rs"
