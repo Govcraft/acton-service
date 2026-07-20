@@ -21,6 +21,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It previously logged a warning and *skipped the authentication middleware
   entirely*, so a typo in the token config silently published every
   authenticated route unauthenticated. (#41)
+- **grpc**: gRPC routes now receive framework-managed token authentication
+  and Cedar authorization. Merged axum routers do not inherit each other's
+  layers, so the gRPC surface was previously mounted with *none* of the
+  HTTP-side auto-applied middleware: a service configuring `[token]` and
+  `[cedar]` served every gRPC method unauthenticated and unauthorized unless
+  the developer hand-wired interceptors per service. With `[token]`
+  configured, a `GrpcTokenAuthLayer` now validates the `authorization`
+  metadata and injects `Claims`; with `[cedar]` enabled, each method is
+  authorized as `Action::"/package.Service/Method"`. Health
+  (`grpc.health.v1.Health`) and reflection services stay credential-free for
+  infrastructure probes, and `public_paths` prefixes are honored for
+  intentionally public methods. Deployments that relied on open gRPC
+  alongside a configured `[token]` section must list those methods in
+  `public_paths`. (#36)
+- **cedar**: An enabled `[cedar]` section whose initialization fails (e.g.
+  unreadable or invalid policy file) is now a hard startup failure surfaced
+  via `try_build()`/`serve()`. Previously it logged a warning and served
+  every route with **no policy enforcement at all** — the same
+  silently-weaker-than-configured class as the TLS and token-auth degrades
+  fixed by #41. (#36)
 
 ### Features
 
@@ -37,6 +57,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   time-of-check/time-of-use window in which renewal hooks or permission
   changes could alter the material between validation and listen. When set,
   the override wins over the corresponding config section. (#41)
+- **grpc**: `GrpcTokenAuthLayer` — an HTTP-level, `NamedService`-forwarding
+  token authentication layer for manual gRPC stack composition (validates
+  bearer tokens via any `TokenValidator`, injects `Claims` into request
+  extensions, answers failures with `UNAUTHENTICATED`). The framework
+  applies it automatically when `[token]` is configured; the type is public
+  for hand-rolled stacks. (#36)
+- **examples**: `cedar-grpc` — a runnable end-to-end example of
+  framework-managed gRPC authentication + Cedar authorization, with demo
+  tokens printed at startup and grpcurl commands for the allow, deny, and
+  unauthenticated paths. (#36)
 
 ### Notes
 
@@ -48,6 +78,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixes
 
+- **cedar**: The gRPC `CedarAuthzLayer`/`CedarAuthzService` is now usable.
+  The previous `Service` impl was generic over `tonic::Request` with
+  `Error = Status` — bounds no tonic generated server (or anything else)
+  satisfies — so the layer could not wrap any service, and it read the
+  method from the `:path` metadata key, which HTTP/2 pseudo-headers never
+  populate. The service now operates at the HTTP level
+  (`http::Request<B>` → `http::Response<B>`, gRPC statuses for denials),
+  takes the method from the request URI, and forwards `NamedService` from
+  the inner service, so a wrapped service registers cleanly with
+  `GrpcServicesBuilder::add_service`. (#36)
 - **audit**: Database-backed audit storage is now actually attached. The
   builder previously hardcoded the audit logger's storage to `None`, so a
   service enabling `audit` plus a database feature got tracing/syslog-only

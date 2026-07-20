@@ -582,7 +582,34 @@ async fn get_user(&self, request: Request<GetUserRequest>)
 
 ### Token Authentication (PASETO/JWT)
 
-Validate tokens in gRPC requests using PASETO (default) or JWT:
+When `[token]` is configured, token authentication is applied to all
+registered gRPC services **automatically** — no interceptor wiring needed.
+The `authorization` metadata is validated, `Claims` are injected into
+request extensions, and failures return `UNAUTHENTICATED`. Health and
+reflection services are exempt so infrastructure probes work without
+credentials, and `public_paths` prefixes in the token config exempt
+intentionally public methods:
+
+```toml
+[token]
+format = "paseto"
+version = "v4"
+purpose = "local"
+key_path = "./keys/paseto.key"
+# Optional: methods that stay public, matched by prefix
+public_paths = ["/hello.v1.PublicService/"]
+```
+
+With `[cedar]` also enabled, each method is additionally authorized against
+Cedar policies as `Action::"/package.Service/Method"` — see
+[Cedar Authorization](/docs/cedar-auth) and the runnable `cedar-grpc`
+example.
+
+For manually composed stacks you can still wire validation yourself, either
+with the HTTP-level `GrpcTokenAuthLayer` (forwards `NamedService`, so the
+wrapped service registers directly with `add_service`) or with tonic
+interceptors. Note that manual wiring on top of a configured `[token]`
+section validates the token twice — harmless, but redundant:
 
 ```rust
 use acton_service::grpc::interceptors::paseto_auth_interceptor;

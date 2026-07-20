@@ -272,6 +272,11 @@ name = "single-port"
 path = "examples/grpc/single-port.rs"
 required-features = ["grpc"]
 
+[[example]]
+name = "cedar-grpc"
+path = "examples/grpc/cedar-grpc.rs"
+required-features = ["grpc", "cedar-authz", "auth"]
+
 # Event-driven examples
 [[example]]
 name = "event-driven"

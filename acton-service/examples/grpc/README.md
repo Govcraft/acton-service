@@ -19,6 +19,25 @@ Run with:
 cargo run --manifest-path=../../Cargo.toml --example single-port --features grpc
 ```
 
+### cedar-grpc.rs
+
+**Framework-managed authentication + Cedar authorization for gRPC**
+
+Demonstrates:
+- PASETO token authentication applied automatically to all gRPC services
+  (from the `[token]` config, no interceptor wiring)
+- Cedar policy enforcement per gRPC method (`Action::"/package.Service/Method"`)
+- Health/reflection exemption for credential-less infrastructure probes
+- Denials returned as proper gRPC statuses (`UNAUTHENTICATED`, `PERMISSION_DENIED`)
+
+Run with:
+```bash
+cargo run --manifest-path=../../Cargo.toml --example cedar-grpc --features "grpc,cedar-authz,auth"
+```
+
+The example prints ready-to-use test tokens on startup; see the module docs
+in `cedar-grpc.rs` for grpcurl commands exercising the allow and deny paths.
+
 ## Prerequisites
 
 The gRPC examples require:
