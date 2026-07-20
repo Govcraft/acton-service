@@ -421,15 +421,18 @@ pub fn tonic_client_tls_config(
 ///
 /// Read this before reaching for the type, because it does not behave like its
 /// server-side counterpart [`crate::tls::TlsConfigSource`]. That type swaps
-/// credentials *inside* a live listener; this one cannot do the equivalent. A
-/// [`reqwest::Client`] bakes its TLS configuration in at `build()` and exposes
-/// no way to change it afterwards, and a [`tonic::transport::Channel`] fixes
-/// its configuration when it connects. So a reload here does not mutate an
-/// existing client: it **builds a new one and swaps which client this source
-/// hands out**.
+/// credentials *inside* a live listener. This one replaces the client wholesale:
+/// a reload **builds a new [`reqwest::Client`] and swaps which one this source
+/// hands out**, because a client's TLS configuration is fixed once `build()`
+/// returns and a [`tonic::transport::Channel`]'s is fixed once it connects.
 ///
-/// Three consequences follow, and none of them are visible from the method
-/// signatures alone.
+/// That is a property of *this design*, not a hard limit of the underlying
+/// crates. `rustls` can pick a client identity per handshake through a
+/// [`ResolvesClientCert`](tokio_rustls::rustls::client::ResolvesClientCert)
+/// installed on the `ClientConfig`, which would give the same in-place model the
+/// listener enjoys and retire every caveat below. Building on that is tracked as
+/// a follow-up; until it lands, the three consequences here are real and none of
+/// them are visible from the method signatures alone.
 ///
 /// ## Call [`client()`](Self::client) per request; never cache the handle
 ///
@@ -456,14 +459,16 @@ pub fn tonic_client_tls_config(
 /// spends a full reconnect storm on every tick to install credentials that are
 /// almost always byte-identical to the ones already loaded.
 ///
-/// ## gRPC channels cannot rotate at all
+/// ## gRPC channels do not rotate
 ///
 /// [`tonic_client_tls_config_snapshot`](Self::tonic_client_tls_config_snapshot)
 /// is named for what it is: a point-in-time copy. Once that configuration has
 /// been used to build a channel and the channel has been handed to a generated
 /// client, nothing this source does can affect it. Rotating a gRPC identity
 /// means rebuilding the channel and the client from a fresh snapshot, which is
-/// the caller's job.
+/// the caller's job. (`tonic` can accept a custom connector via
+/// `Endpoint::connect_with_connector`, so a rotating channel is buildable; this
+/// source does not offer one yet.)
 ///
 /// # Failure behaviour
 ///
@@ -1046,10 +1051,15 @@ mod tests {
 
     #[test]
     fn a_cached_client_handle_does_not_observe_a_reload() {
-        // This asserts the documented footgun as behaviour, so that nobody
-        // later "fixes" the documentation into a promise the type cannot keep.
-        // A `reqwest::Client` bakes its TLS configuration in at `build()`, so a
-        // handle taken before a rotation keeps the old certificate forever.
+        // Pins the documented footgun as behaviour, so the docs cannot drift
+        // into promising a rotation this design does not perform: a
+        // `reqwest::Client` fixes its TLS configuration at `build()`, so a
+        // handle taken before a reload keeps the old certificate.
+        //
+        // This asserts what the type does today, not a permanent limit. Moving
+        // to a per-handshake `ResolvesClientCert` would make a cached handle
+        // rotate correctly, and this test should then be inverted rather than
+        // treated as the contract.
         let dir = tempfile::tempdir().expect("temp dir");
         let config = write_identity(dir.path(), &generate_cert("client"));
         let source = ClientIdentitySource::from_config(&config).expect("initial load");
