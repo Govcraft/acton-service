@@ -98,7 +98,8 @@ acton-service uses feature flags to keep compile times fast and binary sizes sma
         ├─── Brute force protection ─────▶ Add "login-lockout"
         ├─── Rate limiting ───────────────▶ Add "governor"
         ├─── Resilience ──────────────────▶ Add "resilience"
-        ├─── Metrics ─────────────────────▶ Add "otel-metrics"
+        ├─── Metrics (OTLP push) ─────────▶ Add "otel-metrics"
+        ├─── Metrics (Prometheus pull) ───▶ Add "prometheus-metrics"
         └─── OpenAPI ─────────────────────▶ Add "openapi"
 ```
 
@@ -647,19 +648,39 @@ Advanced rate limiting with per-user limits via token claims.
 
 ### `otel-metrics`
 
-HTTP metrics collection via OpenTelemetry for detailed monitoring.
+HTTP metrics collection via OpenTelemetry, pushed to a collector over OTLP.
 
-**When to use**: Need detailed request metrics for monitoring
+**When to use**: Need detailed request metrics and you run an OpenTelemetry collector
 
-**Dependencies**: tower-otel-http-metrics
+**Dependencies**: opentelemetry-instrumentation-tower, opentelemetry-otlp
 
 **Provides**:
 - Request count, duration, size metrics
 - Active request tracking
 - HTTP status code distribution
+- OTLP push export (15s interval) to the configured `[otlp]` endpoint
 
 ```toml
 {% $dep.otelMetrics %}
+```
+
+### `prometheus-metrics`
+
+The same OpenTelemetry HTTP metrics, exposed for a direct Prometheus scrape — no collector required.
+
+**When to use**: Operators point Prometheus straight at the service, or running a collector is not worth it
+
+**Dependencies**: opentelemetry-instrumentation-tower, opentelemetry-prometheus
+
+**Provides**:
+- `GET /metrics` in Prometheus text-exposition format, mounted alongside `/health` and `/ready`
+- The same request metrics as `otel-metrics`, plus any application metrics registered through `get_meter()`
+- Independent of `otel-metrics`: enable either or both; with both, one meter provider feeds both exporters
+
+The endpoint is unauthenticated like `/health` — it exposes route names and traffic statistics, so restrict access at the network layer if that matters in your deployment. `/metrics` is excluded from audit-logged routes by default.
+
+```toml
+{% $dep.prometheusMetrics %}
 ```
 
 ### `tls`
@@ -1008,6 +1029,7 @@ Some features work better together:
 | `cedar-authz` | `cache` | Policy decision caching dramatically improves performance (10-50ms → 1-5ms) |
 | `cache` | `governor` | Distributed rate limiting needs Redis |
 | `otel-metrics` | `observability` | Metrics require tracing foundation |
+| `prometheus-metrics` | `http` | The `/metrics` scrape endpoint is served by the HTTP router |
 | `journald` | `observability` | Journald layer works alongside OTLP tracing |
 | `resilience` | `http` or `grpc` | Resilience patterns apply to HTTP/gRPC calls |
 | `openapi` | `http` | OpenAPI docs are for HTTP endpoints |
