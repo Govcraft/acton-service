@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.31.1] - 2026-07-20
+
+Makes gRPC-over-TLS work end to end. Two complementary bugs left an
+acton-service gRPC client unable to reach an acton-service gRPC TLS listener
+through tonic's TLS plumbing; both are fixed here. No API changes.
+
+### Fixed
+
+- **tls**: The TLS listener now advertises ALPN (`[h2, http/1.1]`).
+  `load_server_config` previously set no `alpn_protocols`, so the listener
+  answered no ALPN offer and strict gRPC clients — a `tonic` `ClientTlsConfig`
+  without `assume_http2`, grpcurl, or any non-Rust stack — failed with
+  `H2NotNegotiated`. Clients that offer no ALPN are unaffected. (#98)
+- **client-tls**: `ClientIdentitySource::grpc_channel` no longer fails the first
+  RPC with `HttpsUriWithoutTlsSupport`. With any tonic TLS feature compiled in
+  (which `crypto-aws-lc-rs`/`crypto-ring` always pull), tonic wrapped the custom
+  rotating connector in a scheme-inspecting connector that rejected the `https`
+  URI before the connector ran. The channel is now built through
+  `tonic::transport::Channel::new`, tonic's lower-level custom-connector entry
+  point, which skips that wrapper while preserving the endpoint's per-RPC
+  timeout, keep-alive, concurrency, HTTP/2 tuning and user agent.
+  `Endpoint::connect_timeout` is not honoured on this path (a tonic limitation);
+  the method's docs note the caller-side remedy. (#97)
+
 ## [acton-service-v0.31.0] - 2026-07-20
 
 Hardens the 0.30.0 mutual-TLS surface. The headline fix closes a
