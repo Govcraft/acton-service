@@ -1024,9 +1024,7 @@ impl ClickHousePoolAgent {
 
                     match result {
                         Ok(Ok(client)) => {
-                            self_handle
-                                .send(ClickHouseClientConnected { client })
-                                .await;
+                            self_handle.send(ClickHouseClientConnected { client }).await;
                         }
                         Ok(Err(e)) => {
                             self_handle

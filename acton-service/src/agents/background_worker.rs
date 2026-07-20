@@ -540,7 +540,9 @@ mod tests {
             task_shutdown_timeout_secs: 5,
             cleanup_interval_secs: 0,
         };
-        let worker = BackgroundWorker::spawn(&mut runtime, &config).await.unwrap();
+        let worker = BackgroundWorker::spawn(&mut runtime, &config)
+            .await
+            .unwrap();
 
         let (tx, rx) = tokio::sync::watch::channel(false);
         let running_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -561,8 +563,7 @@ mod tests {
                     let running = running;
                     let max_obs = max_obs;
                     async move {
-                        let current =
-                            running.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                        let current = running.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                         max_obs.fetch_max(current, std::sync::atomic::Ordering::SeqCst);
 
                         // Wait for signal to complete
@@ -594,7 +595,9 @@ mod tests {
     async fn test_cleanup_finished_tasks() {
         let mut runtime = ActonApp::launch_async().await;
         let config = BackgroundWorkerConfig::default();
-        let worker = BackgroundWorker::spawn(&mut runtime, &config).await.unwrap();
+        let worker = BackgroundWorker::spawn(&mut runtime, &config)
+            .await
+            .unwrap();
 
         // Submit tasks that complete immediately
         for i in 0..3 {
@@ -624,7 +627,9 @@ mod tests {
             task_shutdown_timeout_secs: 10,
             cleanup_interval_secs: 0,
         };
-        let worker = BackgroundWorker::spawn(&mut runtime, &config).await.unwrap();
+        let worker = BackgroundWorker::spawn(&mut runtime, &config)
+            .await
+            .unwrap();
 
         assert_eq!(worker.shutdown_timeout(), Duration::from_secs(10));
 

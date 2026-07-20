@@ -37,10 +37,7 @@ fn build_app(config: RateLimitConfig, auto_apply: bool) -> Router {
 
     if auto_apply {
         let gov = GovernorRateLimit::new(config);
-        app.layer(from_fn_with_state(
-            gov,
-            GovernorRateLimit::middleware,
-        ))
+        app.layer(from_fn_with_state(gov, GovernorRateLimit::middleware))
     } else {
         app
     }

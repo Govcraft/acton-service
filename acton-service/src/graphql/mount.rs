@@ -50,12 +50,13 @@ pub fn build_router(
 
         let with_deprecation = if let Some(deprecation) = entry.deprecation {
             // Apply per-version deprecation headers + warning log.
-            let layered = Router::<()>::new()
-                .route(&path, method_router)
-                .layer(middleware::from_fn(move |req, next: Next| {
-                    let deprecation = deprecation.clone();
-                    async move { apply_deprecation_headers(req, next, deprecation).await }
-                }));
+            let layered =
+                Router::<()>::new()
+                    .route(&path, method_router)
+                    .layer(middleware::from_fn(move |req, next: Next| {
+                        let deprecation = deprecation.clone();
+                        async move { apply_deprecation_headers(req, next, deprecation).await }
+                    }));
             layered
         } else {
             Router::<()>::new().route(&path, method_router)

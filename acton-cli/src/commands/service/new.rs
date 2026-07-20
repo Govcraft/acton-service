@@ -431,10 +431,7 @@ fn show_success(config: &ServiceConfig, project_path: &Path) {
             println!("  {} gRPC service", "✓".green());
         }
         if config.graphql {
-            println!(
-                "  {} GraphQL transport at /api/v1/graphql",
-                "✓".green()
-            );
+            println!("  {} GraphQL transport at /api/v1/graphql", "✓".green());
         }
         if let Some(db) = &config.database {
             println!("  {} {} database with connection pooling", "✓".green(), db);

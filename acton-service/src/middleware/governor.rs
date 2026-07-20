@@ -231,8 +231,7 @@ impl GovernorRateLimit {
         );
 
         // Check rate limit and get result for headers
-        let result = match rate_limit.check_rate_limit(&method, &path, claims.as_ref(), client_ip)
-        {
+        let result = match rate_limit.check_rate_limit(&method, &path, claims.as_ref(), client_ip) {
             Ok(result) => result,
             Err(e) => {
                 // Mirror the Redis rate limiter: rejections are audit-visible

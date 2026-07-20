@@ -292,8 +292,9 @@ impl GrpcRateLimitLayer {
         // Replenish one token every period/requests, with bucket capacity
         // burst_size — the same quota shape as the HTTP-side governor.
         let requests = u64::from(config.requests_per_period.max(1));
-        let replenish_interval =
-            std::time::Duration::from_millis((config.period().as_millis() as u64 / requests).max(1));
+        let replenish_interval = std::time::Duration::from_millis(
+            (config.period().as_millis() as u64 / requests).max(1),
+        );
         let burst = NonZeroU32::new(config.burst_size.max(1)).expect("max(1) is non-zero");
         let quota = governor::Quota::with_period(replenish_interval)
             .expect("replenish interval is non-zero")

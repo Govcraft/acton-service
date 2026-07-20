@@ -556,8 +556,7 @@ where
         if self.clickhouse().await.is_some() {
             if let Some(ch_config) = &self.config.clickhouse {
                 summary.clickhouse = Some(crate::pool_health::ClickHouseHealth::from_config(
-                    ch_config,
-                    true, // connected
+                    ch_config, true, // connected
                 ));
             }
         }
@@ -934,8 +933,7 @@ mod tests {
         #[tokio::test]
         async fn test_clickhouse_state_survives_clone() {
             let mut state = AppState::<()>::default();
-            let client = clickhouse::Client::default()
-                .with_url("http://localhost:8123");
+            let client = clickhouse::Client::default().with_url("http://localhost:8123");
             let storage = std::sync::Arc::new(tokio::sync::RwLock::new(Some(client)));
             state.set_clickhouse_client_storage(storage);
 

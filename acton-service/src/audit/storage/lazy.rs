@@ -252,11 +252,17 @@ mod tests {
         let storage = LazyAuditStorage::<MockStorage>::new(shared.clone());
 
         storage.ensure_ready().await.unwrap();
-        assert_eq!(storage.resolved.read().await.as_ref().unwrap().conn, "first");
+        assert_eq!(
+            storage.resolved.read().await.as_ref().unwrap().conn,
+            "first"
+        );
 
         // A later pool swap must not silently re-point an already-resolved chain.
         *shared.write().await = Some("second");
         storage.ensure_ready().await.unwrap();
-        assert_eq!(storage.resolved.read().await.as_ref().unwrap().conn, "first");
+        assert_eq!(
+            storage.resolved.read().await.as_ref().unwrap().conn,
+            "first"
+        );
     }
 }

@@ -176,7 +176,10 @@ mod helper_tests {
 
     #[test]
     fn parse_custom_preserves_unprefixed_user_strings() {
-        assert_eq!(parse_custom_kind("billing.invoice.paid"), "billing.invoice.paid");
+        assert_eq!(
+            parse_custom_kind("billing.invoice.paid"),
+            "billing.invoice.paid"
+        );
     }
 
     #[test]
@@ -184,6 +187,9 @@ mod helper_tests {
         // The warn fires (verified manually / via tracing subscribers in
         // integration tests); we assert the returned string preserves the
         // original so operators can grep for it in their event store.
-        assert_eq!(parse_custom_kind("auth.token.invalid"), "auth.token.invalid");
+        assert_eq!(
+            parse_custom_kind("auth.token.invalid"),
+            "auth.token.invalid"
+        );
     }
 }

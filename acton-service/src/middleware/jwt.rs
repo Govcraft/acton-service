@@ -157,7 +157,10 @@ impl JwtAuth {
             || path == "/ready"
             || path.starts_with("/swagger-ui")
             || path.starts_with("/api-docs")
-            || auth.public_paths.iter().any(|p| path.starts_with(p.as_str()))
+            || auth
+                .public_paths
+                .iter()
+                .any(|p| path.starts_with(p.as_str()))
         {
             return Ok(next.run(request).await);
         }

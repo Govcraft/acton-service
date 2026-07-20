@@ -1704,8 +1704,7 @@ mod tests {
             "key_path": "/etc/tls/key.pem"
         }"#;
 
-        let tls: TlsConfig =
-            serde_json::from_str(json).expect("minimal TLS config must parse");
+        let tls: TlsConfig = serde_json::from_str(json).expect("minimal TLS config must parse");
 
         assert!(
             tls.client_ca_path.is_none(),
@@ -1728,8 +1727,7 @@ mod tests {
             "client_auth_optional": true
         }"#;
 
-        let tls: TlsConfig =
-            serde_json::from_str(json).expect("mutual TLS config must parse");
+        let tls: TlsConfig = serde_json::from_str(json).expect("mutual TLS config must parse");
 
         assert_eq!(
             tls.client_ca_path.as_deref(),

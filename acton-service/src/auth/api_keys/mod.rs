@@ -21,9 +21,9 @@
 //! }
 //! ```
 
-use chrono::Utc;
 #[cfg(any(feature = "database", feature = "turso"))]
 use chrono::DateTime;
+use chrono::Utc;
 
 use crate::auth::password::PasswordHasher;
 use crate::error::Error;

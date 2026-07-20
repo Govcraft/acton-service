@@ -190,12 +190,9 @@ impl From<AuditQueryRow> for AuditEvent {
             _ => AuditSeverity::Informational,
         };
 
-        let timestamp = DateTime::from_timestamp_millis(row.timestamp)
-            .unwrap_or_else(Utc::now);
+        let timestamp = DateTime::from_timestamp_millis(row.timestamp).unwrap_or_else(Utc::now);
 
-        let metadata = row
-            .metadata
-            .and_then(|m| serde_json::from_str(&m).ok());
+        let metadata = row.metadata.and_then(|m| serde_json::from_str(&m).ok());
 
         AuditEvent {
             id: row.id,
@@ -247,9 +244,7 @@ impl AuditStorage for ClickHouseAuditStorage {
             .query("SELECT ?fields FROM audit_events ORDER BY sequence DESC LIMIT 1")
             .fetch_all::<AuditQueryRow>()
             .await
-            .map_err(|e| {
-                Error::ClickHouse(format!("Failed to fetch latest audit event: {}", e))
-            })?;
+            .map_err(|e| Error::ClickHouse(format!("Failed to fetch latest audit event: {}", e)))?;
 
         Ok(rows.into_iter().next().map(Into::into))
     }
@@ -374,7 +369,11 @@ mod tests {
     #[test]
     fn test_insert_row_preserves_all_source_fields() {
         let ts = Utc.with_ymd_and_hms(2025, 6, 15, 10, 30, 0).unwrap();
-        let event = make_event(AuditEventKind::AuthLoginSuccess, AuditSeverity::Informational, ts);
+        let event = make_event(
+            AuditEventKind::AuthLoginSuccess,
+            AuditSeverity::Informational,
+            ts,
+        );
         let row = AuditInsertRow::from(&event);
 
         assert_eq!(row.id, event.id);
@@ -387,7 +386,11 @@ mod tests {
     #[test]
     fn test_insert_row_preserves_http_fields() {
         let ts = Utc::now();
-        let event = make_event(AuditEventKind::HttpRequest, AuditSeverity::Informational, ts);
+        let event = make_event(
+            AuditEventKind::HttpRequest,
+            AuditSeverity::Informational,
+            ts,
+        );
         let row = AuditInsertRow::from(&event);
 
         assert_eq!(row.method, Some("POST".to_string()));
@@ -399,7 +402,11 @@ mod tests {
     #[test]
     fn test_insert_row_timestamp_is_epoch_millis() {
         let ts = Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
-        let event = make_event(AuditEventKind::HttpRequest, AuditSeverity::Informational, ts);
+        let event = make_event(
+            AuditEventKind::HttpRequest,
+            AuditSeverity::Informational,
+            ts,
+        );
         let row = AuditInsertRow::from(&event);
 
         assert_eq!(row.timestamp, ts.timestamp_millis());
@@ -433,7 +440,11 @@ mod tests {
     #[test]
     fn test_insert_row_serializes_metadata_as_json_string() {
         let ts = Utc::now();
-        let event = make_event(AuditEventKind::HttpRequest, AuditSeverity::Informational, ts);
+        let event = make_event(
+            AuditEventKind::HttpRequest,
+            AuditSeverity::Informational,
+            ts,
+        );
         let row = AuditInsertRow::from(&event);
 
         let metadata_str = row.metadata.unwrap();
@@ -445,7 +456,11 @@ mod tests {
     #[test]
     fn test_insert_row_handles_none_metadata() {
         let ts = Utc::now();
-        let mut event = make_event(AuditEventKind::HttpRequest, AuditSeverity::Informational, ts);
+        let mut event = make_event(
+            AuditEventKind::HttpRequest,
+            AuditSeverity::Informational,
+            ts,
+        );
         event.metadata = None;
         let row = AuditInsertRow::from(&event);
 
@@ -455,11 +470,18 @@ mod tests {
     #[test]
     fn test_insert_row_handles_none_hash() {
         let ts = Utc::now();
-        let mut event = make_event(AuditEventKind::HttpRequest, AuditSeverity::Informational, ts);
+        let mut event = make_event(
+            AuditEventKind::HttpRequest,
+            AuditSeverity::Informational,
+            ts,
+        );
         event.hash = None;
         let row = AuditInsertRow::from(&event);
 
-        assert_eq!(row.hash, "", "None hash should become empty string for ClickHouse non-nullable column");
+        assert_eq!(
+            row.hash, "",
+            "None hash should become empty string for ClickHouse non-nullable column"
+        );
     }
 
     #[test]
@@ -712,7 +734,7 @@ mod tests {
 
         assert_eq!(make_row(0).severity.as_syslog_severity(), 0); // Emergency
         assert_eq!(make_row(7).severity.as_syslog_severity(), 7); // Debug
-        // Out-of-range values should default to Informational (6)
+                                                                  // Out-of-range values should default to Informational (6)
         assert_eq!(make_row(255).severity.as_syslog_severity(), 6);
         assert_eq!(make_row(100).severity.as_syslog_severity(), 6);
     }

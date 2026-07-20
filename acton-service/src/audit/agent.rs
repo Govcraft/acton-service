@@ -485,8 +485,8 @@ async fn run_cleanup(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
     use std::time::Duration;
 
     use async_trait::async_trait;

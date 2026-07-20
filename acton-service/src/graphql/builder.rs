@@ -23,7 +23,9 @@ use super::service::ActonGraphQL;
 /// Type-erased GraphQL executor. The `Schema<Q, M, S>` generics are erased
 /// here so the registry can hold heterogeneous schemas keyed by version.
 pub(crate) type ErasedExecutor = Arc<
-    dyn Fn(async_graphql::BatchRequest) -> futures::future::BoxFuture<'static, async_graphql::BatchResponse>
+    dyn Fn(
+            async_graphql::BatchRequest,
+        ) -> futures::future::BoxFuture<'static, async_graphql::BatchResponse>
         + Send
         + Sync,
 >;

@@ -11,18 +11,18 @@
 use std::convert::Infallible;
 use std::time::Duration;
 
+use axum::error_handling::HandleErrorLayer;
 use axum::http::StatusCode;
 use axum::response::Response;
-use axum::error_handling::HandleErrorLayer;
 use axum::Router;
 
 use tower::{BoxError, ServiceBuilder};
 
 pub use tower_resilience_bulkhead::BulkheadLayer;
+use tower_resilience_circuitbreaker::classifier::FnClassifier;
 pub use tower_resilience_circuitbreaker::{
     CircuitBreakerConfigBuilder, CircuitBreakerLayer, CircuitState,
 };
-use tower_resilience_circuitbreaker::classifier::FnClassifier;
 
 /// Failure classification used by [`ResilienceConfig::http_circuit_breaker_layer`].
 ///
@@ -175,9 +175,7 @@ impl ResilienceConfig {
     /// [`apply_resilience`], which wires that up for you.
     ///
     /// [`Router`]: axum::Router
-    pub fn http_circuit_breaker_layer(
-        &self,
-    ) -> Option<CircuitBreakerLayer<HttpFailureClassifier>> {
+    pub fn http_circuit_breaker_layer(&self) -> Option<CircuitBreakerLayer<HttpFailureClassifier>> {
         if !self.circuit_breaker_enabled {
             return None;
         }

@@ -25,9 +25,7 @@ use {
 };
 
 #[cfg(feature = "_metrics")]
-use {
-    opentelemetry::metrics::MeterProvider as _, opentelemetry_sdk::metrics::SdkMeterProvider,
-};
+use {opentelemetry::metrics::MeterProvider as _, opentelemetry_sdk::metrics::SdkMeterProvider};
 
 #[cfg(feature = "otel-metrics")]
 use {
@@ -203,7 +201,9 @@ pub(crate) fn init_otlp_tracer(
 /// Extracted so it can be composed as one reader among several on a single
 /// [`SdkMeterProvider`] in [`init_meter_provider`].
 #[cfg(feature = "otel-metrics")]
-fn otlp_metric_reader(otlp_config: &crate::config::OtlpConfig) -> Result<PeriodicReader<MetricExporter>> {
+fn otlp_metric_reader(
+    otlp_config: &crate::config::OtlpConfig,
+) -> Result<PeriodicReader<MetricExporter>> {
     // Build OTLP metric exporter with Tonic gRPC transport
     let mut exporter_builder = MetricExporter::builder().with_tonic();
 
@@ -224,8 +224,10 @@ fn otlp_metric_reader(otlp_config: &crate::config::OtlpConfig) -> Result<Periodi
 
 /// Build the Prometheus pull exporter (a metric reader) and its backing registry.
 #[cfg(feature = "prometheus-metrics")]
-fn prometheus_metric_reader() -> Result<(opentelemetry_prometheus::PrometheusExporter, prometheus::Registry)>
-{
+fn prometheus_metric_reader() -> Result<(
+    opentelemetry_prometheus::PrometheusExporter,
+    prometheus::Registry,
+)> {
     let registry = prometheus::Registry::new();
     let exporter = opentelemetry_prometheus::exporter()
         .with_registry(registry.clone())
@@ -632,7 +634,10 @@ mod tests {
         let registry = prometheus::Registry::new();
         let bytes = encode_registry(&registry).expect("encoding an empty registry should succeed");
         // Empty registry produces no metric families, hence no bytes.
-        assert!(bytes.is_empty(), "empty registry should encode to no output");
+        assert!(
+            bytes.is_empty(),
+            "empty registry should encode to no output"
+        );
     }
 
     #[test]

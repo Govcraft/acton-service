@@ -47,9 +47,7 @@ async fn main() -> Result<()> {
 
     let routes = VersionedApiBuilder::new()
         .with_base_path("/api")
-        .add_version(ApiVersion::V1, |router| {
-            router.route("/hello", get(hello))
-        })
+        .add_version(ApiVersion::V1, |router| router.route("/hello", get(hello)))
         .build_routes();
 
     // ServiceBuilder automatically:
