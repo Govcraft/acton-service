@@ -19,7 +19,7 @@ Tamper-evident audit logging with BLAKE3 hash chaining, automatic auth event cap
 acton-service provides immutable audit trails for security compliance. Every audit event is sealed into a BLAKE3 hash chain, guaranteeing tamper detection. Events are processed sequentially by an internal actor, persisted to your configured database backend with append-only enforcement, and exported to SIEM systems via Syslog or OTLP.
 
 {% callout type="note" title="Actor-Based Processing" %}
-Audit events are processed by an **AuditAgent** (acton-reactive actor) that owns the hash chain state and guarantees correct ordering. Events are sent via fire-and-forget message passing, so audit logging never blocks request handling. See [Reactive Architecture](/docs/reactive-architecture) for details.
+Audit events are processed by an **AuditAgent** (acton-reactive actor) that owns the hash chain state and guarantees correct ordering. Events are sent via fire-and-forget message passing, so audit logging never blocks request handling. Events emitted during startup — including the `ConfigLoaded` compliance event — are buffered until the hash chain initializes, then sealed in emission order, so nothing is lost while storage connects. See [Reactive Architecture](/docs/reactive-architecture) for details.
 {% /callout %}
 
 ### How It Works
