@@ -194,6 +194,33 @@ file produces the same rotation behavior on either path. There is no
 a hook on; a service that needs to reload from a custom trigger should use
 `ServiceBuilder`.
 
+## Handshake timeout
+
+Each TLS handshake runs concurrently, off the listener's accept path, bounded
+by a per-connection timeout. A peer that completes the TCP connect but never
+sends a ClientHello only ties up its own handshake task until the timeout
+elapses — it cannot stall accepting or handshaking any other connection.
+
+```toml
+[tls]
+enabled = true
+cert_path = "./certs/server.pem"
+key_path = "./certs/server-key.pem"
+handshake_timeout_secs = 10
+```
+
+Omit the field to use the built-in default of 10 seconds. `0` is rejected at
+startup rather than failing every handshake instantly. `[grpc.tls]` accepts
+the same field for the separate-port gRPC listener; when absent there, it
+inherits the `[tls]` value.
+
+{% callout type="note" title="Unknown keys are rejected" %}
+`[tls]` and `[grpc.tls]` reject unrecognized keys at startup instead of
+silently ignoring them — a misspelled field like `reload_interval_sec`
+(missing the trailing `s`) now fails to parse rather than quietly disarming
+certificate rotation.
+{% /callout %}
+
 ## Related
 
 - [Feature Flags](/docs/feature-flags#tls) — what the `tls` feature enables, including outbound mutual TLS
