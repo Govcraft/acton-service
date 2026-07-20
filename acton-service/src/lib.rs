@@ -228,6 +228,7 @@ pub mod prelude {
     #[cfg(feature = "cache")]
     pub use crate::middleware::{RedisTokenRevocation, TokenRevocation};
 
+    pub use crate::extensions::{ActorExtension, ActorExtensions};
     #[cfg(feature = "jwt")]
     pub use crate::middleware::JwtAuth;
     pub use crate::responses::{
@@ -235,7 +236,6 @@ pub mod prelude {
     };
     pub use crate::server::Server;
     pub use crate::service_builder::{ActonService, ServiceBuilder, VersionedRoutes};
-    pub use crate::extensions::{ActorExtension, ActorExtensions};
     pub use crate::state::{AppState, AppStateBuilder};
     pub use crate::versioning::{
         extract_version_from_path, versioned_router, ApiVersion, DeprecationInfo,

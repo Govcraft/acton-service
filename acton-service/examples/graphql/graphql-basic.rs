@@ -61,11 +61,7 @@ impl QueryV2 {
     /// Reads a "document". Under the `graphql-cedar` feature this is guarded
     /// by a Cedar policy: the subject must be allowed by an
     /// `Action::"readDocument"` policy on `Document::"<id>"`.
-    async fn document(
-        &self,
-        _ctx: &Context<'_>,
-        id: String,
-    ) -> async_graphql::Result<String> {
+    async fn document(&self, _ctx: &Context<'_>, id: String) -> async_graphql::Result<String> {
         #[cfg(feature = "graphql-cedar")]
         CedarResolverCheck::for_context(_ctx)?
             .with_action("readDocument")

@@ -131,7 +131,8 @@ pub trait AuditStorage: Send + Sync {
     /// Confirm the backend is usable, performing any deferred setup.
     ///
     /// Backends built from an already-connected client are ready immediately.
-    /// Lazily-resolved backends (see [`lazy::LazyAuditStorage`]) return an error
+    /// Lazily-resolved backends (those built from a pool that connects in the
+    /// background) return an error
     /// until their connection pool finishes connecting; the audit agent polls
     /// this before initializing the hash chain so it resumes from the persisted
     /// sequence instead of restarting at zero.
@@ -175,7 +176,10 @@ mod helper_tests {
 
     #[test]
     fn parse_custom_preserves_unprefixed_user_strings() {
-        assert_eq!(parse_custom_kind("billing.invoice.paid"), "billing.invoice.paid");
+        assert_eq!(
+            parse_custom_kind("billing.invoice.paid"),
+            "billing.invoice.paid"
+        );
     }
 
     #[test]
@@ -183,6 +187,9 @@ mod helper_tests {
         // The warn fires (verified manually / via tracing subscribers in
         // integration tests); we assert the returned string preserves the
         // original so operators can grep for it in their event store.
-        assert_eq!(parse_custom_kind("auth.token.invalid"), "auth.token.invalid");
+        assert_eq!(
+            parse_custom_kind("auth.token.invalid"),
+            "auth.token.invalid"
+        );
     }
 }

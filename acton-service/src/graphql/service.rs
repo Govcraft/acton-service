@@ -158,8 +158,6 @@ fn inject_data(
     };
     match batch {
         BatchRequest::Single(single) => BatchRequest::Single(inject(single)),
-        BatchRequest::Batch(batch) => {
-            BatchRequest::Batch(batch.into_iter().map(inject).collect())
-        }
+        BatchRequest::Batch(batch) => BatchRequest::Batch(batch.into_iter().map(inject).collect()),
     }
 }

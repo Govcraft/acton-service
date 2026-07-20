@@ -15,7 +15,7 @@ use std::str::FromStr;
 /// The cryptographic format of a signing key
 ///
 /// Determines which token generator and validator can use this key.
-/// Stored as a string in the database via [`Display`] and [`FromStr`].
+/// Stored as a string in the database via [`Display`](std::fmt::Display) and [`FromStr`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum KeyFormat {
     /// PASETO v4.local (symmetric encryption)
@@ -82,7 +82,7 @@ impl FromStr for KeyFormat {
 /// The lifecycle status of a signing key
 ///
 /// Keys progress through: `Active` -> `Draining` -> `Retired`.
-/// Stored as a string in the database via [`Display`] and [`FromStr`].
+/// Stored as a string in the database via [`Display`](std::fmt::Display) and [`FromStr`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum KeyStatus {
     /// Key is currently used for signing new tokens AND validating existing tokens.

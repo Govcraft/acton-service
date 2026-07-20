@@ -61,10 +61,7 @@ async fn healthy_router_passes_requests_through() {
 #[tokio::test]
 async fn breaker_opens_after_sustained_5xx() {
     let app = apply_resilience(
-        Router::new().route(
-            "/boom",
-            get(|| async { StatusCode::INTERNAL_SERVER_ERROR }),
-        ),
+        Router::new().route("/boom", get(|| async { StatusCode::INTERNAL_SERVER_ERROR })),
         &trip_fast_config(),
     );
 

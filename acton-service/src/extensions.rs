@@ -1,10 +1,10 @@
 //! Actor-backed extensions for custom application state
 //!
-//! This module provides the [`ActorExtension`] trait and supporting types for adding
+//! This module provides the [`ActorExtension`](crate::extensions::ActorExtension) trait and supporting types for adding
 //! custom runtime state to your application. All extensions are backed by supervised
 //! acton-reactive actors, providing:
 //!
-//! - **Supervision**: Automatic restart on failure via configurable [`RestartPolicy`]
+//! - **Supervision**: Automatic restart on failure via configurable [`RestartPolicy`](acton_reactive::prelude::RestartPolicy)
 //! - **Broker subscriptions**: Subscribe to framework-wide broadcast events
 //! - **Observability**: Built-in tracing instrumentation from the actor runtime
 //! - **No mutexes**: State is encapsulated in actors, accessed via message passing
@@ -62,7 +62,8 @@ type SpawnFuture<'a> =
 /// Trait for defining actor-backed extensions.
 ///
 /// Implement this trait on an `#[acton_actor]` struct to register it as a
-/// supervised extension via [`ServiceBuilder::with_actor`].
+/// supervised extension via
+/// [`ServiceBuilder::with_actor`](crate::service_builder::ServiceBuilder::with_actor).
 ///
 /// The [`configure`](ActorExtension::configure) method receives a mutable reference
 /// to the actor builder, where you register message handlers and lifecycle hooks:
@@ -128,7 +129,9 @@ impl<A: ActorExtension> ActorExtensionSpawner for ActorExtensionEntry<A> {
 
 /// Immutable container mapping actor extension types to their handles.
 ///
-/// Constructed during [`ServiceBuilder::build()`] and stored on [`AppState`].
+/// Constructed during
+/// [`ServiceBuilder::build()`](crate::service_builder::ServiceBuilder::build) and stored on
+/// [`AppState`](crate::state::AppState).
 /// Clone is cheap (Arc ref-count bump). When no actor extensions are registered,
 /// the inner map is never allocated.
 #[derive(Clone, Default)]
@@ -372,7 +375,11 @@ mod tests {
         // Both the original and clone should resolve the same handle
         let h1 = extensions.get::<CounterActor>().unwrap();
         let h2 = cloned.get::<CounterActor>().unwrap();
-        assert_eq!(h1.id(), h2.id(), "cloned extensions must share the same handles");
+        assert_eq!(
+            h1.id(),
+            h2.id(),
+            "cloned extensions must share the same handles"
+        );
 
         runtime.shutdown_all().await.unwrap();
     }
@@ -403,12 +410,19 @@ mod tests {
         let counter_entry = ActorExtensionEntry::<CounterActor>(PhantomData);
         let alpha_entry = ActorExtensionEntry::<AlphaActor>(PhantomData);
 
-        let (counter_tid, counter_handle) =
-            counter_entry.spawn(&supervisor_handle, &mut runtime).await.unwrap();
-        let (alpha_tid, alpha_handle) =
-            alpha_entry.spawn(&supervisor_handle, &mut runtime).await.unwrap();
+        let (counter_tid, counter_handle) = counter_entry
+            .spawn(&supervisor_handle, &mut runtime)
+            .await
+            .unwrap();
+        let (alpha_tid, alpha_handle) = alpha_entry
+            .spawn(&supervisor_handle, &mut runtime)
+            .await
+            .unwrap();
 
-        assert_ne!(counter_tid, alpha_tid, "different actor types must have different TypeIds");
+        assert_ne!(
+            counter_tid, alpha_tid,
+            "different actor types must have different TypeIds"
+        );
 
         let mut map = HashMap::new();
         map.insert(counter_tid, counter_handle);
@@ -613,12 +627,16 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         // Broadcast via the broker
-        broker.broadcast(GlobalNotification {
-            payload: "test-1".into(),
-        }).await;
-        broker.broadcast(GlobalNotification {
-            payload: "test-2".into(),
-        }).await;
+        broker
+            .broadcast(GlobalNotification {
+                payload: "test-1".into(),
+            })
+            .await;
+        broker
+            .broadcast(GlobalNotification {
+                payload: "test-2".into(),
+            })
+            .await;
 
         // Allow messages to propagate
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -668,12 +686,18 @@ mod tests {
 
         // Allow after_start to fire
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert!(STARTED.load(Ordering::SeqCst), "after_start should have fired");
+        assert!(
+            STARTED.load(Ordering::SeqCst),
+            "after_start should have fired"
+        );
 
         // Stop the actor
         handle.stop().await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert!(STOPPED.load(Ordering::SeqCst), "before_stop should have fired");
+        assert!(
+            STOPPED.load(Ordering::SeqCst),
+            "before_stop should have fired"
+        );
 
         runtime.shutdown_all().await.unwrap();
     }

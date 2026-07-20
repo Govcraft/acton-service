@@ -21,9 +21,7 @@ pub async fn execute(version: String, cedar: bool, dry_run: bool) -> Result<()> 
     }
 
     if !src_path.exists() {
-        anyhow::bail!(
-            "src/ directory not found. Run this command from a service project root."
-        );
+        anyhow::bail!("src/ directory not found. Run this command from a service project root.");
     }
 
     if graphql_path.exists() {
@@ -34,11 +32,7 @@ pub async fn execute(version: String, cedar: bool, dry_run: bool) -> Result<()> 
     }
 
     utils::write_file(&graphql_path, &graphql::generate_module_with_cedar(cedar))?;
-    println!(
-        "{} created {}",
-        "✓".green().bold(),
-        graphql_path.display()
-    );
+    println!("{} created {}", "✓".green().bold(), graphql_path.display());
 
     if cargo_path.exists() {
         ensure_feature_in_cargo(&cargo_path, cedar)?;

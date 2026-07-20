@@ -24,9 +24,7 @@ use chrono::{DateTime, Utc};
 use crate::auth::api_keys::{ApiKey, ApiKeyStorage};
 #[cfg(feature = "oauth")]
 use crate::auth::oauth::provider::{OAuthProvider, OAuthTokens, OAuthUserInfo};
-use crate::auth::tokens::refresh::{
-    RefreshTokenData, RefreshTokenMetadata, RefreshTokenStorage,
-};
+use crate::auth::tokens::refresh::{RefreshTokenData, RefreshTokenMetadata, RefreshTokenStorage};
 use crate::error::Error;
 
 use super::event::{AuditEvent, AuditEventKind, AuditSeverity, AuditSource};
@@ -561,7 +559,14 @@ mod tests {
             ..RefreshTokenMetadata::default()
         };
         wrapped
-            .rotate("old_jti", "new_jti", "user_9", "fam_1", Utc::now(), &metadata)
+            .rotate(
+                "old_jti",
+                "new_jti",
+                "user_9",
+                "fam_1",
+                Utc::now(),
+                &metadata,
+            )
             .await
             .expect("rotate");
 

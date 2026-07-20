@@ -34,9 +34,7 @@ pub(crate) struct AuditStorageHandles {
 /// database feature is enabled or no pool agent was spawned, in which case the
 /// audit agent runs with an in-memory chain plus syslog/tracing export.
 #[allow(unused_variables, unused_mut)]
-pub(crate) fn select_audit_storage(
-    handles: &AuditStorageHandles,
-) -> Option<Arc<dyn AuditStorage>> {
+pub(crate) fn select_audit_storage(handles: &AuditStorageHandles) -> Option<Arc<dyn AuditStorage>> {
     #[allow(unused_mut)]
     let mut storage: Option<Arc<dyn AuditStorage>> = None;
 

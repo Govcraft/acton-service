@@ -118,7 +118,9 @@ async fn main() -> Result<()> {
     // Build HTTP routes
     let http_routes = VersionedApiBuilder::new()
         .with_base_path("/api")
-        .add_version(ApiVersion::V1, |router| router.route("/hello", get(http_hello)))
+        .add_version(ApiVersion::V1, |router| {
+            router.route("/hello", get(http_hello))
+        })
         .build_routes();
 
     // Enable gRPC in single-port mode.

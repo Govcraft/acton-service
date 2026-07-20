@@ -170,7 +170,10 @@ impl PasetoAuth {
             || path == "/ready"
             || path.starts_with("/swagger-ui")
             || path.starts_with("/api-docs")
-            || auth.public_paths.iter().any(|p| path.starts_with(p.as_str()))
+            || auth
+                .public_paths
+                .iter()
+                .any(|p| path.starts_with(p.as_str()))
         {
             return Ok(next.run(request).await);
         }
@@ -287,7 +290,10 @@ impl PasetoAuth {
     fn parse_string_or_array(value: &serde_json::Value) -> Vec<String> {
         // Direct array
         if let Some(arr) = value.as_array() {
-            return arr.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+            return arr
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect();
         }
         // Stringified JSON array
         if let Some(s) = value.as_str() {

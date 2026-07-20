@@ -347,7 +347,10 @@ mod tests {
     #[test]
     fn test_pool_health_summary_default_is_healthy() {
         let summary = PoolHealthSummary::new();
-        assert!(summary.is_healthy(), "Empty summary with no backends should be healthy");
+        assert!(
+            summary.is_healthy(),
+            "Empty summary with no backends should be healthy"
+        );
     }
 
     #[cfg(feature = "clickhouse")]

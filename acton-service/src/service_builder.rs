@@ -254,7 +254,7 @@ where
     /// [`build()`](Self::build). It must implement [`ActorExtension`](crate::extensions::ActorExtension),
     /// which requires configuring message handlers via the `configure` method.
     ///
-    /// Access the actor's handle in request handlers via [`AppState::actor::<A>()`](crate::AppState::actor).
+    /// Access the actor's handle in request handlers via [`AppState::actor::<A>()`](crate::state::AppState::actor).
     ///
     /// # Example
     ///
@@ -267,9 +267,10 @@ where
     ///     .await?;
     /// ```
     pub fn with_actor<A: crate::extensions::ActorExtension>(mut self) -> Self {
-        self.actor_extensions.push(Box::new(
-            crate::extensions::ActorExtensionEntry::<A>(std::marker::PhantomData),
-        ));
+        self.actor_extensions
+            .push(Box::new(crate::extensions::ActorExtensionEntry::<A>(
+                std::marker::PhantomData,
+            )));
         self
     }
 
@@ -353,10 +354,7 @@ where
     ///     .build();
     /// ```
     #[cfg(feature = "graphql")]
-    pub fn with_versioned_graphql(
-        mut self,
-        graphql: crate::graphql::VersionedGraphQL,
-    ) -> Self {
+    pub fn with_versioned_graphql(mut self, graphql: crate::graphql::VersionedGraphQL) -> Self {
         self.graphql = Some(graphql);
         self
     }
@@ -771,10 +769,7 @@ where
                                     clickhouse_agent_handle = Some(handle);
                                 }
                                 Err(e) => {
-                                    tracing::warn!(
-                                        "Failed to spawn ClickHouse pool agent: {}",
-                                        e
-                                    );
+                                    tracing::warn!("Failed to spawn ClickHouse pool agent: {}", e);
                                 }
                             }
                         }
@@ -984,17 +979,12 @@ where
                                         Some(worker)
                                     }
                                     Err(e) => {
-                                        tracing::error!(
-                                            "Failed to spawn background worker: {}",
-                                            e
-                                        );
+                                        tracing::error!("Failed to spawn background worker: {}", e);
                                         None
                                     }
                                 }
                             } else {
-                                tracing::warn!(
-                                    "No agent runtime available for background worker"
-                                );
+                                tracing::warn!("No agent runtime available for background worker");
                                 None
                             }
                         })
@@ -1040,8 +1030,8 @@ where
                         let runtime = self.init_agent_runtime();
 
                         // Spawn the extensions supervisor
-                        let supervisor = runtime
-                            .new_actor::<crate::extensions::ExtensionsSupervisorState>();
+                        let supervisor =
+                            runtime.new_actor::<crate::extensions::ExtensionsSupervisorState>();
                         let supervisor_handle = supervisor.start().await;
                         tracing::info!("Extensions supervisor spawned");
 
@@ -1053,10 +1043,7 @@ where
                                     handles.insert(type_id, handle);
                                 }
                                 Err(e) => {
-                                    tracing::error!(
-                                        "Failed to spawn actor extension: {}",
-                                        e
-                                    );
+                                    tracing::error!("Failed to spawn actor extension: {}", e);
                                 }
                             }
                         }
@@ -1078,9 +1065,7 @@ where
                     crate::extensions::ActorExtensions::default()
                 }
                 None => {
-                    tracing::warn!(
-                        "No tokio runtime available, skipping actor extension spawning"
-                    );
+                    tracing::warn!("No tokio runtime available, skipping actor extension spawning");
                     crate::extensions::ActorExtensions::default()
                 }
             }
@@ -1219,10 +1204,8 @@ where
                 );
 
                 #[cfg(feature = "prometheus-metrics")]
-                let health_router = health_router.route(
-                    "/metrics",
-                    get(crate::observability::metrics_handler),
-                );
+                let health_router =
+                    health_router.route("/metrics", get(crate::observability::metrics_handler));
 
                 // Use fallback_service to include the versioned routes
                 let router_with_health = health_router.fallback_service(router);
@@ -1317,11 +1300,7 @@ where
         // endpoints inherit auth, tracing, CORS, etc.
         #[cfg(feature = "graphql")]
         let app = if let Some(graphql) = self.graphql.take() {
-            let graphql_enabled = config
-                .graphql
-                .as_ref()
-                .map(|g| g.enabled)
-                .unwrap_or(true);
+            let graphql_enabled = config.graphql.as_ref().map(|g| g.enabled).unwrap_or(true);
             if graphql_enabled {
                 match crate::graphql::mount::build_router(
                     graphql,
@@ -1349,8 +1328,8 @@ where
         // activates TLS independently of the `[tls]` section, so both sources
         // count — otherwise HSTS would be dropped on encrypted connections.
         #[cfg(feature = "tls")]
-        let tls_active = self.tls_config_override.is_some()
-            || config.tls.as_ref().is_some_and(|t| t.enabled);
+        let tls_active =
+            self.tls_config_override.is_some() || config.tls.as_ref().is_some_and(|t| t.enabled);
         #[cfg(not(feature = "tls"))]
         let tls_active = false;
 
@@ -1477,9 +1456,8 @@ where
         // "POST /api/v1/uploads" match as documented.
         #[cfg(feature = "governor")]
         if config.rate_limit.auto_apply {
-            let gov = crate::middleware::governor::GovernorRateLimit::new(
-                config.rate_limit.clone(),
-            );
+            let gov =
+                crate::middleware::governor::GovernorRateLimit::new(config.rate_limit.clone());
             tracing::debug!("Auto-applying governor rate-limit middleware");
             app = app.layer(axum::middleware::from_fn_with_state(
                 gov,
@@ -1571,8 +1549,7 @@ where
             app = app.layer(axum::Extension(logger.clone()));
         }
 
-        let listener_addr =
-            std::net::SocketAddr::new(config.service.bind, config.service.port);
+        let listener_addr = std::net::SocketAddr::new(config.service.bind, config.service.port);
 
         // Resolve the HTTP TLS config. A `[tls]` section with `enabled = true`
         // is the operator's explicit statement of intended posture, so a load
@@ -2297,8 +2274,8 @@ where
                             self.app
                                 .into_make_service_with_connect_info::<std::net::SocketAddr>(),
                         )
-                            .with_graceful_shutdown(shutdown_signal())
-                            .await;
+                        .with_graceful_shutdown(shutdown_signal())
+                        .await;
 
                         // Wait for gRPC server
                         let _ = grpc_handle.await;
@@ -2349,12 +2326,11 @@ where
 
                         axum::serve(
                             listener,
-                            hybrid_service.into_make_service_with_connect_info::<
-                                std::net::SocketAddr,
-                            >(),
+                            hybrid_service
+                                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
                         )
-                            .with_graceful_shutdown(shutdown_signal())
-                            .await?;
+                        .with_graceful_shutdown(shutdown_signal())
+                        .await?;
                     }
 
                     tracing::info!("Server shutdown complete");
@@ -2390,8 +2366,8 @@ where
                 self.app
                     .into_make_service_with_connect_info::<crate::tls::TlsConnectInfo>(),
             )
-                .with_graceful_shutdown(shutdown_signal())
-                .await?;
+            .with_graceful_shutdown(shutdown_signal())
+            .await?;
 
             tracing::info!("Server shutdown complete");
 
@@ -2411,8 +2387,8 @@ where
             self.app
                 .into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
-            .with_graceful_shutdown(shutdown_signal())
-            .await?;
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
         tracing::info!("Server shutdown complete");
 
@@ -2502,9 +2478,7 @@ mod tests {
         use crate::prelude::ServiceBuilder;
 
         let config = Config::<()>::default();
-        let service = ServiceBuilder::new()
-            .with_config(config)
-            .build();
+        let service = ServiceBuilder::new().with_config(config).build();
 
         // state() should be accessible and background_worker() returns None
         // when not configured
@@ -2550,7 +2524,9 @@ mod tests {
 
         let message = error.to_string();
         assert!(
-            message.contains("refusing to start rather than serving routes without policy enforcement"),
+            message.contains(
+                "refusing to start rather than serving routes without policy enforcement"
+            ),
             "error must explain the refusal, got: {message}"
         );
     }
@@ -2683,7 +2659,10 @@ mod tests {
         };
 
         assert!(
-            ServiceBuilder::new().with_config(config).try_build().is_ok(),
+            ServiceBuilder::new()
+                .with_config(config)
+                .try_build()
+                .is_ok(),
             "an explicitly disabled TLS section must not block startup"
         );
     }
@@ -2985,9 +2964,7 @@ mod tests {
             .expect("health request");
 
         assert!(
-            response
-                .headers()
-                .contains_key("strict-transport-security"),
+            response.headers().contains_key("strict-transport-security"),
             "HSTS must be sent when an injected config puts the listener on TLS"
         );
     }

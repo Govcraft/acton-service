@@ -384,7 +384,6 @@ pub mod graphql {
         let versions: Vec<ApiVersion> = graphql.versions().collect();
         add_graphql_paths(openapi, graphql.base_path(), &versions)
     }
-
 }
 
 /// OpenAPI security scheme helpers

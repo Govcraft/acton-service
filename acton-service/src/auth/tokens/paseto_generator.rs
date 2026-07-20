@@ -382,7 +382,9 @@ impl PasetoGenerator {
                 }
                 // All custom claim values are strings after normalize_custom_claims
                 let s = value.as_str().ok_or_else(|| {
-                    Error::Paseto(format!("Custom claim '{key}' is not a string after normalization"))
+                    Error::Paseto(format!(
+                        "Custom claim '{key}' is not a string after normalization"
+                    ))
                 })?;
                 let claim = CustomClaim::try_from((key.as_str(), s))
                     .map_err(|e| Error::Paseto(format!("Invalid '{key}' claim: {e}")))?;

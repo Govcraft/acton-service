@@ -46,10 +46,10 @@ pub use config::{AlertConfig, AuditConfig, SyslogConfig};
 pub use config_audit::{
     compute_config_fingerprint, drift_check_handler, redact_config, DriftCheckResult,
 };
-#[cfg(feature = "auth")]
-pub use decorators::{AuditedApiKeyStorage, AuditedRefreshStorage};
 #[cfg(feature = "oauth")]
 pub use decorators::AuditedOAuthProvider;
+#[cfg(feature = "auth")]
+pub use decorators::{AuditedApiKeyStorage, AuditedRefreshStorage};
 pub use event::{AuditEvent, AuditEventKind, AuditSeverity, AuditSource};
 pub use logger::AuditLogger;
 pub use middleware::{audit_layer, AuditRoute};

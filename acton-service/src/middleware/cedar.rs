@@ -1089,10 +1089,7 @@ mod tests {
             type Error = Infallible;
             type Future = std::future::Ready<Result<Self::Response, Self::Error>>;
 
-            fn poll_ready(
-                &mut self,
-                _cx: &mut TaskContext<'_>,
-            ) -> Poll<Result<(), Self::Error>> {
+            fn poll_ready(&mut self, _cx: &mut TaskContext<'_>) -> Poll<Result<(), Self::Error>> {
                 Poll::Ready(Ok(()))
             }
 
@@ -1131,10 +1128,7 @@ mod tests {
             let authz = test_authz("permit(principal, action, resource);", true).await;
             let mut svc = CedarAuthzLayer::new(authz).layer(TestSvc);
             let resp = svc
-                .call(grpc_request(
-                    "/test.v1.TestService/Do",
-                    Some(test_claims()),
-                ))
+                .call(grpc_request("/test.v1.TestService/Do", Some(test_claims())))
                 .await
                 .unwrap();
             assert_eq!(resp.body(), "ok");
@@ -1146,10 +1140,7 @@ mod tests {
             let authz = test_authz("", true).await;
             let mut svc = CedarAuthzLayer::new(authz).layer(TestSvc);
             let resp = svc
-                .call(grpc_request(
-                    "/test.v1.TestService/Do",
-                    Some(test_claims()),
-                ))
+                .call(grpc_request("/test.v1.TestService/Do", Some(test_claims())))
                 .await
                 .unwrap();
             // tonic Code::PermissionDenied == 7

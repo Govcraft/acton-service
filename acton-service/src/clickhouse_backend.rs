@@ -87,22 +87,18 @@ async fn try_create_client(config: &ClickHouseConfig) -> Result<clickhouse::Clie
     }
 
     // Verify connectivity with a simple query
-    client
-        .query("SELECT 1")
-        .execute()
-        .await
-        .map_err(|e| {
-            Error::ClickHouse(format!(
-                "Failed to connect to ClickHouse at '{}'\n\n\
+    client.query("SELECT 1").execute().await.map_err(|e| {
+        Error::ClickHouse(format!(
+            "Failed to connect to ClickHouse at '{}'\n\n\
                 Troubleshooting:\n\
                 1. Verify ClickHouse server is running\n\
                 2. Check HTTP interface is enabled (default port 8123)\n\
                 3. Verify credentials and database name\n\
                 4. Check network connectivity\n\n\
                 Error: {}",
-                config.url, e
-            ))
-        })?;
+            config.url, e
+        ))
+    })?;
 
     Ok(client)
 }
@@ -153,7 +149,12 @@ pub(crate) fn sanitize_url(url: &str) -> String {
 #[async_trait::async_trait]
 pub trait AnalyticsWriter<T>: Send + Sync
 where
-    T: clickhouse::Row + clickhouse::RowOwned + clickhouse::RowWrite + serde::Serialize + Send + Sync,
+    T: clickhouse::Row
+        + clickhouse::RowOwned
+        + clickhouse::RowWrite
+        + serde::Serialize
+        + Send
+        + Sync,
 {
     /// Get a reference to the ClickHouse client
     fn client(&self) -> &clickhouse::Client;
