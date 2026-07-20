@@ -66,6 +66,15 @@ impl Server {
             None => None,
         };
 
+        // Resolve the handshake timeout the same way: a zero is a refusal to
+        // start, reported before any listener binds. An absent section uses the
+        // built-in default.
+        #[cfg(feature = "tls")]
+        let tls_handshake_timeout = match self.config.tls.as_ref().filter(|t| t.enabled) {
+            Some(tls_cfg) => crate::tls::validate_handshake_timeout(tls_cfg, "[tls]")?,
+            None => crate::tls::DEFAULT_HANDSHAKE_TIMEOUT,
+        };
+
         // Log middleware configuration
         self.log_middleware_config();
 
@@ -154,7 +163,8 @@ impl Server {
                     tls_config.reload_on_sighup,
                 );
 
-                let tls_listener = crate::tls::TlsListener::with_config_source(listener, source);
+                let tls_listener = crate::tls::TlsListener::with_config_source(listener, source)
+                    .with_handshake_timeout(tls_handshake_timeout);
                 tracing::info!("TLS enabled (HTTPS)");
                 axum::serve(
                     tls_listener,
@@ -362,6 +372,7 @@ mod tests {
                 client_auth_optional: false,
                 reload_interval_secs: Some(0),
                 reload_on_sighup: false,
+                handshake_timeout_secs: None,
             }),
             ..Default::default()
         };

@@ -930,6 +930,13 @@ impl Default for GraphQLConfig {
 /// Certificates are loaded at startup from PEM files.
 #[cfg(feature = "tls")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Reject unknown keys in `[tls]` and `[grpc.tls]`. A typo like
+// `reload_interval_sec` (missing the `s`) would otherwise be silently ignored
+// and quietly disarm certificate rotation; deny_unknown_fields turns it into a
+// loud parse error at startup instead. Safe here because `TlsConfig` is embedded
+// as a plain `Option<TlsConfig>`, never `#[serde(flatten)]`ed (which is the one
+// case that would misbehave with this attribute).
+#[serde(deny_unknown_fields)]
 pub struct TlsConfig {
     /// Enable TLS (default: true when section is present)
     #[serde(default = "default_true")]
@@ -988,6 +995,18 @@ pub struct TlsConfig {
     /// during startup and otherwise ignored.
     #[serde(default = "default_false")]
     pub reload_on_sighup: bool,
+
+    /// Maximum time to wait for a TLS handshake to complete, in seconds, before
+    /// the connection is dropped. Caps pre-handshake stalls from unauthenticated
+    /// peers (a peer that connects but never completes the handshake). `None`
+    /// (the default) uses the built-in default of
+    /// [`DEFAULT_HANDSHAKE_TIMEOUT`](crate::tls::DEFAULT_HANDSHAKE_TIMEOUT)
+    /// seconds.
+    ///
+    /// A value of `0` is rejected at build time: it would fail every handshake
+    /// instantly.
+    #[serde(default)]
+    pub handshake_timeout_secs: Option<u64>,
 }
 
 /// Client-side mutual-TLS identity (requires `tls` feature)
@@ -1837,6 +1856,28 @@ mod tests {
         assert!(
             tls.client_auth_optional,
             "the optional client-auth flag must round-trip from configuration"
+        );
+    }
+
+    /// A typo in a `[tls]` key must fail to parse rather than be silently
+    /// ignored: `reload_interval_sec` (missing the trailing `s`) would otherwise
+    /// quietly disarm certificate rotation. `deny_unknown_fields` turns it into a
+    /// startup error.
+    #[cfg(feature = "tls")]
+    #[test]
+    fn tls_config_rejects_an_unknown_field() {
+        let json = r#"{
+            "enabled": true,
+            "cert_path": "/etc/tls/cert.pem",
+            "key_path": "/etc/tls/key.pem",
+            "reload_interval_sec": 300
+        }"#;
+
+        let err = serde_json::from_str::<TlsConfig>(json)
+            .expect_err("a misspelled TLS key must be rejected, not silently dropped");
+        assert!(
+            err.to_string().contains("reload_interval_sec"),
+            "the parse error must name the offending key: {err}"
         );
     }
 

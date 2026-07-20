@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 #[cfg(feature = "governor")]
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 #[cfg(feature = "governor")]
 use std::num::NonZeroU32;
 #[cfg(feature = "governor")]
@@ -16,7 +16,7 @@ use std::sync::Arc;
 #[cfg(feature = "governor")]
 use axum::{
     body::Body,
-    extract::{ConnectInfo, OriginalUri, Request, State},
+    extract::{OriginalUri, Request, State},
     http::{header::HeaderValue, HeaderName},
     middleware::Next,
     response::Response,
@@ -220,10 +220,12 @@ impl GovernorRateLimit {
             .unwrap_or_else(|| request.uri().path().to_string());
 
         let claims = request.extensions().get::<Claims>().cloned();
-        let connect_info = request
-            .extensions()
-            .get::<ConnectInfo<SocketAddr>>()
-            .map(|ci| ci.0);
+        // Resolve the peer address from whichever connect-info the listener
+        // installed: `ConnectInfo<SocketAddr>` on plain TCP, or
+        // `ConnectInfo<TlsConnectInfo>` on a directly-terminated TLS listener.
+        // Without the TLS fallback, per-IP rate limiting silently no-ops on a
+        // TLS listener that has no fronting proxy.
+        let connect_info = super::request_context::connect_info_remote_addr(request.extensions());
         let client_ip = extract_client_ip(
             request.headers(),
             connect_info.as_ref(),

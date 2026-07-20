@@ -39,7 +39,7 @@ use tokio_rustls::rustls::client::danger::{
 use tokio_rustls::rustls::client::{ResolvesClientCert, WebPkiServerVerifier};
 use tokio_rustls::rustls::sign::CertifiedKey;
 use tokio_rustls::rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::config::ClientIdentityConfig;
 use crate::error::{Error, Result};
@@ -83,6 +83,17 @@ pub(crate) struct IdentityMaterial {
     chain: Vec<CertificateDer<'static>>,
     /// The parsed private key.
     key: PrivateKeyDer<'static>,
+}
+
+impl Drop for IdentityMaterial {
+    fn drop(&mut self) {
+        // The PEM copies are already `Zeroizing`, but the *decoded* DER private
+        // key is not: `rustls_pki_types::PrivateKeyDer` implements `Zeroize` yet
+        // not `ZeroizeOnDrop`, so without this its key bytes would be freed onto
+        // a heap page without being wiped. Wipe it explicitly. `cert_pem` and
+        // `chain` are public certificate material and need no wiping.
+        self.key.zeroize();
+    }
 }
 
 impl std::fmt::Debug for IdentityMaterial {
@@ -808,8 +819,16 @@ impl ClientIdentitySource {
         let origin = &self.inner.origin;
         match self.prepare_reload() {
             Ok((key, verifier)) => {
-                // Both stores happen only after both loads succeeded, so no
-                // observer can see a new certificate paired with stale anchors.
+                // The presented identity and the peer trust anchors live in two
+                // separate `ArcSwap`s, stored one after the other, so a handshake
+                // that runs between these two stores can observe the new
+                // certificate paired with the old anchors (or, after the first
+                // store, the reverse). That is deliberately left unsynchronised:
+                // each value is individually valid, and which certificate this
+                // client presents is orthogonal to which CAs it trusts in the
+                // peer, so any pairing of an old-or-new identity with old-or-new
+                // anchors is a correct handshake. A lock spanning both stores
+                // would buy nothing but contention on the handshake path.
                 self.inner.resolver.store(key);
                 self.inner.verifier.store(verifier);
                 tracing::info!(

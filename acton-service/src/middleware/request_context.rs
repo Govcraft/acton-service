@@ -82,10 +82,10 @@ fn header_string(headers: &HeaderMap, name: &str) -> Option<String> {
 /// 1. If `trust_forwarded_headers` is true:
 ///    - The first parseable IP in `X-Forwarded-For` (comma-separated, left-most).
 ///    - The single IP in `X-Real-IP`.
-/// 2. The direct TCP peer from `ConnectInfo<SocketAddr>`.
+/// 2. The direct TCP peer resolved by [`connect_info_remote_addr`], which
+///    covers both plain-TCP and TLS listeners.
 ///
-/// Returns `None` when no IP can be resolved. TLS serve paths do not install
-/// `ConnectInfo`, so the fallback is genuinely optional.
+/// Returns `None` when no IP can be resolved.
 pub(crate) fn extract_client_ip(
     headers: &HeaderMap,
     connect_info: Option<&SocketAddr>,
@@ -111,6 +111,30 @@ pub(crate) fn extract_client_ip(
     }
 
     connect_info.map(|sa| sa.ip())
+}
+
+/// The peer socket address from whichever connect-info the listener installed.
+///
+/// axum populates `ConnectInfo<SocketAddr>` on a plain-TCP listener and
+/// `ConnectInfo<TlsConnectInfo>` on a TLS listener — the latter supersedes the
+/// plain `SocketAddr` so a directly-terminated TLS peer still exposes a real
+/// address. Extractors that only looked for `ConnectInfo<SocketAddr>` therefore
+/// saw nothing on a TLS listener, silently disabling peer-IP rate limiting and
+/// request-context IP resolution unless a fronting proxy set forwarded headers.
+/// Checking both makes those work on direct TLS termination too.
+///
+/// The plain-`SocketAddr` form is checked first: on a non-TLS listener it is the
+/// only one present, and the TLS branch compiles away entirely without the `tls`
+/// feature.
+pub(crate) fn connect_info_remote_addr(extensions: &http::Extensions) -> Option<SocketAddr> {
+    if let Some(connect_info) = extensions.get::<ConnectInfo<SocketAddr>>() {
+        return Some(connect_info.0);
+    }
+    #[cfg(feature = "tls")]
+    if let Some(connect_info) = extensions.get::<ConnectInfo<crate::tls::TlsConnectInfo>>() {
+        return Some(connect_info.0.remote_addr());
+    }
+    None
 }
 
 /// Build an [`AuditSource`](crate::audit::event::AuditSource) from a request,
@@ -152,10 +176,7 @@ pub(crate) fn audit_source_from_headers(headers: &HeaderMap) -> crate::audit::ev
 /// Use with [`axum::middleware::from_fn`]. See the module docs for the ordering
 /// this requires.
 pub async fn request_context_middleware(mut request: Request, next: Next) -> Response {
-    let connect_info = request
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|ci| ci.0);
+    let connect_info = connect_info_remote_addr(request.extensions());
     let context = RequestContext::resolve(request.headers(), connect_info.as_ref());
     request.extensions_mut().insert(context);
     next.run(request).await
@@ -303,6 +324,29 @@ mod tests {
         assert_eq!(
             ctx.ip.map(|ip| ip.to_string()).as_deref(),
             Some("198.51.100.42")
+        );
+    }
+
+    #[test]
+    fn connect_info_remote_addr_reads_the_plain_socket_addr() {
+        let addr = peer([198, 51, 100, 42], 51234);
+        let mut extensions = http::Extensions::new();
+        extensions.insert(ConnectInfo(addr));
+
+        assert_eq!(
+            connect_info_remote_addr(&extensions),
+            Some(addr),
+            "a plain-TCP listener's ConnectInfo<SocketAddr> must be read directly"
+        );
+    }
+
+    #[test]
+    fn connect_info_remote_addr_is_none_without_any_connect_info() {
+        let extensions = http::Extensions::new();
+        assert_eq!(
+            connect_info_remote_addr(&extensions),
+            None,
+            "no connect-info of either kind must resolve to no address"
         );
     }
 

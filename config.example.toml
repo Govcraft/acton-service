@@ -30,6 +30,7 @@ environment = "dev"  # dev, staging, production
 # key_path = "./certs/grpc.key"
 # reload_interval_secs = 300             # poll these files; see [tls] below
 # reload_on_sighup = true                # reloads BOTH listeners, not just gRPC
+# handshake_timeout_secs = 10            # drop a stalled handshake after N s; see [tls]
 
 # ============================================================================
 # TOKEN AUTHENTICATION ([token] section with format = "paseto" or "jwt")
@@ -194,6 +195,14 @@ referrer_policy = "strict-origin-when-cross-origin"
 # rotated only half the surfaces would be confusing during an incident.
 # Unix only; configured elsewhere it warns at startup and is ignored.
 # reload_on_sighup = true
+#
+# --- Handshake timeout ------------------------------------------------------
+# Maximum time to wait for a TLS handshake to complete before dropping the
+# connection. Caps pre-handshake stalls from unauthenticated peers: a peer that
+# completes the TCP connect but never sends a ClientHello cannot hold a slot
+# open. Each handshake runs concurrently, so one stalled peer never blocks the
+# others. Omit to use the default of 10 seconds; 0 is rejected at startup.
+# handshake_timeout_secs = 10
 #
 # For triggers the framework does not model (a Vault lease renewal, a watch on
 # a ConfigMap, an admin endpoint), register a callback with
