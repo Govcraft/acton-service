@@ -282,12 +282,25 @@ impl axum::serve::Listener for TlsListener {
 /// error if the file cannot be opened, cannot be parsed, or contains no
 /// certificates (an empty trust store would silently reject every client).
 pub fn load_client_ca_roots(path: &Path) -> Result<RootCertStore> {
+    load_root_store(path, "client CA")
+}
+
+/// Load a [`RootCertStore`] of trust anchors from a PEM bundle.
+///
+/// `role` names what the bundle is for and appears verbatim in every error
+/// message, so the same loader can serve both the server's client-CA bundle and
+/// a client's peer-CA bundle without either producing a misleading diagnostic.
+/// Returns an error if the file cannot be opened, cannot be parsed, or contains
+/// no certificates: an empty trust store would silently reject every peer, so
+/// it must be a load failure rather than a permissive default.
+pub(crate) fn load_root_store(path: &Path, role: &str) -> Result<RootCertStore> {
     use rustls_pki_types::pem::PemObject;
 
     let ca_certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(path)
         .map_err(|e| {
             crate::error::Error::Internal(format!(
-                "Failed to open client CA file '{}': {}",
+                "Failed to open {} file '{}': {}",
+                role,
                 path.display(),
                 e
             ))
@@ -295,7 +308,8 @@ pub fn load_client_ca_roots(path: &Path) -> Result<RootCertStore> {
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e| {
             crate::error::Error::Internal(format!(
-                "Failed to parse client CA certificates from '{}': {}",
+                "Failed to parse {} certificates from '{}': {}",
+                role,
                 path.display(),
                 e
             ))
@@ -303,7 +317,8 @@ pub fn load_client_ca_roots(path: &Path) -> Result<RootCertStore> {
 
     if ca_certs.is_empty() {
         return Err(crate::error::Error::Internal(format!(
-            "Client CA file '{}' contains no certificates",
+            "The {} file '{}' contains no certificates",
+            role,
             path.display()
         )));
     }
@@ -312,7 +327,8 @@ pub fn load_client_ca_roots(path: &Path) -> Result<RootCertStore> {
     for cert in ca_certs {
         roots.add(cert).map_err(|e| {
             crate::error::Error::Internal(format!(
-                "Failed to add client CA certificate from '{}' to trust store: {}",
+                "Failed to add {} certificate from '{}' to trust store: {}",
+                role,
                 path.display(),
                 e
             ))
