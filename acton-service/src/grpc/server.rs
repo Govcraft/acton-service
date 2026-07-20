@@ -160,6 +160,15 @@ impl GrpcServicesBuilder {
 
                 self.routes = self.routes.add_service(health_server);
 
+                // Reflection describes only the descriptor sets it was given.
+                // Without the health descriptor, `grpc.health.v1.Health` is
+                // routable but invisible, so reflection-driven clients such as
+                // `grpcurl` report the service as not exposed even though it is.
+                // Registered here, where the service is actually served, so the
+                // two can never disagree.
+                self.file_descriptor_sets
+                    .push(tonic_health::pb::FILE_DESCRIPTOR_SET);
+
                 tracing::info!("gRPC health service enabled");
             } else {
                 tracing::warn!(
@@ -201,5 +210,25 @@ impl GrpcServicesBuilder {
 impl Default for GrpcServicesBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// `build` registers the health descriptor set so reflection can describe
+    /// `grpc.health.v1.Health`. That is only useful if reflection actually
+    /// accepts the descriptor: an FDS with unresolved imports is rejected at
+    /// `build_v1()`, which would leave the health service routable but
+    /// invisible to `grpcurl` — the exact failure the registration fixes.
+    #[test]
+    fn health_descriptor_set_is_usable_by_reflection() {
+        let reflection = tonic_reflection::server::Builder::configure()
+            .register_encoded_file_descriptor_set(tonic_health::pb::FILE_DESCRIPTOR_SET)
+            .build_v1();
+
+        assert!(
+            reflection.is_ok(),
+            "health descriptor set must be self-contained enough for reflection to serve it"
+        );
     }
 }
