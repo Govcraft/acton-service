@@ -6,10 +6,13 @@
 //! ## Features
 //!
 //! - **Multi-protocol**: HTTP (axum) + gRPC (tonic) + WebSocket on single port
-//! - **Middleware stack**: JWT auth, rate limiting, request tracking, panic recovery, body size limits
+//! - **Middleware stack**: PASETO v4 or JWT token auth, rate limiting, request tracking, panic recovery, body size limits
+//! - **Authorization**: Cedar policy engine across HTTP, gRPC, and GraphQL
 //! - **Resilience**: Circuit breaker, retry with backoff, bulkhead (concurrency limiting)
 //! - **Observability**: OpenTelemetry tracing, HTTP metrics, request ID propagation
-//! - **Connection pooling**: Database (YSQL), Redis, NATS JetStream
+//! - **Audit logging**: BLAKE3 hash-chained trails over PostgreSQL, Turso, SurrealDB, or ClickHouse
+//! - **TLS**: rustls listener with mutual TLS and restart-free credential rotation
+//! - **Connection pooling**: PostgreSQL, Redis, NATS JetStream
 //! - **Health checks**: Liveness and readiness probes
 //! - **Graceful shutdown**: Proper signal handling (SIGTERM, SIGINT)
 //!
