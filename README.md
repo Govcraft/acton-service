@@ -283,7 +283,7 @@ Enable `auth-full` to get the entire stack in one flag.
 ### Security, Audit & Compliance
 
 - **Audit logging** (`audit`) - BLAKE3 hash-chained, tamper-evident audit trails for auth, account, and request events, with storage backends for PostgreSQL, Turso, SurrealDB, and ClickHouse ([guide](https://govcraft.github.io/acton-service/docs/audit))
-- **TLS termination** (`tls`) - rustls-based HTTPS with automatic crypto-provider installation
+- **TLS termination** (`tls`) - rustls-based HTTPS with automatic crypto-provider installation, mutual TLS, and credential rotation without a restart (poll-based, SIGHUP, or a custom hook) ([guide](https://govcraft.github.io/acton-service/docs/tls))
 - **FIPS 140-3 path** - `aws-lc-rs` is the default crypto provider; see [Choosing a Crypto Provider](#choosing-a-crypto-provider)
 - **systemd journald** (`journald`) - Native journal integration for structured logs on Linux hosts
 
@@ -887,7 +887,7 @@ See the [Examples documentation](https://govcraft.github.io/acton-service/docs/e
 - **Production Resilience Patterns**: Circuit breaker, exponential backoff retry, bulkhead (concurrency limiting)
 - **Token Authentication**: PASETO v4 (default) and JWT (RS256/ES256/HS256/384/512), config-driven and auto-applied, with Redis-backed revocation
 - **Identity Stack**: Argon2 password hashing, API keys, token generation, signing-key rotation, OAuth 2.0/OIDC providers, cookie sessions (memory/Redis)
-- **Security & Compliance**: BLAKE3 hash-chained audit logging with pluggable storage, login lockout, NIST AC-2 account lifecycle, TLS with FIPS 140-3 capable crypto provider
+- **Security & Compliance**: BLAKE3 hash-chained audit logging with pluggable storage, login lockout, NIST AC-2 account lifecycle, TLS with FIPS 140-3 capable crypto provider and restart-free credential rotation
 - **Cedar Policy-Based Authorization**: AWS Cedar integration with declarative policies, manual reload endpoint, Redis caching, HTTP/gRPC/GraphQL support, customizable path normalization
 - **Type-Enforced API Versioning**: Compile-time enforcement with RFC 8594 deprecation headers
 - **Automatic Health Checks**: Kubernetes-ready liveness/readiness probes with dependency monitoring (database, cache, events)
