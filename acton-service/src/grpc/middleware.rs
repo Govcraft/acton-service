@@ -8,13 +8,26 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Instant;
 use tonic::server::NamedService;
-use tonic::{Request, Response, Status};
+use tonic::Status;
 use tower::{Layer, Service};
+use tracing::Instrument;
 
 use crate::grpc::interceptors::RequestIdExtension;
 use crate::middleware::token::{extract_token, TokenValidator};
 
 /// Logging middleware for gRPC requests
+///
+/// An HTTP-level tower layer (gRPC requests are HTTP/2 requests), so it
+/// composes both with
+/// [`GrpcServicesBuilder::add_service`](crate::grpc::server::GrpcServicesBuilder::add_service)
+/// (the `NamedService` impl forwards the inner service's name) and with
+/// `axum::Router::layer`.
+///
+/// Logs the method path and duration of every request. The gRPC status is
+/// logged from the `grpc-status` response header, which is only present on
+/// trailers-only responses (errors produced before the handler, e.g. by
+/// authentication layers); responses whose status arrives in HTTP/2 trailers
+/// are logged as status `0`.
 #[derive(Clone)]
 pub struct LoggingLayer;
 
@@ -32,16 +45,19 @@ pub struct LoggingService<S> {
     inner: S,
 }
 
-impl<S, ReqBody> Service<Request<ReqBody>> for LoggingService<S>
+impl<S: NamedService> NamedService for LoggingService<S> {
+    const NAME: &'static str = S::NAME;
+}
+
+impl<S, ReqBody, ResBody> Service<http::Request<ReqBody>> for LoggingService<S>
 where
-    S: Service<Request<ReqBody>, Response = Response<tonic::body::Body>, Error = Status>
-        + Clone
-        + Send
-        + 'static,
+    S: Service<http::Request<ReqBody>, Response = http::Response<ResBody>> + Clone + Send + 'static,
     S::Future: Send + 'static,
+    S::Error: std::fmt::Display,
     ReqBody: Send + 'static,
+    ResBody: Send + 'static,
 {
-    type Response = S::Response;
+    type Response = http::Response<ResBody>;
     type Error = S::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
@@ -49,26 +65,42 @@ where
         self.inner.poll_ready(cx)
     }
 
-    fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
-        let mut inner = self.inner.clone();
+    fn call(&mut self, req: http::Request<ReqBody>) -> Self::Future {
+        // Take the ready inner service and leave a fresh clone in its place,
+        // so the readiness obtained via poll_ready is the one consumed here.
+        let clone = self.inner.clone();
+        let mut inner = std::mem::replace(&mut self.inner, clone);
+
+        let method = req.uri().path().to_string();
 
         Box::pin(async move {
             let start = Instant::now();
 
-            tracing::debug!("gRPC request started");
+            tracing::debug!(method = %method, "gRPC request started");
 
             let result = inner.call(req).await;
 
             let duration = start.elapsed();
 
             match &result {
-                Ok(_) => {
-                    tracing::info!(duration_ms = duration.as_millis(), "gRPC request completed");
-                }
-                Err(status) => {
-                    tracing::warn!(
+                Ok(response) => {
+                    let grpc_status = response
+                        .headers()
+                        .get("grpc-status")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("0");
+                    tracing::info!(
+                        method = %method,
                         duration_ms = duration.as_millis(),
-                        status_code = ?status.code(),
+                        grpc.status_code = grpc_status,
+                        "gRPC request completed"
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        method = %method,
+                        duration_ms = duration.as_millis(),
+                        error = %error,
                         "gRPC request failed"
                     );
                 }
@@ -81,7 +113,15 @@ where
 
 /// Tracing middleware layer for gRPC
 ///
-/// This layer creates OpenTelemetry spans for gRPC requests with proper context propagation.
+/// Creates an OpenTelemetry-compatible span for each gRPC request, with
+/// `rpc.service`/`rpc.method` taken from the request URI path and the request
+/// ID from a [`RequestIdExtension`] inserted by an earlier layer or from the
+/// `x-request-id` header.
+///
+/// Like [`LoggingLayer`], this is an HTTP-level tower layer with a forwarding
+/// `NamedService` impl, so a wrapped service can be registered with
+/// [`GrpcServicesBuilder::add_service`](crate::grpc::server::GrpcServicesBuilder::add_service)
+/// or layered onto an axum router.
 #[derive(Clone)]
 pub struct GrpcTracingLayer;
 
@@ -99,16 +139,19 @@ pub struct GrpcTracingService<S> {
     inner: S,
 }
 
-impl<S, ReqBody> Service<Request<ReqBody>> for GrpcTracingService<S>
+impl<S: NamedService> NamedService for GrpcTracingService<S> {
+    const NAME: &'static str = S::NAME;
+}
+
+impl<S, ReqBody, ResBody> Service<http::Request<ReqBody>> for GrpcTracingService<S>
 where
-    S: Service<Request<ReqBody>, Response = Response<tonic::body::Body>, Error = Status>
-        + Clone
-        + Send
-        + 'static,
+    S: Service<http::Request<ReqBody>, Response = http::Response<ResBody>> + Clone + Send + 'static,
     S::Future: Send + 'static,
+    S::Error: std::fmt::Display,
     ReqBody: Send + 'static,
+    ResBody: Send + 'static,
 {
-    type Response = S::Response;
+    type Response = http::Response<ResBody>;
     type Error = S::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
@@ -116,77 +159,74 @@ where
         self.inner.poll_ready(cx)
     }
 
-    fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
-        let mut inner = self.inner.clone();
+    fn call(&mut self, req: http::Request<ReqBody>) -> Self::Future {
+        // Take the ready inner service and leave a fresh clone in its place,
+        // so the readiness obtained via poll_ready is the one consumed here.
+        let clone = self.inner.clone();
+        let mut inner = std::mem::replace(&mut self.inner, clone);
 
-        // Extract request ID from extensions if available
         let request_id = req
             .extensions()
             .get::<RequestIdExtension>()
             .map(|ext| ext.0.clone())
             .or_else(|| {
-                req.metadata()
+                req.headers()
                     .get("x-request-id")
                     .and_then(|v| v.to_str().ok())
                     .map(|s| s.to_string())
             })
             .unwrap_or_else(|| "unknown".to_string());
 
-        // Get method name from metadata (set by tonic)
-        let method = req
-            .metadata()
-            .get(":path")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("unknown")
-            .to_string();
+        let method = req.uri().path().to_string();
 
-        Box::pin(async move {
-            let start = Instant::now();
+        let span = tracing::info_span!(
+            "grpc_request",
+            otel.kind = "server",
+            rpc.system = "grpc",
+            rpc.service = %extract_service_name(&method),
+            rpc.method = %extract_method_name(&method),
+            request_id = %request_id,
+        );
 
-            // Create a span for this gRPC request
-            let span = tracing::info_span!(
-                "grpc_request",
-                otel.kind = "server",
-                rpc.system = "grpc",
-                rpc.service = %extract_service_name(&method),
-                rpc.method = %extract_method_name(&method),
-                request_id = %request_id,
-            );
+        Box::pin(
+            async move {
+                let start = Instant::now();
 
-            let _guard = span.enter();
+                tracing::debug!(method = %method, "gRPC request started");
 
-            tracing::debug!(method = %method, "gRPC request started");
+                let result = inner.call(req).await;
 
-            let result = inner.call(req).await;
+                let duration = start.elapsed();
 
-            let duration = start.elapsed();
+                match &result {
+                    Ok(response) => {
+                        // Only trailers-only (error) responses carry grpc-status
+                        // in the headers; anything else is OK at this point.
+                        let status = response
+                            .headers()
+                            .get("grpc-status")
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or("0");
 
-            match &result {
-                Ok(response) => {
-                    let status = response
-                        .metadata()
-                        .get("grpc-status")
-                        .and_then(|v| v.to_str().ok())
-                        .unwrap_or("0"); // 0 = OK in gRPC
-
-                    tracing::info!(
-                        duration_ms = duration.as_millis(),
-                        grpc.status_code = status,
-                        "gRPC request completed"
-                    );
+                        tracing::info!(
+                            duration_ms = duration.as_millis(),
+                            grpc.status_code = status,
+                            "gRPC request completed"
+                        );
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            duration_ms = duration.as_millis(),
+                            error.message = %error,
+                            "gRPC request failed"
+                        );
+                    }
                 }
-                Err(status) => {
-                    tracing::warn!(
-                        duration_ms = duration.as_millis(),
-                        grpc.status_code = ?status.code(),
-                        error.message = %status.message(),
-                        "gRPC request failed"
-                    );
-                }
+
+                result
             }
-
-            result
-        })
+            .instrument(span),
+        )
     }
 }
 
@@ -209,26 +249,59 @@ fn extract_method_name(path: &str) -> &str {
         .unwrap_or("unknown")
 }
 
-/// Simple rate limiting layer for gRPC
+/// Governor rate limiter shared by every service a [`GrpcRateLimitLayer`]
+/// wraps, and by every clone of those services.
+#[cfg(feature = "governor")]
+type DirectRateLimiter = governor::RateLimiter<
+    governor::state::NotKeyed,
+    governor::state::InMemoryState,
+    governor::clock::DefaultClock,
+>;
+
+/// Token bucket rate limiting layer for gRPC
 ///
-/// This provides basic token bucket rate limiting. For production use with more
-/// sophisticated algorithms, consider integrating tower-governor middleware directly.
+/// Sustains `requests_per_period` requests per `period_secs`, allowing spikes
+/// up to `burst_size`. Requests over the limit are answered with a gRPC
+/// `RESOURCE_EXHAUSTED` status without reaching the inner service. Health and
+/// reflection methods (see the module docs) are exempt so infrastructure
+/// probes are never throttled.
 ///
-/// Note: This implementation uses a simple in-memory atomic counter and is suitable
-/// for single-instance deployments. For distributed rate limiting, use Redis-based
-/// rate limiting in your gRPC handlers.
+/// The limiter state lives in the layer, so all services wrapped by one layer
+/// (and all clones of them) share a single bucket. The bucket is in-memory
+/// and per-instance; for distributed rate limiting, use Redis-based rate
+/// limiting in your gRPC handlers.
+///
+/// Like the other layers in this module, this is an HTTP-level tower layer
+/// with a forwarding `NamedService` impl, so a wrapped service can be
+/// registered with
+/// [`GrpcServicesBuilder::add_service`](crate::grpc::server::GrpcServicesBuilder::add_service)
+/// or layered onto an axum router.
 #[cfg(feature = "governor")]
 #[derive(Clone)]
 pub struct GrpcRateLimitLayer {
     enabled: bool,
+    limiter: Arc<DirectRateLimiter>,
 }
 
 #[cfg(feature = "governor")]
 impl GrpcRateLimitLayer {
     /// Create a new rate limiting layer
     pub fn new(config: crate::config::LocalRateLimitConfig) -> Self {
+        use std::num::NonZeroU32;
+
+        // Replenish one token every period/requests, with bucket capacity
+        // burst_size — the same quota shape as the HTTP-side governor.
+        let requests = u64::from(config.requests_per_period.max(1));
+        let replenish_interval =
+            std::time::Duration::from_millis((config.period().as_millis() as u64 / requests).max(1));
+        let burst = NonZeroU32::new(config.burst_size.max(1)).expect("max(1) is non-zero");
+        let quota = governor::Quota::with_period(replenish_interval)
+            .expect("replenish interval is non-zero")
+            .allow_burst(burst);
+
         Self {
             enabled: config.enabled,
+            limiter: Arc::new(governor::RateLimiter::direct(quota)),
         }
     }
 }
@@ -241,32 +314,36 @@ impl<S> Layer<S> for GrpcRateLimitLayer {
         GrpcRateLimitService {
             inner,
             enabled: self.enabled,
+            limiter: self.limiter.clone(),
         }
     }
 }
 
 /// Rate limiting service implementation
 ///
-/// For Phase 2, this provides a placeholder that logs when it would rate limit.
-/// Full rate limiting integration with governor will be added in Phase 5.
+/// See [`GrpcRateLimitLayer`] for usage.
 #[cfg(feature = "governor")]
 #[derive(Clone)]
 pub struct GrpcRateLimitService<S> {
     inner: S,
     enabled: bool,
+    limiter: Arc<DirectRateLimiter>,
 }
 
 #[cfg(feature = "governor")]
-impl<S, ReqBody> Service<Request<ReqBody>> for GrpcRateLimitService<S>
+impl<S: NamedService> NamedService for GrpcRateLimitService<S> {
+    const NAME: &'static str = S::NAME;
+}
+
+#[cfg(feature = "governor")]
+impl<S, ReqBody, ResBody> Service<http::Request<ReqBody>> for GrpcRateLimitService<S>
 where
-    S: Service<Request<ReqBody>, Response = Response<tonic::body::Body>, Error = Status>
-        + Clone
-        + Send
-        + 'static,
+    S: Service<http::Request<ReqBody>, Response = http::Response<ResBody>> + Clone + Send + 'static,
     S::Future: Send + 'static,
     ReqBody: Send + 'static,
+    ResBody: Default + Send + 'static,
 {
-    type Response = S::Response;
+    type Response = http::Response<ResBody>;
     type Error = S::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
@@ -274,14 +351,30 @@ where
         self.inner.poll_ready(cx)
     }
 
-    fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
-        // For Phase 2, we just pass through and log that rate limiting is configured
-        // Full implementation will be added in Phase 5
-        if self.enabled {
-            tracing::trace!("Rate limiting enabled for gRPC request");
+    fn call(&mut self, req: http::Request<ReqBody>) -> Self::Future {
+        // Take the ready inner service and leave a fresh clone in its place,
+        // so the readiness obtained via poll_ready is the one consumed here.
+        let clone = self.inner.clone();
+        let mut inner = std::mem::replace(&mut self.inner, clone);
+
+        if self.enabled && !is_grpc_infra_path(req.uri().path()) {
+            if let Err(not_until) = self.limiter.check() {
+                let retry_after = not_until.wait_time_from(governor::clock::Clock::now(
+                    &governor::clock::DefaultClock::default(),
+                ));
+                tracing::warn!(
+                    method = %req.uri().path(),
+                    retry_after_ms = retry_after.as_millis(),
+                    "gRPC rate limit exceeded"
+                );
+                let status = Status::resource_exhausted(format!(
+                    "Rate limit exceeded; retry in {}ms",
+                    retry_after.as_millis()
+                ));
+                return Box::pin(async move { Ok(status.into_http()) });
+            }
         }
 
-        let mut inner = self.inner.clone();
         Box::pin(async move { inner.call(req).await })
     }
 }
@@ -622,6 +715,162 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(grpc_status(&resp), Some("16"));
+        }
+    }
+
+    mod observability_and_rate_limit {
+        use super::super::*;
+        use std::convert::Infallible;
+
+        /// Echoes the request path back as the response body
+        #[derive(Clone)]
+        struct Echo;
+
+        impl NamedService for Echo {
+            const NAME: &'static str = "test.v1.Echo";
+        }
+
+        impl Service<http::Request<String>> for Echo {
+            type Response = http::Response<String>;
+            type Error = Infallible;
+            type Future = std::future::Ready<Result<Self::Response, Self::Error>>;
+
+            fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+                Poll::Ready(Ok(()))
+            }
+
+            fn call(&mut self, req: http::Request<String>) -> Self::Future {
+                std::future::ready(Ok(http::Response::new(req.uri().path().to_string())))
+            }
+        }
+
+        fn request(path: &str) -> http::Request<String> {
+            http::Request::builder()
+                .uri(path)
+                .body(String::new())
+                .unwrap()
+        }
+
+        #[test]
+        fn named_service_impls_forward_the_inner_name() {
+            assert_eq!(<LoggingService<Echo> as NamedService>::NAME, "test.v1.Echo");
+            assert_eq!(
+                <GrpcTracingService<Echo> as NamedService>::NAME,
+                "test.v1.Echo"
+            );
+            #[cfg(feature = "governor")]
+            assert_eq!(
+                <GrpcRateLimitService<Echo> as NamedService>::NAME,
+                "test.v1.Echo"
+            );
+        }
+
+        #[tokio::test]
+        async fn logging_layer_passes_the_request_through() {
+            let mut svc = LoggingLayer.layer(Echo);
+            let resp = svc
+                .call(request("/hello.v1.HelloService/SayHello"))
+                .await
+                .unwrap();
+            assert_eq!(resp.body(), "/hello.v1.HelloService/SayHello");
+        }
+
+        #[tokio::test]
+        async fn tracing_layer_passes_the_request_through() {
+            let mut svc = GrpcTracingLayer.layer(Echo);
+            let resp = svc
+                .call(request("/hello.v1.HelloService/SayHello"))
+                .await
+                .unwrap();
+            assert_eq!(resp.body(), "/hello.v1.HelloService/SayHello");
+        }
+
+        #[cfg(feature = "governor")]
+        mod rate_limit {
+            use super::*;
+            use crate::config::LocalRateLimitConfig;
+
+            fn config(enabled: bool) -> LocalRateLimitConfig {
+                // One request per hour with burst 1, so the second request in
+                // a test deterministically exceeds the limit.
+                LocalRateLimitConfig {
+                    enabled,
+                    requests_per_period: 1,
+                    period_secs: 3600,
+                    burst_size: 1,
+                }
+            }
+
+            fn grpc_status(resp: &http::Response<String>) -> Option<&str> {
+                resp.headers()
+                    .get("grpc-status")
+                    .and_then(|v| v.to_str().ok())
+            }
+
+            #[tokio::test]
+            async fn requests_over_the_burst_get_resource_exhausted() {
+                let mut svc = GrpcRateLimitLayer::new(config(true)).layer(Echo);
+
+                let first = svc
+                    .call(request("/hello.v1.HelloService/SayHello"))
+                    .await
+                    .unwrap();
+                assert_eq!(grpc_status(&first), None);
+
+                let second = svc
+                    .call(request("/hello.v1.HelloService/SayHello"))
+                    .await
+                    .unwrap();
+                // tonic Code::ResourceExhausted == 8
+                assert_eq!(grpc_status(&second), Some("8"));
+            }
+
+            #[tokio::test]
+            async fn disabled_limiter_passes_everything_through() {
+                let mut svc = GrpcRateLimitLayer::new(config(false)).layer(Echo);
+
+                for _ in 0..3 {
+                    let resp = svc
+                        .call(request("/hello.v1.HelloService/SayHello"))
+                        .await
+                        .unwrap();
+                    assert_eq!(grpc_status(&resp), None);
+                }
+            }
+
+            #[tokio::test]
+            async fn health_service_is_exempt() {
+                let mut svc = GrpcRateLimitLayer::new(config(true)).layer(Echo);
+
+                for _ in 0..3 {
+                    let resp = svc
+                        .call(request("/grpc.health.v1.Health/Check"))
+                        .await
+                        .unwrap();
+                    assert_eq!(grpc_status(&resp), None);
+                }
+            }
+
+            #[tokio::test]
+            async fn limiter_state_is_shared_across_wrapped_services() {
+                let layer = GrpcRateLimitLayer::new(config(true));
+                let mut first_svc = layer.layer(Echo);
+                let mut second_svc = layer.layer(Echo);
+
+                let first = first_svc
+                    .call(request("/hello.v1.HelloService/SayHello"))
+                    .await
+                    .unwrap();
+                assert_eq!(grpc_status(&first), None);
+
+                // The second service shares the layer's bucket, so the burst
+                // consumed above applies to it too.
+                let second = second_svc
+                    .call(request("/hello.v1.HelloService/SayHello"))
+                    .await
+                    .unwrap();
+                assert_eq!(grpc_status(&second), Some("8"));
+            }
         }
     }
 }
