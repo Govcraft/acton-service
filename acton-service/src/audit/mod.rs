@@ -24,6 +24,8 @@ pub mod archive;
 pub mod chain;
 pub mod config;
 pub mod config_audit;
+#[cfg(feature = "auth")]
+pub mod decorators;
 pub mod event;
 pub(crate) mod failure_tracker;
 pub mod logger;
@@ -44,6 +46,10 @@ pub use config::{AlertConfig, AuditConfig, SyslogConfig};
 pub use config_audit::{
     compute_config_fingerprint, drift_check_handler, redact_config, DriftCheckResult,
 };
+#[cfg(feature = "auth")]
+pub use decorators::{AuditedApiKeyStorage, AuditedRefreshStorage};
+#[cfg(feature = "oauth")]
+pub use decorators::AuditedOAuthProvider;
 pub use event::{AuditEvent, AuditEventKind, AuditSeverity, AuditSource};
 pub use logger::AuditLogger;
 pub use middleware::{audit_layer, AuditRoute};

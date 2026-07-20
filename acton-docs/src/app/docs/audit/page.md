@@ -139,11 +139,33 @@ When `audit_auth_events` is enabled (default), the PASETO and JWT middleware aut
 | `AuthTokenInvalid` | Bearer token failed validation (bad signature, expired, malformed claims) | Warning |
 | `AuthTokenRevoked` | Revoked token presented. Event metadata carries `jti` for SIEM correlation. | Warning |
 | `AuthPermissionDenied` | Cedar policy returned `Deny` (HTTP middleware and gRPC tower service) | Warning |
-| `HttpRequestDenied` | Rate-limit rejection (`Error::RateLimitExceeded`) | Warning |
+| `HttpRequestDenied` | Rate-limit rejection (`Error::RateLimitExceeded`), from both the Redis-backed and governor limiters | Warning |
+| `AuthLogout` | `TypedSession<AuthSession>::logout()` called; subject is the previously authenticated user | Notice |
 
 > `AuthLoginFailed` is no longer emitted by the auth middleware. It is reserved for application-level login handlers (e.g. `POST /auth/login`) where credentials are submitted. The middleware emits `AuthTokenMissing` or `AuthTokenInvalid` instead, so unauthenticated probes against protected routes (health checks, scanners) no longer drown out real failed-login signal. See the 0.27 release notes for the migration.
 
 No additional code is required. These events include the client IP, user agent, request ID, and authenticated subject. The IP and request ID come from the request-context middleware, which resolves them once per request — from `X-Forwarded-For` / `X-Real-IP` when an upstream proxy supplies them, falling back to the direct TCP peer address otherwise — and runs after the request ID is generated. Token-failure events therefore carry a usable source even when a proxy strips forwarding headers (see [Execution Order](/docs/middleware#execution-order)).
+
+### Auth Storage Decorators
+
+Token refresh, API-key lifecycle, and OAuth callbacks run through storage and provider traits that your application constructs, so the framework cannot emit those events automatically. Wrap what you build with the decorators in `acton_service::audit` and every backend emits the same events:
+
+```rust
+use acton_service::audit::{AuditedApiKeyStorage, AuditedOAuthProvider, AuditedRefreshStorage};
+
+let logger = state.audit_logger().expect("audit enabled").clone();
+let refresh = AuditedRefreshStorage::new(RedisRefreshStorage::new(pool.clone()), logger.clone());
+let api_keys = AuditedApiKeyStorage::new(RedisApiKeyStorage::new(pool, "sk_live"), logger.clone());
+let google = AuditedOAuthProvider::new(google_provider, logger);
+```
+
+| Decorator | Emits | When |
+|---|---|---|
+| `AuditedRefreshStorage` | `AuthTokenRefresh` | Successful token rotation; source carries the user ID plus the IP/user agent captured at issuance |
+| `AuditedApiKeyStorage` | `AuthApiKeyCreated` / `AuthApiKeyRevoked` | Successful create/revoke; metadata carries key ID, name, prefix, and scopes — never the key or its hash |
+| `AuditedOAuthProvider` | `AuthOAuthCallback` | Authorization-code exchange, success (Notice) or failure (Warning) |
+
+Failed operations propagate their errors without emitting lifecycle events, and all decorator emissions honor `audit_auth_events`.
 
 ## Per-Route Auditing
 
