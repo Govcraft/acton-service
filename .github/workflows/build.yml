@@ -36,44 +36,67 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
           ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.event.after }}
+          PUSH_FORCED: ${{ github.event.forced }}
         run: |
           set -euo pipefail
 
-          # Only pull requests have a well-defined diff to inspect. Pushes to
-          # main and manual dispatches always run the full matrix.
-          if [ "$EVENT" != "pull_request" ]; then
+          # Branch protection does not require pull requests to be up to date
+          # with main before merging, so this push build is the safety net that
+          # catches two independently-green pull requests conflicting once
+          # combined. It is worth keeping, but only when code actually landed:
+          # a documentation merge would otherwise skip the matrix on the pull
+          # request and then run it in full here anyway.
+          if [ "$EVENT" = "push" ]; then
+            # A forced push or a brand-new branch has no usable previous commit
+            # to diff against, so fall back to running everything.
+            if [ "$PUSH_FORCED" = "true" ] || [ "$PUSH_BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              echo "Push has no reliable base to diff against; running the full matrix."
+              echo "code=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            files=$(git diff --name-only "$PUSH_BEFORE" "$PUSH_AFTER")
+          elif [ "$EVENT" != "pull_request" ]; then
+            # Manual dispatch is an explicit request to test everything.
             echo "Event '$EVENT' is not a pull request; running the full matrix."
             echo "code=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          marker=$(printf '%s\n%s' "$PR_TITLE" "$PR_BODY")
+          # The override markers live in the pull request title and body, so
+          # they only apply to pull requests. A push has already been through
+          # whatever the pull request decided.
+          if [ "$EVENT" = "pull_request" ]; then
+            marker=$(printf '%s\n%s' "$PR_TITLE" "$PR_BODY")
 
-          # `[full-ci]` is checked first so that forcing the matrix ON always
-          # beats forcing it off. The safe override wins ties.
-          if printf '%s' "$marker" | grep -qF '[full-ci]'; then
-            echo "Found [full-ci]; running the full matrix regardless of paths."
-            echo "code=true" >> "$GITHUB_OUTPUT"
-            exit 0
+            # `[full-ci]` is checked first so that forcing the matrix ON always
+            # beats forcing it off. The safe override wins ties.
+            if printf '%s' "$marker" | grep -qF '[full-ci]'; then
+              echo "Found [full-ci]; running the full matrix regardless of paths."
+              echo "code=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            if printf '%s' "$marker" | grep -qF '[skip-matrix]'; then
+              # Skipping is a CI bypass, so it is limited to people who already
+              # have write access. For anyone else the marker is ignored rather
+              # than honoured, and the normal path rules decide.
+              case "$ASSOCIATION" in
+                OWNER|MEMBER|COLLABORATOR)
+                  echo "Found [skip-matrix] from $ASSOCIATION; skipping the Rust matrix."
+                  echo "code=false" >> "$GITHUB_OUTPUT"
+                  exit 0
+                  ;;
+                *)
+                  echo "::warning::Ignoring [skip-matrix] from $ASSOCIATION -- write access is required to skip CI."
+                  ;;
+              esac
+            fi
+
+            files=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
           fi
 
-          if printf '%s' "$marker" | grep -qF '[skip-matrix]'; then
-            # Skipping is a CI bypass, so it is limited to people who already
-            # have write access. For anyone else the marker is ignored rather
-            # than honoured, and the normal path rules decide.
-            case "$ASSOCIATION" in
-              OWNER|MEMBER|COLLABORATOR)
-                echo "Found [skip-matrix] from $ASSOCIATION; skipping the Rust matrix."
-                echo "code=false" >> "$GITHUB_OUTPUT"
-                exit 0
-                ;;
-              *)
-                echo "::warning::Ignoring [skip-matrix] from $ASSOCIATION -- write access is required to skip CI."
-                ;;
-            esac
-          fi
-
-          files=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
           echo "Changed files:"
           echo "$files" | sed 's/^/  /'
 
