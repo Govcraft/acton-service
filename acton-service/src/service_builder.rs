@@ -1921,23 +1921,34 @@ where
     }
 }
 
-/// Record a fatal build-time misconfiguration, keeping the first one seen.
-///
-/// The build continues after a failure so that every problem gets logged in one
-/// pass rather than one per restart, but only the first error is returned to the
-/// caller — it is the one that stopped the intended posture from being honoured.
 /// Whether the entered tokio runtime supports `tokio::task::block_in_place`.
 ///
 /// `None` when no runtime is entered at all. `Some(false)` on a current-thread
 /// runtime, where `block_in_place` panics instead of blocking — callers must
 /// check this up front rather than discovering the flavor as a panic inside
 /// tokio during `build()`.
+///
+/// Gated to match its call sites: every caller sits inside the agent-runtime
+/// block, which only exists when one of these features pulls in a pool agent.
+#[cfg(any(
+    feature = "database",
+    feature = "cache",
+    feature = "events",
+    feature = "turso",
+    feature = "surrealdb",
+    feature = "clickhouse"
+))]
 fn runtime_supports_block_in_place() -> Option<bool> {
     tokio::runtime::Handle::try_current()
         .ok()
         .map(|handle| handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
 }
 
+/// Record a fatal build-time misconfiguration, keeping the first one seen.
+///
+/// The build continues after a failure so that every problem gets logged in one
+/// pass rather than one per restart, but only the first error is returned to the
+/// caller — it is the one that stopped the intended posture from being honoured.
 fn record_startup_error(slot: &mut Option<crate::error::Error>, error: crate::error::Error) {
     if slot.is_none() {
         *slot = Some(error);
