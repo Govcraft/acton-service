@@ -51,3 +51,32 @@ jobs:
         run: cargo clippy -p acton-service --all-targets --no-default-features --features "full,crypto-ring" -- -D warnings
       - name: Nextest
         run: cargo nextest run -p acton-service --no-default-features --features "full,crypto-ring"
+
+  # The `full` legs above cover audit with the PostgreSQL storage backend
+  # (`database` is in `full`). The optional backends are mutually exclusive
+  # with `database`, so each parser/unit path gets its own leg. All storage
+  # tests here are pure unit tests — no live services required.
+  audit-storage:
+    name: audit storage (${{ matrix.backend }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: turso
+            features: --no-default-features --features "audit,turso,http,observability,crypto-aws-lc-rs"
+          - backend: surrealdb
+            features: --no-default-features --features "audit,surrealdb,http,observability,crypto-aws-lc-rs"
+          - backend: clickhouse
+            features: --features "audit,clickhouse"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: audit-${{ matrix.backend }}
+      - uses: taiki-e/install-action@nextest
+      - name: Nextest
+        run: cargo nextest run -p acton-service ${{ matrix.features }}

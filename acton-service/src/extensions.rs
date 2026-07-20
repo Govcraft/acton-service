@@ -513,7 +513,9 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 
-    #[tokio::test]
+    // Multi-threaded: `build()` spawns the audit agent (enabled by default),
+    // which requires a runtime where `block_in_place` can block.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn service_builder_without_actors_has_empty_extensions() {
         use crate::config::Config;
         use crate::prelude::ServiceBuilder;
