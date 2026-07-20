@@ -1,7 +1,7 @@
 name: Docs Sync on Merge
 
 # When a PR merges to main, review what changed and update the documentation to
-# match -- both the acton-docs site and the root README --
+# match -- the acton-docs site, the root README, and the crate-level rustdoc --
 # shipping the result as its own PR that self-merges once CI is green.
 #
 # Loop guard: this workflow opens PRs, and those PRs merge, which would retrigger
@@ -96,7 +96,9 @@ jobs:
             A pull request just merged into `main` of Govcraft/acton-service.
             Your job is to bring the documentation back in sync with the code,
             and to do nothing at all if it is already in sync. Two surfaces are
-            in scope: the `acton-docs/` site and the root `README.md`.
+            in scope: the `acton-docs/` site, the root `README.md`, and the
+            crate-level `//!` documentation at the top of
+            `acton-service/src/lib.rs`.
 
             The merged PR number is ${{ steps.pr.outputs.number }}.
 
@@ -107,8 +109,9 @@ jobs:
                 gh pr view ${{ steps.pr.outputs.number }} --json title,body,files
                 gh pr diff ${{ steps.pr.outputs.number }}
 
-            Ignore changes confined to `acton-docs/**` or `README.md` -- those
-            are documentation edits, not code changes that need documenting.
+            Ignore changes confined to `acton-docs/**`, `README.md`, or the
+            `//!` block of `acton-service/src/lib.rs` -- those are documentation
+            edits, not code changes that need documenting.
 
             ## Step 2 -- decide whether docs need updating
 
@@ -122,8 +125,8 @@ jobs:
             dependency bumps with no user-visible effect, CI or tooling changes, or
             performance work that does not alter any documented contract.
 
-            Check BOTH surfaces against the change. They drift independently
-            and are frequently inconsistent with each other.
+            Check ALL THREE surfaces against the change. They drift
+            independently and are frequently inconsistent with each other.
 
             The root `README.md` (about 1000 lines) is the crate's front page on
             GitHub and crates.io. It carries a feature summary, a quick start, an
@@ -132,6 +135,23 @@ jobs:
             using a template, so its `acton-service = "x.y"` snippets go stale
             silently -- if the merged PR changed the workspace version, update
             every such snippet.
+
+            The crate-level `//!` block at the top of
+            `acton-service/src/lib.rs` is the front page on docs.rs. It repeats
+            the README's feature summary and quick-start example in rustdoc
+            form.
+
+            Editing that file carries a constraint the other two do not:
+
+              - Change ONLY the leading `//!` comment lines. Everything from the
+                first non-`//!` line onwards is real code -- feature gates,
+                re-exports, module declarations -- and is strictly off limits.
+              - Its ```rust fenced blocks are compiled and run as doctests by
+                CI. An example that does not compile fails the build. Keep
+                examples faithful to the current API rather than plausible.
+              - After editing, run `git diff -- acton-service/src/lib.rs` and
+                confirm every changed line begins with `//!`. If any does not,
+                undo it before committing.
 
             The documentation site layout:
               - `acton-docs/src/app/docs/<topic>/page.md` -- 56 Markdoc pages
@@ -169,8 +189,8 @@ jobs:
             Only if you actually edited files:
 
                 git checkout -b docs/auto-sync-pr-${{ steps.pr.outputs.number }}
-                git add acton-docs README.md
-                git commit -m "docs: sync docs and README with #${{ steps.pr.outputs.number }}"
+                git add acton-docs README.md acton-service/src/lib.rs
+                git commit -m "docs: sync docs, README and crate docs with #${{ steps.pr.outputs.number }}"
                 git push -u origin docs/auto-sync-pr-${{ steps.pr.outputs.number }}
 
             The branch name prefix `docs/auto-sync-` is REQUIRED -- it is the loop
@@ -178,10 +198,10 @@ jobs:
             different prefix, and never commit to `main` directly.
 
             Follow the Conventional Commits spec, and stage ONLY paths under
-            `acton-docs/` plus the root `README.md`. Never stage Rust sources,
-            `Cargo.toml`, or workflows. Use `git add` with those explicit paths
-            rather than `git add -A`, so an unrelated stray file cannot ride
-            along into the pull request.
+            `acton-docs/`, the root `README.md`, and `acton-service/src/lib.rs`.
+            No other Rust source, and never `Cargo.toml` or workflows. Use
+            `git add` with those explicit paths rather than `git add -A`, so an
+            unrelated stray file cannot ride along into the pull request.
 
             Then open the PR, explaining what changed in the code and why each doc
             edit follows from it, and linking the source PR:
@@ -189,7 +209,7 @@ jobs:
                 gh pr create \
                   --base main \
                   --head docs/auto-sync-pr-${{ steps.pr.outputs.number }} \
-                  --title "docs: sync docs and README with #${{ steps.pr.outputs.number }}" \
+                  --title "docs: sync docs, README and crate docs with #${{ steps.pr.outputs.number }}" \
                   --body "<your explanation here>"
 
             Finally, queue it to merge once CI passes:
