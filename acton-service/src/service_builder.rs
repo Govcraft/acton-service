@@ -134,14 +134,14 @@ where
     graphql: Option<crate::graphql::VersionedGraphQL>,
     agent_runtime: Option<acton_reactive::prelude::ActorRuntime>,
     actor_extensions: Vec<Box<dyn crate::extensions::ActorExtensionSpawner>>,
-    /// Pre-built HTTP TLS config supplied by the caller. When set, `build()`
-    /// uses it verbatim and never reads `[tls]` cert/key files.
+    /// Caller-supplied HTTP TLS credentials. When set, `build()` uses them
+    /// verbatim and never reads `[tls]` cert/key files.
     #[cfg(feature = "tls")]
-    tls_config_override: Option<std::sync::Arc<tokio_rustls::rustls::ServerConfig>>,
-    /// Pre-built gRPC TLS config supplied by the caller. When set, `build()`
-    /// uses it verbatim and never reads `[grpc.tls]` cert/key files.
+    tls_config_override: Option<crate::tls::TlsConfigSource>,
+    /// Caller-supplied gRPC TLS credentials. When set, `build()` uses them
+    /// verbatim and never reads `[grpc.tls]` cert/key files.
     #[cfg(all(feature = "grpc", feature = "tls"))]
-    grpc_tls_config_override: Option<std::sync::Arc<tokio_rustls::rustls::ServerConfig>>,
+    grpc_tls_config_override: Option<crate::tls::TlsConfigSource>,
 }
 
 impl<T> ServiceBuilder<T>
@@ -180,12 +180,34 @@ where
     /// listener coming up, closing that time-of-check/time-of-use window.
     ///
     /// The override applies whenever it is set, regardless of what `[tls]` says.
+    ///
+    /// The credentials supplied here are **static**: the listener serves this
+    /// exact config for its whole life. To rotate certificates without a
+    /// restart, use [`with_tls_config_source`](Self::with_tls_config_source).
     #[cfg(feature = "tls")]
     pub fn with_tls_config(
         mut self,
         config: std::sync::Arc<tokio_rustls::rustls::ServerConfig>,
     ) -> Self {
-        self.tls_config_override = Some(config);
+        self.tls_config_override = Some(crate::tls::TlsConfigSource::from_server_config(config));
+        self
+    }
+
+    /// Supply reloadable HTTP TLS credentials.
+    ///
+    /// The rotatable form of [`with_tls_config`](Self::with_tls_config): it
+    /// carries the same time-of-check/time-of-use guarantee, and additionally
+    /// lets the application replace the certificate while the listener runs.
+    /// Keep a clone of the source and call
+    /// [`TlsConfigSource::reload`](crate::tls::TlsConfigSource::reload) after
+    /// the credential files change; the next handshake picks up the new config.
+    /// A failed reload is fail-closed and keeps the previous credentials
+    /// serving, so rotation can never take the listener down.
+    ///
+    /// The override applies whenever it is set, regardless of what `[tls]` says.
+    #[cfg(feature = "tls")]
+    pub fn with_tls_config_source(mut self, source: crate::tls::TlsConfigSource) -> Self {
+        self.tls_config_override = Some(source);
         self
     }
 
@@ -197,12 +219,32 @@ where
     ///
     /// The override applies whenever it is set, regardless of what `[grpc.tls]`
     /// says, and suppresses the fallback to the shared `[tls]` config.
+    ///
+    /// The credentials supplied here are **static**. To rotate them without a
+    /// restart, use
+    /// [`with_grpc_tls_config_source`](Self::with_grpc_tls_config_source).
     #[cfg(all(feature = "grpc", feature = "tls"))]
     pub fn with_grpc_tls_config(
         mut self,
         config: std::sync::Arc<tokio_rustls::rustls::ServerConfig>,
     ) -> Self {
-        self.grpc_tls_config_override = Some(config);
+        self.grpc_tls_config_override =
+            Some(crate::tls::TlsConfigSource::from_server_config(config));
+        self
+    }
+
+    /// Supply reloadable TLS credentials for the separate-port gRPC listener.
+    ///
+    /// The gRPC twin of
+    /// [`with_tls_config_source`](Self::with_tls_config_source), with the same
+    /// rotation and fail-closed semantics. Applies only to the dual-port gRPC
+    /// listener; in single-port mode the HTTP TLS source terminates both.
+    ///
+    /// The override applies whenever it is set, regardless of what `[grpc.tls]`
+    /// says, and suppresses the fallback to the shared `[tls]` config.
+    #[cfg(all(feature = "grpc", feature = "tls"))]
+    pub fn with_grpc_tls_config_source(mut self, source: crate::tls::TlsConfigSource) -> Self {
+        self.grpc_tls_config_override = Some(source);
         self
     }
 
@@ -1539,12 +1581,14 @@ where
         // where TLS was configured would silently invert the fail-safe direction.
         #[cfg(feature = "tls")]
         let tls_config = {
-            if let Some(sc) = self.tls_config_override.take() {
-                tracing::info!("TLS configured from caller-supplied ServerConfig");
-                Some(sc)
+            if let Some(source) = self.tls_config_override.take() {
+                tracing::info!("TLS configured from caller-supplied credentials");
+                Some(source)
             } else if let Some(ref tls_cfg) = config.tls {
                 if tls_cfg.enabled {
-                    match crate::tls::load_server_config(tls_cfg) {
+                    // A config-driven source remembers its paths, so the service
+                    // can rotate these credentials later without a restart.
+                    match crate::tls::TlsConfigSource::from_tls_config(tls_cfg) {
                         Ok(sc) => {
                             tracing::info!(
                                 "TLS configured (cert: {}, key: {})",
@@ -1578,13 +1622,13 @@ where
         // As with HTTP above, a failed load of an enabled section is fatal
         // rather than a silent downgrade to plaintext.
         #[cfg(all(feature = "grpc", feature = "tls"))]
-        let grpc_tls_config = if let Some(sc) = self.grpc_tls_config_override.take() {
-            tracing::info!("gRPC TLS configured from caller-supplied ServerConfig");
-            Some(sc)
+        let grpc_tls_config = if let Some(source) = self.grpc_tls_config_override.take() {
+            tracing::info!("gRPC TLS configured from caller-supplied credentials");
+            Some(source)
         } else {
             match config.grpc.as_ref().and_then(|g| g.tls.as_ref()) {
                 Some(grpc_tls) if grpc_tls.enabled => {
-                    match crate::tls::load_server_config(grpc_tls) {
+                    match crate::tls::TlsConfigSource::from_tls_config(grpc_tls) {
                         Ok(sc) => {
                             tracing::info!(
                                 "gRPC TLS configured (cert: {}, key: {})",
@@ -2091,11 +2135,11 @@ where
     #[cfg(feature = "grpc")]
     grpc_routes: Option<axum::Router>,
     #[cfg(feature = "tls")]
-    tls_config: Option<std::sync::Arc<tokio_rustls::rustls::ServerConfig>>,
-    /// Per-listener TLS config for the separate-port gRPC listener. Falls back
-    /// to `tls_config` (the HTTP TLS) when `[grpc.tls]` is not configured.
+    tls_config: Option<crate::tls::TlsConfigSource>,
+    /// Per-listener TLS credentials for the separate-port gRPC listener. Falls
+    /// back to `tls_config` (the HTTP TLS) when `[grpc.tls]` is not configured.
     #[cfg(all(feature = "grpc", feature = "tls"))]
-    grpc_tls_config: Option<std::sync::Arc<tokio_rustls::rustls::ServerConfig>>,
+    grpc_tls_config: Option<crate::tls::TlsConfigSource>,
     agent_runtime: Option<acton_reactive::prelude::ActorRuntime>,
     /// Fatal misconfiguration recorded during `build()`. `serve()` returns this
     /// before binding any listener, so a service that could not honour its
@@ -2195,12 +2239,17 @@ where
 
                         let grpc_handle = tokio::spawn(async move {
                             #[cfg(feature = "tls")]
-                            if let Some(ref server_config) = grpc_tls_config {
-                                let tls_listener = crate::tls::TlsListener::new(
+                            if let Some(ref tls_source) = grpc_tls_config {
+                                let tls_listener = crate::tls::TlsListener::with_config_source(
                                     grpc_listener,
-                                    server_config.clone(),
+                                    tls_source.clone(),
                                 );
-                                return axum::serve(tls_listener, grpc_app)
+                                return axum::serve(
+                                    tls_listener,
+                                    grpc_app.into_make_service_with_connect_info::<
+                                        crate::tls::TlsConnectInfo,
+                                    >(),
+                                )
                                     .with_graceful_shutdown(shutdown_signal())
                                     .await;
                             }
@@ -2210,18 +2259,22 @@ where
                                 .await
                         });
 
-                        // Run HTTP server (with optional TLS)
-                        // Note: the TLS path does not use ConnectInfo (orphan
-                        // rules forbid implementing `Connected` for `SocketAddr`
-                        // on a non-axum listener). For IP-based rate limiting
-                        // behind TLS, run behind a proxy and enable
-                        // `trust_forwarded_headers`.
+                        // Run HTTP server (with optional TLS). The TLS listener
+                        // exposes `TlsConnectInfo` (remote address plus any
+                        // verified client certificate) as connect-info.
                         #[cfg(feature = "tls")]
-                        if let Some(ref server_config) = self.tls_config {
-                            let tls_listener =
-                                crate::tls::TlsListener::new(http_listener, server_config.clone());
+                        if let Some(ref tls_source) = self.tls_config {
+                            let tls_listener = crate::tls::TlsListener::with_config_source(
+                                http_listener,
+                                tls_source.clone(),
+                            );
                             tracing::info!("TLS enabled (HTTPS) for both HTTP and gRPC");
-                            let http_result = axum::serve(tls_listener, self.app)
+                            let http_result = axum::serve(
+                                tls_listener,
+                                self.app.into_make_service_with_connect_info::<
+                                    crate::tls::TlsConnectInfo,
+                                >(),
+                            )
                                 .with_graceful_shutdown(shutdown_signal())
                                 .await;
                             let _ = grpc_handle.await;
@@ -2264,14 +2317,22 @@ where
                         // its own auth and Cedar layers through the merge)
                         let hybrid_service = grpc_routes.merge(self.app);
 
-                        // Note: the TLS path does not use ConnectInfo (orphan
-                        // rules; see comment in dual-port path above).
+                        // The TLS listener exposes `TlsConnectInfo` (remote
+                        // address plus any verified client certificate) as
+                        // connect-info.
                         #[cfg(feature = "tls")]
-                        if let Some(ref server_config) = self.tls_config {
-                            let tls_listener =
-                                crate::tls::TlsListener::new(listener, server_config.clone());
+                        if let Some(ref tls_source) = self.tls_config {
+                            let tls_listener = crate::tls::TlsListener::with_config_source(
+                                listener,
+                                tls_source.clone(),
+                            );
                             tracing::info!("TLS enabled (HTTPS) for hybrid HTTP+gRPC");
-                            axum::serve(tls_listener, hybrid_service)
+                            axum::serve(
+                                tls_listener,
+                                hybrid_service.into_make_service_with_connect_info::<
+                                    crate::tls::TlsConnectInfo,
+                                >(),
+                            )
                                 .with_graceful_shutdown(shutdown_signal())
                                 .await?;
 
@@ -2317,13 +2378,18 @@ where
 
         let listener = TcpListener::bind(&self.listener_addr).await?;
 
-        // Note: the TLS path does not use ConnectInfo (orphan rules;
-        // see comment in gRPC dual-port path above).
+        // The TLS listener exposes `TlsConnectInfo` (remote address plus any
+        // verified client certificate) as connect-info.
         #[cfg(feature = "tls")]
-        if let Some(ref server_config) = self.tls_config {
-            let tls_listener = crate::tls::TlsListener::new(listener, server_config.clone());
+        if let Some(ref tls_source) = self.tls_config {
+            let tls_listener =
+                crate::tls::TlsListener::with_config_source(listener, tls_source.clone());
             tracing::info!("TLS enabled (HTTPS)");
-            axum::serve(tls_listener, self.app)
+            axum::serve(
+                tls_listener,
+                self.app
+                    .into_make_service_with_connect_info::<crate::tls::TlsConnectInfo>(),
+            )
                 .with_graceful_shutdown(shutdown_signal())
                 .await?;
 
@@ -2530,6 +2596,8 @@ mod tests {
                 enabled: true,
                 cert_path: "/nonexistent/cert.pem".into(),
                 key_path: "/nonexistent/key.pem".into(),
+                client_ca_path: None,
+                client_auth_optional: false,
             }),
             ..Default::default()
         };
@@ -2571,6 +2639,8 @@ mod tests {
                 enabled: true,
                 cert_path: "/nonexistent/cert.pem".into(),
                 key_path: "/nonexistent/key.pem".into(),
+                client_ca_path: None,
+                client_auth_optional: false,
             }),
             port: 50051,
             reflection_enabled: false,
@@ -2606,6 +2676,8 @@ mod tests {
                 enabled: false,
                 cert_path: "/nonexistent/cert.pem".into(),
                 key_path: "/nonexistent/key.pem".into(),
+                client_ca_path: None,
+                client_auth_optional: false,
             }),
             ..Default::default()
         };
@@ -2631,6 +2703,8 @@ mod tests {
                 enabled: true,
                 cert_path: "/nonexistent/cert.pem".into(),
                 key_path: "/nonexistent/key.pem".into(),
+                client_ca_path: None,
+                client_auth_optional: false,
             }),
             ..Default::default()
         };
@@ -2860,6 +2934,8 @@ mod tests {
                 enabled: true,
                 cert_path: "/nonexistent/cert.pem".into(),
                 key_path: "/nonexistent/key.pem".into(),
+                client_ca_path: None,
+                client_auth_optional: false,
             }),
             ..base
         };

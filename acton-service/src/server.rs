@@ -102,20 +102,18 @@ impl Server {
 
         // Serve with graceful shutdown -- TLS or plain TCP
         //
-        // Note: the TLS path serves the app directly without
-        // `into_make_service_with_connect_info`. A custom listener like
-        // `TlsListener` would require a `Connected` impl which orphan
-        // rules forbid for `SocketAddr`. Deployments that terminate TLS
-        // here and need IP-based rate-limiting should set
-        // `[rate_limit] trust_forwarded_headers = true` and run behind
-        // a proxy that sets `X-Forwarded-For`.
+        // The TLS listener exposes `TlsConnectInfo` (remote address plus any
+        // verified client certificate) as connect-info.
         #[cfg(feature = "tls")]
         if let Some(ref tls_config) = self.config.tls {
             if tls_config.enabled {
                 let server_config = crate::tls::load_server_config(tls_config)?;
                 let tls_listener = crate::tls::TlsListener::new(listener, server_config);
                 tracing::info!("TLS enabled (HTTPS)");
-                axum::serve(tls_listener, app)
+                axum::serve(
+                    tls_listener,
+                    app.into_make_service_with_connect_info::<crate::tls::TlsConnectInfo>(),
+                )
                     .with_graceful_shutdown(shutdown_signal())
                     .await?;
                 tracing::info!("Server shutdown complete");

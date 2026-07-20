@@ -132,6 +132,7 @@ async-graphql-axum = { version = "7.2.1", optional = true }
 bytes = { version = "1.11.1", optional = true }
 rustls = { version = "0.23.40", default-features = false, features = ["logging", "tls12", "std"], optional = true }
 rustls-pki-types = { version = "1.14.1", features = ["std"], optional = true }
+arc-swap = { version = "1.9.2", optional = true }
 
 [features]
 default = ["http", "observability", "crypto-aws-lc-rs"]
@@ -223,7 +224,7 @@ repository = []
 handlers = ["repository"]
 
 # TLS support (rustls-based HTTPS)
-tls = ["dep:tokio-rustls", "dep:rustls-pki-types"]
+tls = ["dep:tokio-rustls", "dep:rustls-pki-types", "dep:arc-swap"]
 
 # Audit logging with BLAKE3 hash chaining
 audit = ["dep:blake3"]
