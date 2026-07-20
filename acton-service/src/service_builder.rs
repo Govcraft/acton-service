@@ -605,7 +605,7 @@ where
         let mut broker_handle = if needs_agents {
             // Use block_in_place to run async code in sync context
             // Initialize agent runtime inside the async block using launch_async()
-            if let Ok(_handle) = tokio::runtime::Handle::try_current() {
+            if runtime_supports_block_in_place() == Some(true) {
                 tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(async {
                         // Initialize the agent runtime using launch_async() for async context
@@ -738,6 +738,16 @@ where
                         }
                     });
                 });
+            } else if runtime_supports_block_in_place() == Some(false) {
+                let err = crate::error::Error::Internal(
+                    "database/cache/events agents are configured but the tokio runtime is \
+                     single-threaded, so they cannot be spawned from ServiceBuilder::build(); \
+                     use a multi-threaded runtime (#[tokio::main], or \
+                     #[tokio::test(flavor = \"multi_thread\")] in tests)"
+                        .to_string(),
+                );
+                tracing::error!("{}", err);
+                record_startup_error(&mut startup_error, err);
             }
 
             self.broker()
@@ -771,8 +781,8 @@ where
                         },
                     );
 
-                if let Ok(_handle) = tokio::runtime::Handle::try_current() {
-                    let result = tokio::task::block_in_place(|| {
+                match runtime_supports_block_in_place() {
+                    Some(true) => tokio::task::block_in_place(|| {
                         tokio::runtime::Handle::current().block_on(async {
                             // Initialize agent runtime if not already done
                             if self.agent_runtime.is_none() {
@@ -808,11 +818,24 @@ where
                                 None
                             }
                         })
-                    });
-                    result
-                } else {
-                    tracing::warn!("No tokio runtime available for audit agent");
-                    None
+                    }),
+                    Some(false) => {
+                        let err = crate::error::Error::Internal(
+                            "audit logging is enabled (the default) but the tokio runtime is \
+                             single-threaded, so the audit agent cannot be spawned from \
+                             ServiceBuilder::build(); use a multi-threaded runtime \
+                             (#[tokio::main], or #[tokio::test(flavor = \"multi_thread\")] in \
+                             tests) or set [audit] enabled = false"
+                                .to_string(),
+                        );
+                        tracing::error!("{}", err);
+                        record_startup_error(&mut startup_error, err);
+                        None
+                    }
+                    None => {
+                        tracing::warn!("No tokio runtime available for audit agent");
+                        None
+                    }
                 }
             } else {
                 None
@@ -1892,6 +1915,18 @@ where
 /// The build continues after a failure so that every problem gets logged in one
 /// pass rather than one per restart, but only the first error is returned to the
 /// caller — it is the one that stopped the intended posture from being honoured.
+/// Whether the entered tokio runtime supports `tokio::task::block_in_place`.
+///
+/// `None` when no runtime is entered at all. `Some(false)` on a current-thread
+/// runtime, where `block_in_place` panics instead of blocking — callers must
+/// check this up front rather than discovering the flavor as a panic inside
+/// tokio during `build()`.
+fn runtime_supports_block_in_place() -> Option<bool> {
+    tokio::runtime::Handle::try_current()
+        .ok()
+        .map(|handle| handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
+}
+
 fn record_startup_error(slot: &mut Option<crate::error::Error>, error: crate::error::Error) {
     if slot.is_none() {
         *slot = Some(error);
@@ -2482,10 +2517,44 @@ mod tests {
         );
     }
 
+    /// The audit agent (enabled by default) cannot be spawned from a
+    /// current-thread runtime; `build()` must record that as a startup error
+    /// that `serve()` surfaces, instead of letting `block_in_place` panic with
+    /// an unactionable message deep inside tokio. This test deliberately stays
+    /// on the default current-thread test runtime.
+    #[cfg(feature = "audit")]
+    #[tokio::test]
+    async fn serve_refuses_when_audit_cannot_spawn_on_current_thread_runtime() {
+        use crate::config::Config;
+        use crate::prelude::ServiceBuilder;
+
+        let base = Config::<()>::default();
+        let config = Config::<()> {
+            service: crate::config::ServiceConfig {
+                port: 0,
+                ..base.service.clone()
+            },
+            ..base
+        };
+
+        let service = ServiceBuilder::new().with_config(config).build();
+
+        let err = service
+            .serve()
+            .await
+            .expect_err("serve() must refuse when the audit agent could not be spawned");
+        assert!(
+            err.to_string().contains("audit"),
+            "error must name the audit subsystem: {err}"
+        );
+    }
+
     /// `serve()` must reject a degraded build before it binds any listener, so
     /// callers using the infallible `build()` are protected too.
     #[cfg(feature = "tls")]
-    #[tokio::test]
+    // Multi-threaded: `build()` spawns the audit agent (enabled by default),
+    // which requires a runtime where `block_in_place` can block.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn serve_refuses_to_bind_after_a_failed_tls_load() {
         use crate::config::{Config, TlsConfig};
         use crate::prelude::ServiceBuilder;
@@ -2519,7 +2588,9 @@ mod tests {
     /// `config.tls.enabled` alone would drop the header on connections that are
     /// in fact encrypted.
     #[cfg(feature = "tls")]
-    #[tokio::test]
+    // Multi-threaded: `build()` spawns the audit agent (enabled by default),
+    // which requires a runtime where `block_in_place` can block.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn injected_tls_config_still_sends_hsts() {
         use crate::config::Config;
         use crate::prelude::ServiceBuilder;
