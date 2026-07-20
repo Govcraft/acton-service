@@ -685,15 +685,22 @@ The endpoint is unauthenticated like `/health` — it exposes route names and tr
 
 ### `tls`
 
-Rustls-based HTTPS listener for terminating TLS directly in the service.
+Rustls-based HTTPS listener for terminating TLS directly in the service, plus a
+`client_tls` module for presenting a client certificate when this service
+*calls* another mutual-TLS service.
 
-**When to use**: Serving HTTPS without a TLS-terminating proxy in front
+**When to use**: Serving HTTPS without a TLS-terminating proxy in front, and/or
+calling peers that require mutual TLS
 
-**Dependencies**: tokio-rustls, rustls-pki-types
+**Dependencies**: tokio-rustls, rustls-pki-types, zeroize, webpki-roots
 
 **Provides**:
 - TLS-enabled server listener
 - Certificate and private key loading
+- `ClientIdentityConfig` plus a `client_tls` module (`load_rustls_client_config`,
+  `load_reqwest_identity`, `reqwest_client_builder`, `tonic_client_tls_config`
+  under `grpc`) for outbound mutual TLS, including a `ClientIdentitySource` for
+  clients that need to rotate their certificate at runtime
 
 ```toml
 acton-service = { version = "{% version() %}", features = ["tls"] }
