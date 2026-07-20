@@ -370,20 +370,8 @@ mod tests {
         .expect("spawn audit agent");
         let logger = AuditLogger::new(handle, "test-svc".to_string(), config);
 
-        // The chain initializes asynchronously (after_start -> ChainLoaded) and
-        // the agent drops events that arrive before it finishes, so probe with
-        // sentinel events until one lands, then discard the sentinels.
-        for _ in 0..100 {
-            logger
-                .log_custom("test.chain-probe", AuditSeverity::Informational, None)
-                .await;
-            tokio::time::sleep(Duration::from_millis(20)).await;
-            if !storage.events.lock().expect("events lock").is_empty() {
-                break;
-            }
-        }
-        storage.events.lock().expect("events lock").clear();
-
+        // No chain-readiness probe needed: the agent buffers events emitted
+        // before `ChainLoaded` and drains them in order once the chain exists.
         (runtime, storage, logger)
     }
 
