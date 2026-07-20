@@ -30,6 +30,12 @@ jobs:
           EVENT: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # Author-controlled text. Kept in the environment and never
+          # interpolated into the script, so a title like `"; rm -rf / #` is
+          # inert data rather than a command.
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          ASSOCIATION: ${{ github.event.pull_request.author_association }}
         run: |
           set -euo pipefail
 
@@ -39,6 +45,32 @@ jobs:
             echo "Event '$EVENT' is not a pull request; running the full matrix."
             echo "code=true" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+
+          marker=$(printf '%s\n%s' "$PR_TITLE" "$PR_BODY")
+
+          # `[full-ci]` is checked first so that forcing the matrix ON always
+          # beats forcing it off. The safe override wins ties.
+          if printf '%s' "$marker" | grep -qF '[full-ci]'; then
+            echo "Found [full-ci]; running the full matrix regardless of paths."
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if printf '%s' "$marker" | grep -qF '[skip-matrix]'; then
+            # Skipping is a CI bypass, so it is limited to people who already
+            # have write access. For anyone else the marker is ignored rather
+            # than honoured, and the normal path rules decide.
+            case "$ASSOCIATION" in
+              OWNER|MEMBER|COLLABORATOR)
+                echo "Found [skip-matrix] from $ASSOCIATION; skipping the Rust matrix."
+                echo "code=false" >> "$GITHUB_OUTPUT"
+                exit 0
+                ;;
+              *)
+                echo "::warning::Ignoring [skip-matrix] from $ASSOCIATION -- write access is required to skip CI."
+                ;;
+            esac
           fi
 
           files=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
