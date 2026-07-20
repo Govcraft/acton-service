@@ -161,6 +161,13 @@ jobs:
         run: cargo clippy -p acton-service --all-targets --features full -- -D warnings
       - name: Nextest
         run: cargo nextest run -p acton-service --features full
+      # nextest does not run doctests, so without this step the examples in the
+      # rustdoc -- including the crate-level block that becomes the docs.rs
+      # front page -- are never compiled by CI. Run once here on the default
+      # crypto provider rather than on every leg: the examples do not vary by
+      # backend, and they add roughly twenty seconds.
+      - name: Doctests
+        run: cargo test --doc -p acton-service --features full
 
   ring:
     name: crypto-ring (opt-in)
