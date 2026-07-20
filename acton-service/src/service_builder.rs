@@ -134,6 +134,14 @@ where
     graphql: Option<crate::graphql::VersionedGraphQL>,
     agent_runtime: Option<acton_reactive::prelude::ActorRuntime>,
     actor_extensions: Vec<Box<dyn crate::extensions::ActorExtensionSpawner>>,
+    /// Pre-built HTTP TLS config supplied by the caller. When set, `build()`
+    /// uses it verbatim and never reads `[tls]` cert/key files.
+    #[cfg(feature = "tls")]
+    tls_config_override: Option<std::sync::Arc<tokio_rustls::rustls::ServerConfig>>,
+    /// Pre-built gRPC TLS config supplied by the caller. When set, `build()`
+    /// uses it verbatim and never reads `[grpc.tls]` cert/key files.
+    #[cfg(all(feature = "grpc", feature = "tls"))]
+    grpc_tls_config_override: Option<std::sync::Arc<tokio_rustls::rustls::ServerConfig>>,
 }
 
 impl<T> ServiceBuilder<T>
@@ -156,7 +164,46 @@ where
             graphql: None,
             agent_runtime: None,
             actor_extensions: Vec::new(),
+            #[cfg(feature = "tls")]
+            tls_config_override: None,
+            #[cfg(all(feature = "grpc", feature = "tls"))]
+            grpc_tls_config_override: None,
         }
+    }
+
+    /// Supply a pre-built HTTP TLS configuration.
+    ///
+    /// When set, `build()` uses this config verbatim for the HTTP listener and
+    /// never reads the `[tls]` `cert_path` / `key_path` files. Use this when the
+    /// application has already loaded and validated the key material: it removes
+    /// the second read that would otherwise sit between your check and the
+    /// listener coming up, closing that time-of-check/time-of-use window.
+    ///
+    /// The override applies whenever it is set, regardless of what `[tls]` says.
+    #[cfg(feature = "tls")]
+    pub fn with_tls_config(
+        mut self,
+        config: std::sync::Arc<tokio_rustls::rustls::ServerConfig>,
+    ) -> Self {
+        self.tls_config_override = Some(config);
+        self
+    }
+
+    /// Supply a pre-built TLS configuration for the separate-port gRPC listener.
+    ///
+    /// The gRPC twin of [`with_tls_config`](Self::with_tls_config), carrying the
+    /// same time-of-check/time-of-use guarantee. Applies only to the dual-port
+    /// gRPC listener; in single-port mode the HTTP TLS config terminates both.
+    ///
+    /// The override applies whenever it is set, regardless of what `[grpc.tls]`
+    /// says, and suppresses the fallback to the shared `[tls]` config.
+    #[cfg(all(feature = "grpc", feature = "tls"))]
+    pub fn with_grpc_tls_config(
+        mut self,
+        config: std::sync::Arc<tokio_rustls::rustls::ServerConfig>,
+    ) -> Self {
+        self.grpc_tls_config_override = Some(config);
+        self
     }
 
     /// Register a custom actor extension.
@@ -401,6 +448,12 @@ where
     /// // → Uses your config, spawns appropriate pool agents
     /// ```
     pub fn build(mut self) -> ActonService<T> {
+        // Collects the first fatal misconfiguration found while building.
+        // Surfaced by `try_build()`, or by `serve()` before any socket binds.
+        // Security-relevant subsystems (TLS, token auth) record here instead of
+        // degrading to a weaker posture than the operator configured.
+        let mut startup_error: Option<crate::error::Error> = None;
+
         // Load config if not provided
         let config = self.config.take().unwrap_or_else(|| {
             Config::<T>::load().unwrap_or_else(|e| {
@@ -1152,7 +1205,16 @@ where
 
         // Apply general middleware stack (CORS, compression, timeout, TraceLayer, etc.)
         // Layers are applied in reverse order (bottom layer is innermost/first)
-        let mut app = Self::apply_middleware(app, &config);
+        // Whether the HTTP listener will terminate TLS. An injected config
+        // activates TLS independently of the `[tls]` section, so both sources
+        // count — otherwise HSTS would be dropped on encrypted connections.
+        #[cfg(feature = "tls")]
+        let tls_active = self.tls_config_override.is_some()
+            || config.tls.as_ref().is_some_and(|t| t.enabled);
+        #[cfg(not(feature = "tls"))]
+        let tls_active = false;
+
+        let mut app = Self::apply_middleware(app, &config, tls_active);
 
         // Apply session middleware if configured
         // Session runs after general middleware, before JWT/Cedar
@@ -1290,7 +1352,13 @@ where
                             ));
                         }
                         Err(e) => {
-                            tracing::warn!("PASETO configuration invalid, skipping authentication middleware: {}", e);
+                            let err = crate::error::Error::Internal(format!(
+                                "PASETO authentication is configured but its configuration is \
+                                 invalid; refusing to start rather than serving authenticated \
+                                 routes without authentication: {e}"
+                            ));
+                            tracing::error!("{}", err);
+                            record_startup_error(&mut startup_error, err);
                         }
                     }
                 }
@@ -1311,10 +1379,13 @@ where
                             ));
                         }
                         Err(e) => {
-                            tracing::warn!(
-                                "JWT configuration invalid, skipping authentication middleware: {}",
-                                e
-                            );
+                            let err = crate::error::Error::Internal(format!(
+                                "JWT authentication is configured but its configuration is \
+                                 invalid; refusing to start rather than serving authenticated \
+                                 routes without authentication: {e}"
+                            ));
+                            tracing::error!("{}", err);
+                            record_startup_error(&mut startup_error, err);
                         }
                     }
                 }
@@ -1332,10 +1403,17 @@ where
         let listener_addr =
             std::net::SocketAddr::new(config.service.bind, config.service.port);
 
-        // Load TLS config once at build time (fail fast on bad certs)
+        // Resolve the HTTP TLS config. A `[tls]` section with `enabled = true`
+        // is the operator's explicit statement of intended posture, so a load
+        // failure is fatal: it is recorded in `startup_error` and surfaced by
+        // `try_build()` / `serve()` before any listener binds. Serving plaintext
+        // where TLS was configured would silently invert the fail-safe direction.
         #[cfg(feature = "tls")]
         let tls_config = {
-            if let Some(ref tls_cfg) = config.tls {
+            if let Some(sc) = self.tls_config_override.take() {
+                tracing::info!("TLS configured from caller-supplied ServerConfig");
+                Some(sc)
+            } else if let Some(ref tls_cfg) = config.tls {
                 if tls_cfg.enabled {
                     match crate::tls::load_server_config(tls_cfg) {
                         Ok(sc) => {
@@ -1347,7 +1425,12 @@ where
                             Some(sc)
                         }
                         Err(e) => {
-                            tracing::error!("Failed to load TLS configuration: {}", e);
+                            let err = crate::error::Error::Internal(format!(
+                                "TLS is enabled but its configuration failed to load; \
+                                 refusing to start a plaintext listener: {e}"
+                            ));
+                            tracing::error!("{}", err);
+                            record_startup_error(&mut startup_error, err);
                             None
                         }
                     }
@@ -1360,33 +1443,46 @@ where
         };
 
         // Resolve per-listener TLS for the separate-port gRPC listener.
-        // Mirrors the HTTP TLS handling above (log-and-degrade on load error).
         // A present `[grpc.tls]` section is authoritative for the gRPC
         // listener — `enabled = false` means plaintext gRPC even when the
         // shared `[tls]` is active. Only an absent section inherits it.
+        // As with HTTP above, a failed load of an enabled section is fatal
+        // rather than a silent downgrade to plaintext.
         #[cfg(all(feature = "grpc", feature = "tls"))]
-        let grpc_tls_config = match config.grpc.as_ref().and_then(|g| g.tls.as_ref()) {
-            Some(grpc_tls) if grpc_tls.enabled => match crate::tls::load_server_config(grpc_tls) {
-                Ok(sc) => {
-                    tracing::info!(
-                        "gRPC TLS configured (cert: {}, key: {})",
-                        grpc_tls.cert_path.display(),
-                        grpc_tls.key_path.display()
-                    );
-                    Some(sc)
+        let grpc_tls_config = if let Some(sc) = self.grpc_tls_config_override.take() {
+            tracing::info!("gRPC TLS configured from caller-supplied ServerConfig");
+            Some(sc)
+        } else {
+            match config.grpc.as_ref().and_then(|g| g.tls.as_ref()) {
+                Some(grpc_tls) if grpc_tls.enabled => {
+                    match crate::tls::load_server_config(grpc_tls) {
+                        Ok(sc) => {
+                            tracing::info!(
+                                "gRPC TLS configured (cert: {}, key: {})",
+                                grpc_tls.cert_path.display(),
+                                grpc_tls.key_path.display()
+                            );
+                            Some(sc)
+                        }
+                        Err(e) => {
+                            let err = crate::error::Error::Internal(format!(
+                                "gRPC TLS is enabled but its configuration failed to load; \
+                                 refusing to start a plaintext gRPC listener: {e}"
+                            ));
+                            tracing::error!("{}", err);
+                            record_startup_error(&mut startup_error, err);
+                            None
+                        }
+                    }
                 }
-                Err(e) => {
-                    tracing::error!("Failed to load gRPC TLS configuration: {}", e);
+                Some(_) => {
+                    tracing::info!(
+                        "gRPC TLS explicitly disabled; separate-port gRPC listener serves plaintext"
+                    );
                     None
                 }
-            },
-            Some(_) => {
-                tracing::info!(
-                    "gRPC TLS explicitly disabled; separate-port gRPC listener serves plaintext"
-                );
-                None
+                None => tls_config.clone(),
             }
-            None => tls_config.clone(),
         };
 
         ActonService {
@@ -1401,6 +1497,27 @@ where
             #[cfg(all(feature = "grpc", feature = "tls"))]
             grpc_tls_config,
             agent_runtime: self.agent_runtime,
+            startup_error,
+        }
+    }
+
+    /// Build the service, returning an error on fatal misconfiguration.
+    ///
+    /// Identical to [`build`](Self::build) except that a security-relevant
+    /// misconfiguration is reported here rather than at [`ActonService::serve`].
+    /// Prefer this when the caller wants to observe the failure before the
+    /// service is handed off. The conditions are the same either way — a
+    /// configured-but-unloadable TLS section, or invalid token-auth config —
+    /// and in neither case does a listener bind.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first fatal misconfiguration encountered during the build.
+    pub fn try_build(self) -> crate::error::Result<ActonService<T>> {
+        let mut service = self.build();
+        match service.startup_error.take() {
+            Some(e) => Err(e),
+            None => Ok(service),
         }
     }
 
@@ -1570,7 +1687,13 @@ where
     /// Apply middleware stack based on configuration
     ///
     /// Applies middleware in the correct order to ensure proper request handling
-    fn apply_middleware(app: Router, config: &Config<T>) -> Router {
+    ///
+    /// `tls_active` reports whether the HTTP listener will actually terminate
+    /// TLS. It is passed in rather than re-derived from `config.tls` because a
+    /// caller-supplied config via [`with_tls_config`](Self::with_tls_config)
+    /// enables TLS regardless of what the `[tls]` section says; deriving it here
+    /// would drop HSTS from connections that are in fact encrypted.
+    fn apply_middleware(app: Router, config: &Config<T>, tls_active: bool) -> Router {
         let body_limit = config.middleware.body_limit_mb * 1024 * 1024;
 
         let mut app = app;
@@ -1591,18 +1714,11 @@ where
         app = app.layer(cors_layer);
 
         // Security headers (after CORS, before compression)
-        {
-            #[cfg(feature = "tls")]
-            let tls_enabled = config.tls.as_ref().map(|t| t.enabled).unwrap_or(false);
-            #[cfg(not(feature = "tls"))]
-            let tls_enabled = false;
-
-            app = crate::middleware::security_headers::apply_security_headers(
-                app,
-                &config.middleware.security_headers,
-                tls_enabled,
-            );
-        }
+        app = crate::middleware::security_headers::apply_security_headers(
+            app,
+            &config.middleware.security_headers,
+            tls_active,
+        );
 
         // Compression - configurable
         if config.middleware.compression {
@@ -1663,6 +1779,17 @@ where
     }
 }
 
+/// Record a fatal build-time misconfiguration, keeping the first one seen.
+///
+/// The build continues after a failure so that every problem gets logged in one
+/// pass rather than one per restart, but only the first error is returned to the
+/// caller — it is the one that stopped the intended posture from being honoured.
+fn record_startup_error(slot: &mut Option<crate::error::Error>, error: crate::error::Error) {
+    if slot.is_none() {
+        *slot = Some(error);
+    }
+}
+
 impl<T> Default for ServiceBuilder<T>
 where
     T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
@@ -1698,6 +1825,10 @@ where
     #[cfg(all(feature = "grpc", feature = "tls"))]
     grpc_tls_config: Option<std::sync::Arc<tokio_rustls::rustls::ServerConfig>>,
     agent_runtime: Option<acton_reactive::prelude::ActorRuntime>,
+    /// Fatal misconfiguration recorded during `build()`. `serve()` returns this
+    /// before binding any listener, so a service that could not honour its
+    /// configured security posture never accepts a connection.
+    startup_error: Option<crate::error::Error>,
 }
 
 impl<T> ActonService<T>
@@ -1727,6 +1858,13 @@ where
     pub async fn serve(mut self) -> crate::error::Result<()> {
         use tokio::net::TcpListener;
         use tokio::signal;
+
+        // Fail before any socket binds. A misconfiguration that would force a
+        // weaker posture than configured (TLS that could not load, invalid token
+        // auth) must never reach the point of accepting connections.
+        if let Some(e) = self.startup_error.take() {
+            return Err(e);
+        }
 
         // Graceful shutdown signal
         async fn shutdown_signal() {
@@ -2039,5 +2177,229 @@ mod tests {
         // let routes = VersionedRoutes { router: Router::new() };
 
         // The ONLY way to create VersionedRoutes is through VersionedApiBuilder
+    }
+
+    /// A `[tls]` section pointing at cert material that cannot be loaded must be
+    /// a hard failure. Serving plaintext where the operator configured TLS is a
+    /// silent downgrade of the configured security posture.
+    #[cfg(feature = "tls")]
+    #[test]
+    fn tls_load_failure_is_fatal_not_a_plaintext_downgrade() {
+        use crate::config::{Config, TlsConfig};
+        use crate::prelude::ServiceBuilder;
+
+        let config = Config::<()> {
+            tls: Some(TlsConfig {
+                enabled: true,
+                cert_path: "/nonexistent/cert.pem".into(),
+                key_path: "/nonexistent/key.pem".into(),
+            }),
+            ..Default::default()
+        };
+
+        let error = ServiceBuilder::new()
+            .with_config(config)
+            .try_build()
+            .err()
+            .expect("unloadable TLS material must fail the build, not degrade to plaintext");
+
+        // The returned error must stand on its own. An operator who sees only
+        // this (a crash message, a supervisor log) should not have to go find
+        // the tracing line to learn why startup was refused.
+        let message = error.to_string();
+        assert!(
+            message.contains("refusing to start a plaintext listener"),
+            "error must explain the refusal, got: {message}"
+        );
+        assert!(
+            message.contains("/nonexistent/cert.pem"),
+            "error must name the material that could not be loaded, got: {message}"
+        );
+    }
+
+    /// The gRPC twin of the above: `[grpc.tls]` is authoritative for the
+    /// separate-port listener, so a failed load there must not leave that
+    /// listener serving plaintext on a possibly non-loopback bind.
+    #[cfg(all(feature = "grpc", feature = "tls"))]
+    #[test]
+    fn grpc_tls_load_failure_is_fatal_not_a_plaintext_downgrade() {
+        use crate::config::{Config, GrpcConfig, TlsConfig};
+        use crate::prelude::ServiceBuilder;
+
+        let grpc = Some(GrpcConfig {
+            enabled: true,
+            use_separate_port: true,
+            bind: None,
+            tls: Some(TlsConfig {
+                enabled: true,
+                cert_path: "/nonexistent/cert.pem".into(),
+                key_path: "/nonexistent/key.pem".into(),
+            }),
+            port: 50051,
+            reflection_enabled: false,
+            health_check_enabled: false,
+            max_message_size_mb: 4,
+            connection_timeout_secs: 10,
+            timeout_secs: 30,
+            proto: Default::default(),
+        });
+        let config = Config::<()> {
+            grpc,
+            ..Default::default()
+        };
+
+        let result = ServiceBuilder::new().with_config(config).try_build();
+
+        assert!(
+            result.is_err(),
+            "unloadable gRPC TLS material must fail the build, not degrade to plaintext"
+        );
+    }
+
+    /// TLS that is present but explicitly disabled is a deliberate operator
+    /// choice, not a failure — it must still build.
+    #[cfg(feature = "tls")]
+    #[test]
+    fn disabled_tls_section_builds_successfully() {
+        use crate::config::{Config, TlsConfig};
+        use crate::prelude::ServiceBuilder;
+
+        let config = Config::<()> {
+            tls: Some(TlsConfig {
+                enabled: false,
+                cert_path: "/nonexistent/cert.pem".into(),
+                key_path: "/nonexistent/key.pem".into(),
+            }),
+            ..Default::default()
+        };
+
+        assert!(
+            ServiceBuilder::new().with_config(config).try_build().is_ok(),
+            "an explicitly disabled TLS section must not block startup"
+        );
+    }
+
+    /// An injected config must be used verbatim, with no read of the configured
+    /// cert paths — that second read is the time-of-check/time-of-use window
+    /// `with_tls_config` exists to close. Paths that would fail to load prove
+    /// they were never touched.
+    #[cfg(feature = "tls")]
+    #[test]
+    fn injected_tls_config_bypasses_the_file_load() {
+        use crate::config::{Config, TlsConfig};
+        use crate::prelude::ServiceBuilder;
+
+        let config = Config::<()> {
+            tls: Some(TlsConfig {
+                enabled: true,
+                cert_path: "/nonexistent/cert.pem".into(),
+                key_path: "/nonexistent/key.pem".into(),
+            }),
+            ..Default::default()
+        };
+
+        let result = ServiceBuilder::new()
+            .with_config(config)
+            .with_tls_config(test_server_config())
+            .try_build();
+
+        assert!(
+            result.is_ok(),
+            "an injected ServerConfig must be used without reading the configured paths"
+        );
+    }
+
+    /// `serve()` must reject a degraded build before it binds any listener, so
+    /// callers using the infallible `build()` are protected too.
+    #[cfg(feature = "tls")]
+    #[tokio::test]
+    async fn serve_refuses_to_bind_after_a_failed_tls_load() {
+        use crate::config::{Config, TlsConfig};
+        use crate::prelude::ServiceBuilder;
+
+        let base = Config::<()>::default();
+        let config = Config::<()> {
+            // Port 0 binds successfully, so any error can only come from the
+            // startup gate rather than from an unavailable port.
+            service: crate::config::ServiceConfig {
+                port: 0,
+                ..base.service.clone()
+            },
+            tls: Some(TlsConfig {
+                enabled: true,
+                cert_path: "/nonexistent/cert.pem".into(),
+                key_path: "/nonexistent/key.pem".into(),
+            }),
+            ..base
+        };
+
+        let service = ServiceBuilder::new().with_config(config).build();
+
+        assert!(
+            service.serve().await.is_err(),
+            "serve() must surface the failed TLS load instead of listening in plaintext"
+        );
+    }
+
+    /// An injected TLS config activates TLS independently of the `[tls]`
+    /// section, so HSTS must still be sent. Deriving the flag from
+    /// `config.tls.enabled` alone would drop the header on connections that are
+    /// in fact encrypted.
+    #[cfg(feature = "tls")]
+    #[tokio::test]
+    async fn injected_tls_config_still_sends_hsts() {
+        use crate::config::Config;
+        use crate::prelude::ServiceBuilder;
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        // No `[tls]` section at all — TLS comes purely from the injected config.
+        let config = Config::<()>::default();
+        assert!(config.tls.is_none(), "test premise: no [tls] section");
+
+        let service = ServiceBuilder::new()
+            .with_config(config)
+            .with_tls_config(test_server_config())
+            .try_build()
+            .expect("build with injected TLS config");
+
+        let response = service
+            .app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("health request");
+
+        assert!(
+            response
+                .headers()
+                .contains_key("strict-transport-security"),
+            "HSTS must be sent when an injected config puts the listener on TLS"
+        );
+    }
+
+    /// Build a usable self-signed `ServerConfig` for injection tests.
+    #[cfg(feature = "tls")]
+    fn test_server_config() -> std::sync::Arc<tokio_rustls::rustls::ServerConfig> {
+        use tokio_rustls::rustls::pki_types::PrivatePkcs8KeyDer;
+        use tokio_rustls::rustls::ServerConfig;
+
+        crate::crypto::ensure_default_crypto_provider();
+
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
+            .expect("self-signed cert generation");
+        let key = PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der());
+
+        std::sync::Arc::new(
+            ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(vec![cert.cert.der().clone()], key.into())
+                .expect("server config"),
+        )
     }
 }

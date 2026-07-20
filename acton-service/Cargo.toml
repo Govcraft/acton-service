@@ -330,4 +330,5 @@ tonic-build.workspace = true
 tonic-prost-build.workspace = true
 
 [dev-dependencies]
+rcgen = "0.14.8"
 tempfile = "3.24.0"
