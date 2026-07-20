@@ -702,8 +702,10 @@ calling peers that require mutual TLS
   `ServiceBuilder::with_tls_reload`; see [TLS / HTTPS](/docs/tls#rotating-credentials-without-a-restart)
 - `ClientIdentityConfig` plus a `client_tls` module (`load_rustls_client_config`,
   `load_reqwest_identity`, `reqwest_client_builder`, `tonic_client_tls_config`
-  under `grpc`) for outbound mutual TLS, including a `ClientIdentitySource` for
-  clients that need to rotate their certificate at runtime
+  under `grpc`) for outbound mutual TLS, including a `ClientIdentitySource`
+  whose `client()` handle (and `grpc_channel()` under `grpc`) rotate their
+  certificate and peer trust anchors in place on reload — no rebuild, no
+  connection-pool reset, and cached handles are safe to keep
 
 ```toml
 acton-service = { version = "{% version() %}", features = ["tls"] }
