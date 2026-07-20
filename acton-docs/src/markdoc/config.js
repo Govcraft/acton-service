@@ -4,7 +4,7 @@ import { siteConfig } from '../lib/config'
 
 // Extract version from workspace Cargo.toml
 // This should be kept in sync with the workspace version
-const ACTON_VERSION = '0.30.0'
+const ACTON_VERSION = '0.31.0'
 
 // Single source of truth mapping camelCase aliases to the real Cargo feature
 // lists. Used by both the `dep()` function and the `$dep.*` variables so a

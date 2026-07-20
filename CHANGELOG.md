@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.31.0] - 2026-07-20
+
+Hardens the 0.30.0 mutual-TLS surface. The headline fix closes a
+pre-authentication denial of service on the TLS accept path; the rest are
+follow-ups from the same security review. No intentional breaking API changes,
+though `[tls]`/`[grpc.tls]` sections now reject unknown keys, so a config that
+carried a typo'd or stray field there will fail to parse instead of silently
+ignoring it.
+
+### Fixed
+
+- **tls**: The TLS handshake no longer runs inline on the `accept` path. It
+  previously completed inside the `axum::serve::Listener::accept` future with no
+  timeout, so handshakes were serialized listener-wide and a single peer that
+  connected but never sent a `ClientHello` parked the accept future forever,
+  blocking every new connection — an unauthenticated, pre-verification denial of
+  service that mutual TLS did not defend against. A background pump task now owns
+  the listener and spawns each handshake as its own task behind a
+  `tokio::time::timeout`, with completed streams handed back through a bounded
+  channel. Handshakes run concurrently again and the timeout is a per-connection
+  bound. Rotated credentials are still captured per handshake. (#94)
+
+### Added
+
+- **tls**: `handshake_timeout_secs` on `[tls]` and `[grpc.tls]` caps how long a
+  handshake may take before the connection is dropped (default 10s; `0` is
+  rejected at build time). (#94)
+- **tls**: Peer-IP rate limiting and request-context IP resolution now recover
+  the remote address from `TlsConnectInfo` as well as `ConnectInfo<SocketAddr>`,
+  so they work on directly-terminated TLS listeners without a fronting proxy.
+  (#95)
+
+### Changed
+
+- **tls**: `TlsConfig` now denies unknown fields, so a mistyped reload trigger
+  (for example `reload_interval_sec`) is reported at startup instead of silently
+  leaving rotation disarmed. (#95)
+- **tls**: The reload poll baseline is captured when the source loads its
+  credentials rather than when the poll task spawns, so a rotation that lands
+  during startup is picked up on the first tick instead of being missed until the
+  next one. (#95)
+- **tls**: Credential file reads on the poll tick and SIGHUP handler run on the
+  blocking pool, so a slow or networked secret mount cannot stall a runtime
+  worker. (#95)
+- **tls**: A `client_auth_optional = true` set without `client_ca_path` now logs
+  a warning at startup rather than being silently ignored. (#95)
+
+### Security
+
+- **client-tls**: The decoded DER private key in the outbound client identity is
+  zeroized on drop, closing a window where its bytes were freed un-wiped even
+  though the PEM copies were already zeroized. (#95)
+
 ## [acton-service-v0.30.0] - 2026-07-20
 
 The mutual-TLS release: inbound client-certificate verification, an outbound
