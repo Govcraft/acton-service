@@ -106,6 +106,7 @@ dependencies = [
  "futures",
  "governor",
  "http 1.4.0",
+ "hyper-util",
  "jsonwebtoken",
  "libsql",
  "mti",
