@@ -245,7 +245,7 @@ pub mod prelude {
     #[cfg(feature = "resilience")]
     pub use crate::middleware::ResilienceConfig;
 
-    #[cfg(feature = "otel-metrics")]
+    #[cfg(feature = "_metrics")]
     pub use crate::middleware::{metric_labels, metric_names, MetricsConfig};
 
     #[cfg(feature = "governor")]

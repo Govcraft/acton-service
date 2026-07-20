@@ -29,6 +29,7 @@ const DEP_FEATURES = {
   resilience: ['resilience'],
   governor: ['governor'],
   otelMetrics: ['otel-metrics'],
+  prometheusMetrics: ['prometheus-metrics'],
   openapiOnly: ['openapi'],
   databaseCache: ['database', 'cache'],
   jwtOnly: ['jwt'],

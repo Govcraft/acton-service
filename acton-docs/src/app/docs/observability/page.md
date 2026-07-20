@@ -150,7 +150,12 @@ enabled = true
 
 ## Metrics
 
-acton-service automatically collects comprehensive HTTP request metrics using OpenTelemetry. All metrics are exported via the OTLP exporter and can be visualized in Prometheus, Grafana, or any OpenTelemetry-compatible metrics backend.
+acton-service automatically collects comprehensive HTTP request metrics using OpenTelemetry. Two export models are available, selected by feature flag:
+
+- **`otel-metrics`** — push: metrics are exported over OTLP to an OpenTelemetry collector every 15 seconds
+- **`prometheus-metrics`** — pull: metrics are exposed at `GET /metrics` in Prometheus text-exposition format for direct scraping, no collector required
+
+The features are independent: enable either or both. With both enabled, a single meter provider feeds the OTLP exporter and the Prometheus registry simultaneously, so transport metrics and any application metrics you record through `get_meter()` appear in both.
 
 ### Automatic HTTP Metrics
 
@@ -226,6 +231,31 @@ The metrics layer is automatically applied to all routes and includes:
 - HTTP method and path
 - Response status codes
 - Request duration calculation
+
+### Prometheus Scrape Endpoint
+
+With the `prometheus-metrics` feature, `ServiceBuilder` mounts `GET /metrics` alongside `/health` and `/ready` — no wiring required:
+
+```bash
+curl http://localhost:8080/metrics
+# HELP http_server_request_duration_seconds Duration of HTTP server requests.
+# TYPE http_server_request_duration_seconds histogram
+http_server_request_duration_seconds_bucket{http_request_method="GET",http_route="/api/v1/hello",...} 2
+```
+
+The response uses `Content-Type: text/plain; version=0.0.4` as Prometheus expects. Point a scrape job directly at the service:
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: 'my-service'
+    static_configs:
+      - targets: ['my-service:8080']
+```
+
+{% callout type="note" title="Endpoint exposure" %}
+`/metrics` is unauthenticated, like `/health`. It exposes route names, traffic volumes, and latency distributions — no request payloads or secrets — but if that surface matters in your deployment, restrict access at the network layer. The route is excluded from audit logging by default.
+{% /callout %}
 
 ---
 
@@ -495,7 +525,9 @@ cargo run
 
 ### Prometheus (Metrics)
 
-Export metrics to Prometheus using an OpenTelemetry collector:
+The simplest integration is the `prometheus-metrics` feature: Prometheus scrapes the service's `/metrics` endpoint directly (see [Prometheus Scrape Endpoint](#prometheus-scrape-endpoint) above), and no collector is involved.
+
+Alternatively, with the `otel-metrics` feature, export metrics through an OpenTelemetry collector:
 
 ```yaml
 # otel-collector-config.yaml

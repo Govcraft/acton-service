@@ -49,7 +49,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::fmt;
 use tracing::warn;
 
-#[cfg(feature = "otel-metrics")]
+#[cfg(feature = "_metrics")]
 use opentelemetry::KeyValue;
 
 /// API version identifier
@@ -230,14 +230,14 @@ impl VersionedRouter {
 
     /// Convert to a regular Axum router with deprecation middleware applied
     pub fn into_router(self) -> Router {
-        #[cfg(feature = "otel-metrics")]
+        #[cfg(feature = "_metrics")]
         let version = self.version;
         let deprecation = self.deprecation.clone();
 
         // Always apply middleware for metrics tracking and optional deprecation headers
         self.router.layer(middleware::from_fn(move |req: Request, next: Next| {
             let deprecation = deprecation.clone();
-            #[cfg(feature = "otel-metrics")]
+            #[cfg(feature = "_metrics")]
             let version = version;
             async move {
                 // If deprecated, log the usage
@@ -264,7 +264,7 @@ impl VersionedRouter {
                 }
 
                 // Record metrics for all API version usage (deprecated or not)
-                #[cfg(feature = "otel-metrics")]
+                #[cfg(feature = "_metrics")]
                 if let Some(meter) = crate::observability::get_meter() {
                     let counter = meter
                         .u64_counter("api.version.requests")

@@ -414,6 +414,13 @@ where
             eprintln!("Warning: Failed to initialize tracing: {}", e);
         }
 
+        // Initialize the meter provider (OTLP push and/or Prometheus pull readers)
+        // before middleware is layered, so the HTTP metrics layer can obtain a meter.
+        #[cfg(feature = "_metrics")]
+        if let Err(e) = crate::observability::init_meter_provider(&config) {
+            eprintln!("Warning: Failed to initialize metrics: {}", e);
+        }
+
         // Determine if we need to spawn pool agents
         #[cfg(feature = "database")]
         let needs_db_agent = config.database.is_some();
@@ -1027,6 +1034,11 @@ where
                     "/admin/config/drift",
                     axum::routing::get(crate::audit::config_audit::drift_check_handler::<T>),
                 );
+                #[cfg(feature = "prometheus-metrics")]
+                let router = router.route(
+                    "/metrics",
+                    axum::routing::get(crate::observability::metrics_handler),
+                );
                 router.with_state(state)
             }
             VersionedRoutes::WithoutState(router) => {
@@ -1040,6 +1052,12 @@ where
                 let health_router = health_router.route(
                     "/admin/config/drift",
                     get(crate::audit::config_audit::drift_check_handler::<T>),
+                );
+
+                #[cfg(feature = "prometheus-metrics")]
+                let health_router = health_router.route(
+                    "/metrics",
+                    get(crate::observability::metrics_handler),
                 );
 
                 // Use fallback_service to include the versioned routes
@@ -1606,6 +1624,24 @@ where
                 .make_span_with(DefaultMakeSpan::new().include_headers(true))
                 .on_response(DefaultOnResponse::new().include_headers(true)),
         );
+
+        // HTTP metrics layer (OpenTelemetry) - records into the global meter that
+        // feeds the OTLP push and/or Prometheus pull readers. Requires the meter
+        // provider to have been initialized in `build()` beforehand.
+        #[cfg(feature = "_metrics")]
+        if let Some(metrics_cfg) = &config.middleware.metrics {
+            if metrics_cfg.enabled {
+                let mw_config = crate::middleware::metrics::MetricsConfig::new()
+                    .with_service_name(config.service.name.clone())
+                    .with_include_path(metrics_cfg.include_path)
+                    .with_include_method(metrics_cfg.include_method)
+                    .with_include_status(metrics_cfg.include_status)
+                    .with_latency_buckets(metrics_cfg.latency_buckets_ms.clone());
+                if let Some(layer) = crate::middleware::metrics::create_metrics_layer(&mw_config) {
+                    app = app.layer(layer);
+                }
+            }
+        }
 
         // Request tracking layers - based on config
         if config.middleware.request_tracking.mask_sensitive_headers {

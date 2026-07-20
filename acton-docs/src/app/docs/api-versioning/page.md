@@ -609,8 +609,8 @@ This logging happens automatically - no additional code required!
 
 ### Automatic OpenTelemetry Metrics
 
-{% callout type="note" title="Automatic Metrics (otel-metrics feature)" %}
-When the `otel-metrics` feature is enabled, the framework **automatically tracks OpenTelemetry metrics** for all API version usage. Every request is recorded with detailed attributes for monitoring and alerting.
+{% callout type="note" title="Automatic Metrics (otel-metrics / prometheus-metrics features)" %}
+When the `otel-metrics` or `prometheus-metrics` feature is enabled, the framework **automatically tracks OpenTelemetry metrics** for all API version usage. Every request is recorded with detailed attributes for monitoring and alerting.
 {% /callout %}
 
 The framework automatically records the `api.version.requests` counter metric with the following attributes:

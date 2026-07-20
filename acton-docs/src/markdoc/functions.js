@@ -36,6 +36,7 @@ export const dep = {
       resilience: `acton-service = { version = "${ACTON_VERSION}", features = ["resilience"] }`,
       governor: `acton-service = { version = "${ACTON_VERSION}", features = ["governor"] }`,
       otelMetrics: `acton-service = { version = "${ACTON_VERSION}", features = ["otel-metrics"] }`,
+      prometheusMetrics: `acton-service = { version = "${ACTON_VERSION}", features = ["prometheus-metrics"] }`,
       openapiOnly: `acton-service = { version = "${ACTON_VERSION}", features = ["openapi"] }`,
 
       // Multi-feature combinations

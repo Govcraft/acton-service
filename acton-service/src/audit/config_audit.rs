@@ -100,6 +100,8 @@ pub fn enabled_features() -> Vec<&'static str> {
     features.push("resilience");
     #[cfg(feature = "otel-metrics")]
     features.push("otel-metrics");
+    #[cfg(feature = "prometheus-metrics")]
+    features.push("prometheus-metrics");
     #[cfg(feature = "governor")]
     features.push("governor");
     #[cfg(feature = "websocket")]

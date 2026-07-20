@@ -24,11 +24,14 @@ use {
     tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer},
 };
 
+#[cfg(feature = "_metrics")]
+use {
+    opentelemetry::metrics::MeterProvider as _, opentelemetry_sdk::metrics::SdkMeterProvider,
+};
+
 #[cfg(feature = "otel-metrics")]
 use {
-    opentelemetry::metrics::MeterProvider as _,
-    opentelemetry_otlp::MetricExporter,
-    opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider},
+    opentelemetry_otlp::MetricExporter, opentelemetry_sdk::metrics::PeriodicReader,
     std::time::Duration as StdDuration,
 };
 
@@ -38,8 +41,16 @@ static TRACER_PROVIDER: once_cell::sync::OnceCell<SdkTracerProvider> =
     once_cell::sync::OnceCell::new();
 
 /// Global meter provider for graceful shutdown
-#[cfg(feature = "otel-metrics")]
+#[cfg(feature = "_metrics")]
 pub static METER_PROVIDER: once_cell::sync::OnceCell<SdkMeterProvider> =
+    once_cell::sync::OnceCell::new();
+
+/// Global Prometheus registry backing the pull-based `/metrics` endpoint.
+///
+/// Populated by [`init_meter_provider`] when the `prometheus-metrics` feature is
+/// enabled and a reader is successfully created.
+#[cfg(feature = "prometheus-metrics")]
+pub static PROMETHEUS_REGISTRY: once_cell::sync::OnceCell<prometheus::Registry> =
     once_cell::sync::OnceCell::new();
 
 /// Initialize tracing with OpenTelemetry and structured logging
@@ -187,24 +198,12 @@ pub(crate) fn init_otlp_tracer(
     Ok(provider)
 }
 
-/// Initialize OpenTelemetry OTLP meter provider for metrics collection
+/// Build an OTLP push metric reader (Tonic gRPC transport).
+///
+/// Extracted so it can be composed as one reader among several on a single
+/// [`SdkMeterProvider`] in [`init_meter_provider`].
 #[cfg(feature = "otel-metrics")]
-pub(crate) fn init_otlp_meter(
-    otlp_config: &crate::config::OtlpConfig,
-    service_name: &str,
-) -> Result<SdkMeterProvider> {
-    // Use service name from OTLP config or fall back to main service name
-    let metrics_service_name = otlp_config
-        .service_name
-        .as_ref()
-        .unwrap_or(&service_name.to_string())
-        .clone();
-
-    // Create resource with service metadata
-    let resource = Resource::builder()
-        .with_service_name(metrics_service_name)
-        .build();
-
+fn otlp_metric_reader(otlp_config: &crate::config::OtlpConfig) -> Result<PeriodicReader<MetricExporter>> {
     // Build OTLP metric exporter with Tonic gRPC transport
     let mut exporter_builder = MetricExporter::builder().with_tonic();
 
@@ -218,17 +217,79 @@ pub(crate) fn init_otlp_meter(
     })?;
 
     // Create periodic reader with appropriate export interval (15s for Prometheus compatibility)
-    let reader = PeriodicReader::builder(exporter)
+    Ok(PeriodicReader::builder(exporter)
         .with_interval(StdDuration::from_secs(15))
-        .build();
+        .build())
+}
 
-    // Build meter provider with production-ready configuration
-    let provider = SdkMeterProvider::builder()
-        .with_resource(resource)
-        .with_reader(reader)
-        .build();
+/// Build the Prometheus pull exporter (a metric reader) and its backing registry.
+#[cfg(feature = "prometheus-metrics")]
+fn prometheus_metric_reader() -> Result<(opentelemetry_prometheus::PrometheusExporter, prometheus::Registry)>
+{
+    let registry = prometheus::Registry::new();
+    let exporter = opentelemetry_prometheus::exporter()
+        .with_registry(registry.clone())
+        .build()
+        .map_err(|e| {
+            crate::error::Error::Internal(format!("Failed to build Prometheus exporter: {}", e))
+        })?;
+    Ok((exporter, registry))
+}
 
-    Ok(provider)
+/// Encode a Prometheus registry's current metric families into the text
+/// exposition format.
+///
+/// Pure with respect to its input: the same registry state always yields the
+/// same bytes, and it performs no I/O beyond in-memory encoding.
+#[cfg(feature = "prometheus-metrics")]
+fn encode_registry(registry: &prometheus::Registry) -> Result<Vec<u8>> {
+    use prometheus::Encoder;
+
+    let encoder = prometheus::TextEncoder::new();
+    let metric_families = registry.gather();
+    let mut buffer = Vec::new();
+    encoder.encode(&metric_families, &mut buffer).map_err(|e| {
+        crate::error::Error::Internal(format!("Failed to encode Prometheus metrics: {}", e))
+    })?;
+    Ok(buffer)
+}
+
+/// Axum handler exposing metrics at `/metrics` in Prometheus text format.
+///
+/// Returns `503 Service Unavailable` if the meter provider has not been
+/// initialized, `500 Internal Server Error` if encoding fails, and `200 OK`
+/// with `Content-Type: text/plain; version=0.0.4` otherwise.
+#[cfg(feature = "prometheus-metrics")]
+pub async fn metrics_handler() -> axum::response::Response {
+    use axum::response::IntoResponse;
+    use prometheus::Encoder;
+
+    let Some(registry) = PROMETHEUS_REGISTRY.get() else {
+        return (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "metrics not initialized",
+        )
+            .into_response();
+    };
+
+    match encode_registry(registry) {
+        Ok(buffer) => (
+            [(
+                axum::http::header::CONTENT_TYPE,
+                prometheus::TextEncoder::new().format_type(),
+            )],
+            buffer,
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to encode Prometheus metrics");
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to encode metrics",
+            )
+                .into_response()
+        }
+    }
 }
 
 /// Initialize journald tracing layer for native systemd journal integration
@@ -267,7 +328,7 @@ fn init_journald_layer(
 ///
 /// This function returns a meter from the global meter provider if metrics are enabled.
 /// Returns None if no meter provider has been initialized (neither local nor global).
-#[cfg(feature = "otel-metrics")]
+#[cfg(feature = "_metrics")]
 pub fn get_meter() -> Option<opentelemetry::metrics::Meter> {
     // Try local provider first
     if let Some(provider) = METER_PROVIDER.get() {
@@ -281,41 +342,78 @@ pub fn get_meter() -> Option<opentelemetry::metrics::Meter> {
     None
 }
 
-/// Initialize the meter provider and set it globally
+/// Initialize the meter provider and set it globally.
 ///
-/// This should be called during service initialization if metrics are enabled.
-#[cfg(feature = "otel-metrics")]
-pub fn init_meter_provider(config: &Config) -> Result<()> {
+/// Assembles a single [`SdkMeterProvider`] with one reader per enabled export
+/// feature: an OTLP push reader (`otel-metrics`, when `[otlp]` is enabled) and a
+/// Prometheus pull reader (`prometheus-metrics`). If both features are enabled,
+/// both readers feed the same provider. Individual reader failures are logged
+/// and skipped so the service still starts; the provider is only installed when
+/// at least one reader was created.
+///
+/// This should be called once during service initialization.
+#[cfg(feature = "_metrics")]
+pub fn init_meter_provider<T>(config: &Config<T>) -> Result<()>
+where
+    T: serde::Serialize + serde::de::DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
+    let resource = Resource::builder()
+        .with_service_name(config.service.name.clone())
+        .build();
+
+    let mut builder = SdkMeterProvider::builder().with_resource(resource);
+    let mut reader_count: usize = 0;
+
+    #[cfg(feature = "otel-metrics")]
     if let Some(otlp_config) = &config.otlp {
         if otlp_config.enabled {
-            match init_otlp_meter(otlp_config, &config.service.name) {
-                Ok(meter_provider) => {
-                    // Store provider for later access and shutdown
-                    let _ = METER_PROVIDER.set(meter_provider.clone());
-
-                    // Set global meter provider
-                    global::set_meter_provider(meter_provider);
-
+            match otlp_metric_reader(otlp_config) {
+                Ok(reader) => {
+                    builder = builder.with_reader(reader);
+                    reader_count += 1;
                     tracing::info!(
                         service = %config.service.name,
                         otlp_endpoint = %otlp_config.endpoint,
-                        "OpenTelemetry metrics initialized with OTLP export"
+                        "OpenTelemetry metrics OTLP push reader initialized"
                     );
-
-                    return Ok(());
                 }
                 Err(e) => {
-                    // Log error but continue without metrics
                     tracing::warn!(
                         error = %e,
-                        "Failed to initialize OTLP metric exporter (metrics disabled)"
+                        "Failed to initialize OTLP metric exporter (skipping OTLP reader)"
                     );
                 }
             }
         }
     }
 
-    tracing::info!("Metrics not configured or disabled");
+    #[cfg(feature = "prometheus-metrics")]
+    match prometheus_metric_reader() {
+        Ok((reader, registry)) => {
+            builder = builder.with_reader(reader);
+            let _ = PROMETHEUS_REGISTRY.set(registry);
+            reader_count += 1;
+            tracing::info!(
+                service = %config.service.name,
+                "Prometheus metrics pull reader initialized (/metrics)"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "Failed to initialize Prometheus exporter (skipping Prometheus reader)"
+            );
+        }
+    }
+
+    if reader_count == 0 {
+        tracing::info!("Metrics not configured or disabled");
+        return Ok(());
+    }
+
+    let provider = builder.build();
+    let _ = METER_PROVIDER.set(provider.clone());
+    global::set_meter_provider(provider);
     Ok(())
 }
 
@@ -414,7 +512,7 @@ pub fn shutdown_tracing() {
     }
 
     // Shutdown the meter provider if initialized
-    #[cfg(feature = "otel-metrics")]
+    #[cfg(feature = "_metrics")]
     if let Some(provider) = METER_PROVIDER.get() {
         if let Err(e) = provider.shutdown() {
             eprintln!("Error during meter provider shutdown: {}", e);
@@ -488,7 +586,7 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "otel-metrics")]
-    async fn test_init_otlp_meter() {
+    async fn test_otlp_metric_reader() {
         let otlp_config = crate::config::OtlpConfig {
             endpoint: "http://localhost:4317".to_string(),
             service_name: Some("test-metrics-service".to_string()),
@@ -497,22 +595,73 @@ mod tests {
 
         // The OTLP metric exporter should build successfully even with potentially invalid endpoint
         // It will only fail when trying to actually send metrics (lazy connection)
-        let result = init_otlp_meter(&otlp_config, "test-service");
+        let result = otlp_metric_reader(&otlp_config);
 
         assert!(
             result.is_ok(),
-            "OTLP meter should build even with potentially invalid endpoint (connection is lazy)"
+            "OTLP metric reader should build even with potentially invalid endpoint (connection is lazy)"
         );
     }
 
     #[test]
-    #[cfg(feature = "otel-metrics")]
+    #[cfg(feature = "_metrics")]
     fn test_get_meter_without_init() {
         // Before initialization, get_meter should return None
         let meter = get_meter();
         assert!(
             meter.is_none(),
             "get_meter should return None before initialization"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "prometheus-metrics")]
+    fn test_prometheus_metric_reader_builds() {
+        let result = prometheus_metric_reader();
+        assert!(
+            result.is_ok(),
+            "Prometheus exporter/registry should build successfully"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "prometheus-metrics")]
+    fn test_encode_registry_empty_is_ok() {
+        // Encoding an empty registry must not error and yields valid (possibly
+        // empty) output.
+        let registry = prometheus::Registry::new();
+        let bytes = encode_registry(&registry).expect("encoding an empty registry should succeed");
+        // Empty registry produces no metric families, hence no bytes.
+        assert!(bytes.is_empty(), "empty registry should encode to no output");
+    }
+
+    #[test]
+    #[cfg(feature = "prometheus-metrics")]
+    fn test_encode_registry_with_counter_contains_metric() {
+        use prometheus::core::Collector;
+
+        let registry = prometheus::Registry::new();
+        let counter =
+            prometheus::IntCounter::new("acton_test_total", "A test counter").expect("counter");
+        registry
+            .register(Box::new(counter.clone()) as Box<dyn Collector>)
+            .expect("register counter");
+        counter.inc_by(3);
+
+        let bytes = encode_registry(&registry).expect("encoding should succeed");
+        let text = String::from_utf8(bytes).expect("encoder emits UTF-8");
+
+        assert!(
+            text.contains("acton_test_total"),
+            "encoded output should contain the metric name, got: {text}"
+        );
+        assert!(
+            text.contains("# TYPE acton_test_total counter"),
+            "encoded output should contain the TYPE line, got: {text}"
+        );
+        assert!(
+            text.contains("acton_test_total 3"),
+            "encoded output should contain the counter value, got: {text}"
         );
     }
 

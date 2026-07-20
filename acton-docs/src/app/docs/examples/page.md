@@ -203,13 +203,22 @@ HTTP Client → REST API → Event Bus → gRPC Service → Business Logic
 
 Metrics, tracing, and monitoring integration.
 
-#### **test-metrics.rs** - Prometheus Metrics
+#### **test-prometheus-metrics.rs** - Prometheus Scrape Endpoint
 
-Prometheus metrics collection and custom metric definitions.
+Pull-based `/metrics` endpoint via the `prometheus-metrics` feature, mounted automatically by `ServiceBuilder`.
+
+```bash
+cargo run --manifest-path=acton-service/Cargo.toml --example test-prometheus-metrics --features prometheus-metrics
+curl http://localhost:8080/api/v1/hello
+curl http://localhost:8080/metrics
+```
+
+#### **test-metrics.rs** - HTTP Metrics Layer
+
+Constructing the OpenTelemetry HTTP metrics layer manually and applying it to a hand-built router.
 
 ```bash
 cargo run --manifest-path=acton-service/Cargo.toml --example test-metrics --features otel-metrics
-curl http://localhost:8080/metrics
 ```
 
 #### **test-observability.rs** - OpenTelemetry Tracing
@@ -443,7 +452,8 @@ Some examples require specific feature flags:
 | `cedar-authz` | cedar-authz | AWS Cedar policy authorization |
 | `cache` | cedar-authz | Redis caching for policy decisions |
 | `grpc` | ping-pong, single-port, event-driven | tonic gRPC server support |
-| `otel-metrics` | test-metrics | OpenTelemetry metrics collection |
+| `otel-metrics` | test-metrics | OpenTelemetry metrics collection (OTLP push) |
+| `prometheus-metrics` | test-prometheus-metrics | Pull-based Prometheus `/metrics` endpoint |
 | `observability` | test-observability | OpenTelemetry tracing |
 | `database` | database-api | PostgreSQL via SQLx |
 | `websocket` | chat-server | WebSocket support |
