@@ -20,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.detect.outputs.code }}
+      docs: ${{ steps.detect.outputs.docs }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,68 +43,85 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Branch protection does not require pull requests to be up to date
-          # with main before merging, so this push build is the safety net that
-          # catches two independently-green pull requests conflicting once
-          # combined. It is worth keeping, but only when code actually landed:
-          # a documentation merge would otherwise skip the matrix on the pull
-          # request and then run it in full here anyway.
-          if [ "$EVENT" = "push" ]; then
-            # A forced push or a brand-new branch has no usable previous commit
-            # to diff against, so fall back to running everything.
-            if [ "$PUSH_FORCED" = "true" ] || [ "$PUSH_BEFORE" = "0000000000000000000000000000000000000000" ]; then
-              echo "Push has no reliable base to diff against; running the full matrix."
-              echo "code=true" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            files=$(git diff --name-only "$PUSH_BEFORE" "$PUSH_AFTER")
-          elif [ "$EVENT" != "pull_request" ]; then
-            # Manual dispatch is an explicit request to test everything.
-            echo "Event '$EVENT' is not a pull request; running the full matrix."
-            echo "code=true" >> "$GITHUB_OUTPUT"
+          # Emits both outputs together. Every exit path must set both, because an
+          # unset output reads as an empty string and silently skips the job that
+          # depends on it.
+          emit() {
+            echo "code=$1" >> "$GITHUB_OUTPUT"
+            echo "docs=$2" >> "$GITHUB_OUTPUT"
+            echo "Decision: code=$1 docs=$2"
             exit 0
+          }
+
+          # Work out which files changed, or bail out to running everything when there
+          # is no reliable range to diff.
+          case "$EVENT" in
+            pull_request)
+              files=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+              ;;
+            push)
+              # Branch protection does not require pull requests to be up to date with
+              # main before merging, so this push build is the safety net that catches
+              # two independently-green pull requests conflicting once combined. It
+              # still only needs to run for the parts that actually changed.
+              if [ "$PUSH_FORCED" = "true" ] || [ "$PUSH_BEFORE" = "0000000000000000000000000000000000000000" ]; then
+                echo "Push has no reliable base to diff against; running everything."
+                emit true true
+              fi
+              files=$(git diff --name-only "$PUSH_BEFORE" "$PUSH_AFTER")
+              ;;
+            *)
+              # Manual dispatch is an explicit request to test everything.
+              echo "Event '$EVENT' is not a pull request or push; running everything."
+              emit true true
+              ;;
+          esac
+
+          echo "Changed files:"
+          echo "$files" | sed 's/^/  /'
+
+          # The documentation site is built whenever its sources change, so that broken
+          # Markdoc fails the pull request instead of reaching the deploy job on main.
+          if echo "$files" | grep -qE '^acton-docs/'; then
+            docs=true
+          else
+            docs=false
           fi
 
-          # The override markers live in the pull request title and body, so
-          # they only apply to pull requests. A push has already been through
-          # whatever the pull request decided.
+          # The override markers live in the pull request title and body, so they only
+          # apply to pull requests. They govern the Rust matrix; the documentation build
+          # is cheap and always follows its own sources.
           if [ "$EVENT" = "pull_request" ]; then
             marker=$(printf '%s\n%s' "$PR_TITLE" "$PR_BODY")
 
-            # `[full-ci]` is checked first so that forcing the matrix ON always
-            # beats forcing it off. The safe override wins ties.
+            # `[full-ci]` is checked first so that forcing the matrix ON always beats
+            # forcing it off. The safe override wins ties.
             if printf '%s' "$marker" | grep -qF '[full-ci]'; then
               echo "Found [full-ci]; running the full matrix regardless of paths."
-              echo "code=true" >> "$GITHUB_OUTPUT"
-              exit 0
+              emit true "$docs"
             fi
 
             if printf '%s' "$marker" | grep -qF '[skip-matrix]'; then
-              # Skipping is a CI bypass, so it is limited to people who already
-              # have write access. For anyone else the marker is ignored rather
-              # than honoured, and the normal path rules decide.
+              # Skipping is a CI bypass, so it is limited to people who already have
+              # write access. For anyone else the marker is ignored rather than
+              # honoured, and the normal path rules decide.
               case "$ASSOCIATION" in
                 OWNER|MEMBER|COLLABORATOR)
                   echo "Found [skip-matrix] from $ASSOCIATION; skipping the Rust matrix."
-                  echo "code=false" >> "$GITHUB_OUTPUT"
-                  exit 0
+                  emit false "$docs"
                   ;;
                 *)
                   echo "::warning::Ignoring [skip-matrix] from $ASSOCIATION -- write access is required to skip CI."
                   ;;
               esac
             fi
-
-            files=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
           fi
 
-          echo "Changed files:"
-          echo "$files" | sed 's/^/  /'
-
-          # Anything not matched here counts as code and runs the matrix, so a
-          # new top-level directory fails safe by being tested. build.yml is
-          # deliberately absent from this list: a change to the build matrix
-          # should be exercised by the build matrix.
+          # Anything not matched here counts as code and runs the matrix, so a new
+          # top-level directory fails safe by being tested. build.yml is deliberately
+          # absent from this list: a change to the build matrix should be exercised by
+          # the build matrix. Markdown is skipped only at the repository root, leaving a
+          # future doc-include under src/ to be caught by the compiler.
           remaining=$(echo "$files" | grep -vE \
             -e '^acton-docs/' \
             -e '^[^/]*\.md$' \
@@ -115,10 +133,10 @@ jobs:
 
           if [ -z "$remaining" ]; then
             echo "No code changed; skipping the Rust matrix."
-            echo "code=false" >> "$GITHUB_OUTPUT"
+            emit false "$docs"
           else
             echo "Code changed; running the Rust matrix."
-            echo "code=true" >> "$GITHUB_OUTPUT"
+            emit true "$docs"
           fi
 
   aws-lc-rs:
@@ -198,13 +216,43 @@ jobs:
       - name: Nextest
         run: cargo nextest run -p acton-service ${{ matrix.features }}
 
+  # Builds the documentation site so that broken Markdoc fails the pull request
+  # rather than reaching the deploy job after the merge has already landed on
+  # main. This matters most for the automated documentation pull requests: they
+  # skip the Rust matrix and auto-merge, so without this nothing would compile
+  # their output before it went live.
+  docs-build:
+    name: docs build
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./acton-docs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: acton-docs/pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build with Next.js
+        run: pnpm run build
+        env:
+          GITHUB_ACTIONS: true
+
   # The single required status check. This always runs, so it always reports a
   # conclusion -- including on documentation-only pull requests where every
   # matrix job is skipped. Requiring the matrix jobs directly would deadlock
   # those PRs, because a skipped job reports nothing at all.
   ci-gate:
     name: ci-gate
-    needs: [changes, aws-lc-rs, ring, audit-storage]
+    needs: [changes, aws-lc-rs, ring, audit-storage, docs-build]
     if: always()
     runs-on: ubuntu-latest
     steps:
