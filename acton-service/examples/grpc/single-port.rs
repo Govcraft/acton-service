@@ -19,8 +19,9 @@
 //! ## Testing
 //!
 //! ```bash
-//! # Test HTTP endpoint
+//! # Test HTTP endpoint (`name` is optional and defaults to "World")
 //! curl http://localhost:8080/api/v1/hello
+//! curl 'http://localhost:8080/api/v1/hello?name=Alice'
 //!
 //! # Test gRPC endpoint (requires grpcurl)
 //! grpcurl -plaintext -d '{"name":"World"}' localhost:8080 hello.v1.HelloService/SayHello
@@ -29,6 +30,7 @@
 //! grpcurl -plaintext localhost:8080 grpc.health.v1.Health/Check
 //! ```
 
+use acton_service::config::GrpcConfig;
 use acton_service::prelude::*;
 
 // ============================================================================
@@ -80,20 +82,14 @@ struct HelloHttpResponse {
     message: String,
 }
 
-async fn http_hello() -> Json<HelloHttpResponse> {
-    tracing::info!("HTTP request received");
-
-    Json(HelloHttpResponse {
-        message: "Hello from HTTP!".to_string(),
-    })
-}
-
 #[derive(Debug, Deserialize)]
 struct NameQuery {
     name: Option<String>,
 }
 
-async fn http_hello_name(Query(query): Query<NameQuery>) -> Json<HelloHttpResponse> {
+/// Handles both `/hello` and `/hello?name=...`, so every documented `curl`
+/// above behaves as advertised.
+async fn http_hello(Query(query): Query<NameQuery>) -> Json<HelloHttpResponse> {
     let name = query.name.unwrap_or_else(|| "World".to_string());
 
     tracing::info!("HTTP request received: name={}", name);
@@ -114,7 +110,7 @@ async fn main() -> Result<()> {
     tracing::info!("");
     tracing::info!("Test commands:");
     tracing::info!("  HTTP: curl http://localhost:8080/api/v1/hello");
-    tracing::info!("  HTTP with name: curl http://localhost:8080/api/v1/hello?name=Alice");
+    tracing::info!("  HTTP with name: curl 'http://localhost:8080/api/v1/hello?name=Alice'");
     tracing::info!("  gRPC: grpcurl -plaintext -d '{{\"name\":\"World\"}}' localhost:8080 hello.v1.HelloService/SayHello");
     tracing::info!("  Health: grpcurl -plaintext localhost:8080 grpc.health.v1.Health/Check");
     tracing::info!("");
@@ -122,30 +118,37 @@ async fn main() -> Result<()> {
     // Build HTTP routes
     let http_routes = VersionedApiBuilder::new()
         .with_base_path("/api")
-        .add_version(ApiVersion::V1, |router| {
-            router.route("/hello", get(http_hello).post(http_hello_name))
-        })
+        .add_version(ApiVersion::V1, |router| router.route("/hello", get(http_hello)))
         .build_routes();
 
-    // Build gRPC services
-    let hello_service = HelloServiceImpl;
+    // Enable gRPC in single-port mode.
+    //
+    // `Config::default()` leaves every optional section as `None`, so the
+    // section must be *assigned*, not mutated in place — mutating through an
+    // `if let Some(..)` would never run its body and the build would be
+    // refused for registering gRPC services that no listener can expose.
+    let mut config = Config::default();
+    config.service.port = 8080;
+    config.grpc = Some(GrpcConfig {
+        enabled: true,
+        use_separate_port: false, // single-port HTTP + gRPC
+        ..Default::default()
+    });
 
+    // The health service needs an `AppState` to probe dependencies; passing
+    // `None` would skip it with only a warning and the documented
+    // `grpc.health.v1.Health/Check` call would fail. This config declares no
+    // database, cache, or event bus, so the check has nothing to probe and
+    // reports SERVING without any external service running.
+    let state = AppState::builder().config(config.clone()).build().await?;
+
+    // Build gRPC services
     let grpc_routes = acton_service::grpc::server::GrpcServicesBuilder::new()
         .with_health()
         .with_reflection()
         .add_file_descriptor_set(hello::FILE_DESCRIPTOR_SET)
-        .add_service(HelloServiceServer::new(hello_service))
-        .build(None);
-
-    // Create config with single-port mode (default)
-    let mut config = Config::default();
-    config.service.port = 8080;
-
-    // Enable gRPC and ensure single-port mode
-    if let Some(ref mut grpc_config) = config.grpc {
-        grpc_config.enabled = true;
-        grpc_config.use_separate_port = false; // CRITICAL: This enables single-port mode
-    }
+        .add_service(HelloServiceServer::new(HelloServiceImpl))
+        .build(Some(state));
 
     // Build and serve the combined service
     ServiceBuilder::new()
