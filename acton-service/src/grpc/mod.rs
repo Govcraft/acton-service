@@ -17,41 +17,35 @@
 //!
 //! ## Middleware and Interceptors
 //!
-//! For manual composition, the module also provides:
-//! - **Request ID**: Automatic generation and propagation
-//! - **Tracing**: OpenTelemetry integration with proper span context
-//! - **Authentication**: [`GrpcTokenAuthLayer`] as an HTTP-level tower
-//!   layer, or PASETO/JWT interceptors for use with `with_interceptor`
-//! - **Rate Limiting**: Governor-based rate limiting (when `governor` feature is enabled)
+//! For manual composition, the module also provides HTTP-level tower layers
+//! (each with a forwarding `NamedService` impl, so wrapped services register
+//! with [`GrpcServicesBuilder::add_service`](server::GrpcServicesBuilder::add_service)):
+//! - **Logging**: [`LoggingLayer`] logs method, duration, and status
+//! - **Tracing**: [`GrpcTracingLayer`] creates OpenTelemetry-compatible spans
+//! - **Authentication**: [`GrpcTokenAuthLayer`], or PASETO/JWT interceptors
+//!   for use with `with_interceptor`
+//! - **Rate Limiting**: [`GrpcRateLimitLayer`] token bucket limiting (when
+//!   the `governor` feature is enabled)
 //!
 //! ## Example
 //!
 //! ```ignore
-//! use acton_service::grpc::interceptors::{request_id_interceptor, paseto_auth_interceptor};
-//! use acton_service::grpc::middleware::GrpcTracingLayer;
+//! use acton_service::grpc::middleware::{GrpcTokenAuthLayer, GrpcTracingLayer, LoggingLayer};
+//! use acton_service::grpc::server::GrpcServicesBuilder;
 //! use acton_service::middleware::PasetoAuth;
-//! use std::sync::Arc;
-//! use tonic::transport::Server;
+//! use tower::Layer;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! // Create PASETO auth
-//! let paseto_auth = Arc::new(PasetoAuth::new(&config.token.unwrap())?);
+//! let paseto_auth = PasetoAuth::new(&config.token.unwrap())?;
 //!
-//! // Build gRPC service with interceptors
-//! let service = MyServiceServer::with_interceptor(
-//!     service_impl,
-//!     move |req| {
-//!         let req = request_id_interceptor(req)?;
-//!         paseto_auth_interceptor(paseto_auth.clone())(req)
-//!     }
+//! // Outermost layer first: tracing -> auth -> service
+//! let service = GrpcTracingLayer.layer(
+//!     GrpcTokenAuthLayer::new(paseto_auth).layer(MyServiceServer::new(service_impl)),
 //! );
 //!
-//! // Serve
-//! Server::builder()
-//!     .layer(GrpcTracingLayer)
+//! let grpc_routes = GrpcServicesBuilder::new()
 //!     .add_service(service)
-//!     .serve(addr)
-//!     .await?;
+//!     .build(None);
 //! # Ok(())
 //! # }
 //! ```

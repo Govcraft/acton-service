@@ -88,6 +88,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   takes the method from the request URI, and forwards `NamedService` from
   the inner service, so a wrapped service registers cleanly with
   `GrpcServicesBuilder::add_service`. (#36)
+- **grpc**: `LoggingLayer`, `GrpcTracingLayer`, and `GrpcRateLimitLayer`
+  are now usable — they shared the exact defect class fixed for the Cedar
+  layer above: `Service` impls bound on `tonic::Request` with
+  `Error = Status`, which nothing satisfies, making all three publicly
+  exported layers dead code, plus the same `:path`-metadata read that can
+  never yield the method. All three now operate at the HTTP level with
+  forwarding `NamedService` impls and take the method from the request URI.
+  `GrpcTracingService` also instruments the request future with its span
+  instead of holding a span guard across an await. (#52)
+- **grpc**: `GrpcRateLimitLayer` actually rate limits. It was a placeholder
+  that emitted a trace log and passed every request through regardless of
+  configuration. It now enforces a governor token bucket
+  (`requests_per_period` per `period_secs`, bursts up to `burst_size`)
+  shared across every service the layer wraps, answering excess requests
+  with `RESOURCE_EXHAUSTED`; health and reflection methods are exempt so
+  infrastructure probes are never throttled. (#52)
 - **audit**: Database-backed audit storage is now actually attached. The
   builder previously hardcoded the audit logger's storage to `None`, so a
   service enabling `audit` plus a database feature got tracing/syslog-only

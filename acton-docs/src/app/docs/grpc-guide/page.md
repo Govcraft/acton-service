@@ -665,44 +665,29 @@ async fn get_user(&self, request: Request<GetUserRequest>)
 }
 ```
 
-### Tracing
+### Tracing and Logging
 
-OpenTelemetry tracing for gRPC:
-
-```rust
-use acton_service::grpc::middleware::GrpcTracingLayer;
-use tonic::transport::Server;
-
-Server::builder()
-    .layer(GrpcTracingLayer)  // Add tracing
-    .add_service(my_service)
-    .serve(addr)
-    .await?;
-```
-
-Or use acton-service's `ServiceBuilder` for automatic tracing:
+`GrpcTracingLayer` creates an OpenTelemetry-compatible span per request (with `rpc.service` and `rpc.method` taken from the request path), and `LoggingLayer` logs method, duration, and status. Both are HTTP-level tower layers with forwarding `NamedService` impls, so a wrapped service still registers with `GrpcServicesBuilder::add_service`:
 
 ```rust
+use acton_service::grpc::middleware::{GrpcTracingLayer, LoggingLayer};
+use tower::Layer;
+
 let grpc_routes = GrpcServicesBuilder::new()
-    .add_service(my_service)
+    .add_service(GrpcTracingLayer.layer(LoggingLayer.layer(my_service)))
     .build(None);
-
-ServiceBuilder::new()
-    .with_grpc_services(grpc_routes)  // Tracing applied automatically
-    .build()
-    .serve()
-    .await?;
 ```
 
 ### Rate Limiting
 
-Limit gRPC request rates:
+`GrpcRateLimitLayer` applies token bucket rate limiting: it sustains `requests_per_period` requests per `period_secs` with spikes up to `burst_size`, and answers requests over the limit with `RESOURCE_EXHAUSTED` before they reach the service. Health and reflection methods are exempt so infrastructure probes are never throttled. The bucket is shared by every service the layer wraps, and is in-memory and per-instance (for distributed limits, rate limit in your handlers instead).
 
 `GrpcRateLimitLayer::new()` takes a `LocalRateLimitConfig` — the same struct the `[middleware.governor]` config section deserializes into:
 
 ```rust
 use acton_service::grpc::middleware::GrpcRateLimitLayer;
 use acton_service::config::LocalRateLimitConfig;
+use tower::Layer;
 
 let rate_limit = LocalRateLimitConfig {
     enabled: true,
@@ -711,11 +696,9 @@ let rate_limit = LocalRateLimitConfig {
     burst_size: 10,
 };
 
-Server::builder()
-    .layer(GrpcRateLimitLayer::new(rate_limit))
-    .add_service(my_service)
-    .serve(addr)
-    .await?;
+let grpc_routes = GrpcServicesBuilder::new()
+    .add_service(GrpcRateLimitLayer::new(rate_limit).layer(my_service))
+    .build(None);
 ```
 
 Requires the `governor` feature.
