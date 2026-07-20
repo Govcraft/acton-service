@@ -223,6 +223,12 @@ impl AuditAgent {
 
             tokio::spawn(async move {
                 let (previous_hash, sequence) = if let Some(ref store) = storage {
+                    // Pool agents connect asynchronously, so lazily-resolved storage
+                    // is typically not ready yet. Starting the chain at sequence 0
+                    // while the backend already holds events would fork the chain and
+                    // collide with the stored sequence, so wait for the pool.
+                    wait_for_storage(store.as_ref()).await;
+
                     match store.latest().await {
                         Ok(Some(event)) => {
                             tracing::info!(
@@ -284,6 +290,41 @@ impl AuditAgent {
         }
 
         Ok(handle)
+    }
+}
+
+/// Longest the agent waits for a connection pool before giving up on chain resumption
+const STORAGE_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Interval between storage readiness polls
+const STORAGE_READY_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Poll storage until it is usable, bounded by [`STORAGE_READY_TIMEOUT`].
+///
+/// Backends constructed from an already-connected client return immediately.
+/// Lazily-resolved backends become ready once their pool agent finishes
+/// connecting. On timeout this logs an error and returns; the caller then starts
+/// a fresh chain, which is the pre-existing behaviour for unreachable storage.
+async fn wait_for_storage(storage: &dyn AuditStorage) {
+    let deadline = tokio::time::Instant::now() + STORAGE_READY_TIMEOUT;
+
+    loop {
+        let last_error = match storage.ensure_ready().await {
+            Ok(()) => return,
+            Err(e) => e,
+        };
+
+        if tokio::time::Instant::now() >= deadline {
+            tracing::error!(
+                "Audit storage not ready after {:?}: {}. Starting a fresh in-memory chain; \
+                 persisted events will not be resumed and sequence numbers may collide.",
+                STORAGE_READY_TIMEOUT,
+                last_error
+            );
+            return;
+        }
+
+        tokio::time::sleep(STORAGE_READY_POLL_INTERVAL).await;
     }
 }
 

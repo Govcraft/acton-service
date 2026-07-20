@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
+use super::lazy::InitializableStorage;
 use super::AuditStorage;
 use crate::audit::event::AuditEvent;
 use crate::error::Error;
@@ -236,6 +237,23 @@ impl AuditStorage for PgAuditStorage {
             Ok(()) => Ok(None),
             Err(e) => Ok(Some(e.sequence)),
         }
+    }
+}
+
+#[async_trait]
+impl InitializableStorage for PgAuditStorage {
+    type Conn = PgPool;
+
+    fn from_conn(conn: Self::Conn) -> Self {
+        Self::new(conn)
+    }
+
+    async fn init_schema(&self) -> Result<(), Error> {
+        self.initialize().await
+    }
+
+    fn backend_name() -> &'static str {
+        "PostgreSQL"
     }
 }
 

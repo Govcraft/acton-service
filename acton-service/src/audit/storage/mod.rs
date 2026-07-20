@@ -16,6 +16,14 @@ use chrono::{DateTime, Utc};
 use super::event::AuditEvent;
 use crate::error::Error;
 
+#[cfg(any(
+    feature = "database",
+    feature = "turso",
+    feature = "surrealdb",
+    feature = "clickhouse"
+))]
+pub(crate) mod lazy;
+
 #[cfg(feature = "database")]
 pub mod pg;
 
@@ -32,6 +40,14 @@ pub mod clickhouse_impl;
 /// kind (`auth.*`, `http.*`, `account.*`, `config.*`) that should have been
 /// recognized by the parser. Used by parser catch-alls to detect likely
 /// version skew between an emitter and a reader.
+///
+/// Only compiled alongside a storage backend — nothing parses stored rows without one.
+#[cfg(any(
+    feature = "database",
+    feature = "turso",
+    feature = "surrealdb",
+    feature = "clickhouse"
+))]
 pub(crate) fn looks_like_framework_kind(s: &str) -> bool {
     s.starts_with("auth.")
         || s.starts_with("http.")
@@ -45,6 +61,14 @@ pub(crate) fn looks_like_framework_kind(s: &str) -> bool {
 /// round-trip cleanly) and emits a `tracing::warn!` when the input looks
 /// like a framework-owned kind that no parser arm matched — i.e. the
 /// emitter is on a newer version than this reader.
+///
+/// Only compiled alongside a storage backend — nothing parses stored rows without one.
+#[cfg(any(
+    feature = "database",
+    feature = "turso",
+    feature = "surrealdb",
+    feature = "clickhouse"
+))]
 pub(crate) fn parse_custom_kind(s: &str) -> String {
     if looks_like_framework_kind(s) {
         tracing::warn!(
@@ -55,7 +79,15 @@ pub(crate) fn parse_custom_kind(s: &str) -> String {
     s.strip_prefix("custom.").unwrap_or(s).to_string()
 }
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    any(
+        feature = "database",
+        feature = "turso",
+        feature = "surrealdb",
+        feature = "clickhouse"
+    )
+))]
 mod helper_tests {
     use super::{looks_like_framework_kind, parse_custom_kind};
 
@@ -141,5 +173,16 @@ pub trait AuditStorage: Send + Sync {
     /// then reinstates protections. Returns the number of rows deleted.
     async fn purge_before(&self, _cutoff: DateTime<Utc>) -> Result<u64, Error> {
         Err(Error::Internal("purge_before not implemented".into()))
+    }
+
+    /// Confirm the backend is usable, performing any deferred setup.
+    ///
+    /// Backends built from an already-connected client are ready immediately.
+    /// Lazily-resolved backends (see [`lazy::LazyAuditStorage`]) return an error
+    /// until their connection pool finishes connecting; the audit agent polls
+    /// this before initializing the hash chain so it resumes from the persisted
+    /// sequence instead of restarting at zero.
+    async fn ensure_ready(&self) -> Result<(), Error> {
+        Ok(())
     }
 }

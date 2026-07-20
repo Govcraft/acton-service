@@ -755,3 +755,20 @@ mod tests {
         assert_eq!(row.kind, "auth.login.failed");
     }
 }
+
+#[async_trait]
+impl super::lazy::InitializableStorage for ClickHouseAuditStorage {
+    type Conn = clickhouse::Client;
+
+    fn from_conn(conn: Self::Conn) -> Self {
+        Self::new(conn)
+    }
+
+    async fn init_schema(&self) -> Result<(), Error> {
+        self.initialize().await
+    }
+
+    fn backend_name() -> &'static str {
+        "ClickHouse"
+    }
+}

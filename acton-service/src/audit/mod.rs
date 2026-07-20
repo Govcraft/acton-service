@@ -30,6 +30,7 @@ pub mod logger;
 pub mod middleware;
 pub mod storage;
 pub mod syslog;
+pub(crate) mod wiring;
 
 #[cfg(feature = "observability")]
 pub mod otlp;

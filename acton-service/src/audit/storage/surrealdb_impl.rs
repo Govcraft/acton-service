@@ -422,3 +422,20 @@ fn parse_severity(val: i16) -> AuditSeverity {
         _ => AuditSeverity::Informational,
     }
 }
+
+#[async_trait]
+impl super::lazy::InitializableStorage for SurrealAuditStorage {
+    type Conn = Arc<SurrealClient>;
+
+    fn from_conn(conn: Self::Conn) -> Self {
+        Self::new(conn)
+    }
+
+    async fn init_schema(&self) -> Result<(), Error> {
+        self.initialize().await
+    }
+
+    fn backend_name() -> &'static str {
+        "SurrealDB"
+    }
+}
