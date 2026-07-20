@@ -422,14 +422,11 @@ acton-service includes circuit breaker middleware for fault tolerance:
 ```rust
 use acton_service::prelude::*;
 
-let resilience = ResilienceConfig {
-    circuit_breaker_enabled: true,
-    circuit_breaker_threshold: 5,
-    circuit_breaker_timeout_secs: 30,
-    retry_enabled: true,
-    retry_max_attempts: 3,
-    ..Default::default()
-};
+let resilience = ResilienceConfig::new()
+    .with_circuit_breaker(true)
+    .with_circuit_breaker_threshold(0.5)   // failure rate, 0.0-1.0
+    .with_bulkhead(true)
+    .with_bulkhead_max_concurrent(100);
 ```
 
 See [Resilience Patterns](/docs/resilience) for detailed circuit breaker configuration.

@@ -161,8 +161,6 @@ resilience.circuit_breaker_wait_duration = Duration::from_secs(60);    // How lo
 | --- | --- | --- |
 | `with_circuit_breaker(bool)` | enable flag | Turns the circuit breaker on or off |
 | `with_circuit_breaker_threshold(f64)` | `0.0`–`1.0` | Failure rate that opens the circuit (clamped) |
-| `with_retry(bool)` | enable flag | Sets the retry flag (see [Retry Logic](#retry-logic)) |
-| `with_retry_max_attempts(usize)` | attempt count | Sets the retry attempt count |
 | `with_bulkhead(bool)` | enable flag | Turns the bulkhead on or off |
 | `with_bulkhead_max_concurrent(usize)` | concurrency cap | Maximum concurrent calls |
 
@@ -256,36 +254,13 @@ info!(
 
 ## Retry Logic
 
-{% callout type="warning" title="Retry has no layer today" %}
-`ResilienceConfig` carries retry settings — `retry_enabled`, `retry_max_attempts`, `retry_base_delay`, `retry_max_delay`, plus the `with_retry()` and `with_retry_max_attempts()` builders — and `[middleware.resilience]` accepts the matching TOML keys. **But no retry layer is constructed from them.** There is no `retry_layer()` constructor, and neither `ServiceBuilder` nor the resilience module builds retry middleware.
+{% callout type="warning" title="Retry is not server middleware" %}
+There is no retry layer, and there will not be one at this position. Retrying means **replaying** a request, and an inbound `Request<Body>` wraps a stream that is consumed once — the underlying retry layer requires `Req: Clone`, which an inbound request cannot satisfy. Buffering every request body to make it replayable would be a memory-exhaustion risk on a public endpoint.
 
-Setting these values changes nothing at runtime. Until a retry layer ships, implement retries in your client code (or with a tower retry layer of your own) and use the guidance below to decide *what* to retry.
+Retry belongs on **outbound** client stacks, where you control the request and can cheaply reconstruct it. Compose `tower-resilience-retry` (or `tower::retry`) into the clients you use to call databases and downstream services, and use the guidance below to decide *what* to retry.
+
+The `retry_*` fields and TOML keys were removed in the release following this note; they never did anything.
 {% /callout %}
-
-### Retry Settings (Configuration Only)
-
-```rust
-use acton_service::middleware::ResilienceConfig;
-use std::time::Duration;
-
-let mut resilience = ResilienceConfig::new()
-    .with_retry(true)
-    .with_retry_max_attempts(3);
-
-// Public fields — no builder methods for these
-resilience.retry_base_delay = Duration::from_millis(100);
-resilience.retry_max_delay = Duration::from_secs(10);
-```
-
-```toml
-[middleware.resilience]
-retry_enabled = true
-retry_max_attempts = 3
-retry_base_delay_ms = 100
-retry_max_delay_ms = 10000
-```
-
-There are no `with_retry_initial_backoff_ms()`, `with_retry_max_backoff_ms()`, `with_retry_backoff_multiplier()`, or `with_retry_jitter()` methods, and no backoff-multiplier or jitter fields.
 
 ### Backoff Strategy
 
@@ -535,7 +510,7 @@ Order your stack so that each layer protects the ones inside it:
 
 ## Configuration Templates
 
-Every method below exists on `ResilienceConfig`. The `with_retry*` calls set config fields for forward-compatibility but have no runtime effect until a retry layer ships — only the circuit breaker and bulkhead settings reach a layer.
+Every method below exists on `ResilienceConfig`, and every one reaches a layer.
 
 ### Conservative (Low-Risk Services)
 
@@ -543,8 +518,6 @@ Every method below exists on `ResilienceConfig`. The `with_retry*` calls set con
 ResilienceConfig::new()
     .with_circuit_breaker(true)
     .with_circuit_breaker_threshold(0.7)       // Higher threshold
-    .with_retry(true)
-    .with_retry_max_attempts(5)                // More retries
     .with_bulkhead(true)
     .with_bulkhead_max_concurrent(200)         // Higher capacity
 ```
@@ -555,8 +528,6 @@ ResilienceConfig::new()
 ResilienceConfig::new()
     .with_circuit_breaker(true)
     .with_circuit_breaker_threshold(0.3)       // Lower threshold
-    .with_retry(true)
-    .with_retry_max_attempts(2)                // Fewer retries
     .with_bulkhead(true)
     .with_bulkhead_max_concurrent(50)          // Lower capacity
 ```
@@ -567,8 +538,6 @@ ResilienceConfig::new()
 ResilienceConfig::new()
     .with_circuit_breaker(true)
     .with_circuit_breaker_threshold(0.5)       // Moderate threshold
-    .with_retry(true)
-    .with_retry_max_attempts(3)                // Standard retries
     .with_bulkhead(true)
     .with_bulkhead_max_concurrent(100)         // Moderate capacity
 ```
