@@ -697,6 +697,9 @@ calling peers that require mutual TLS
 **Provides**:
 - TLS-enabled server listener
 - Certificate and private key loading
+- Credential rotation without a restart — poll the files on an interval,
+  reload on `SIGHUP`, or drive it from your own trigger with
+  `ServiceBuilder::with_tls_reload`; see [TLS / HTTPS](/docs/tls#rotating-credentials-without-a-restart)
 - `ClientIdentityConfig` plus a `client_tls` module (`load_rustls_client_config`,
   `load_reqwest_identity`, `reqwest_client_builder`, `tonic_client_tls_config`
   under `grpc`) for outbound mutual TLS, including a `ClientIdentitySource` for
