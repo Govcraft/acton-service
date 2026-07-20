@@ -31,7 +31,6 @@ Current surface (`resilience` feature):
 
 ```rust
 use acton_service::middleware::ResilienceConfig;
-use http::Request;
 
 let config = ResilienceConfig::new()
     .with_circuit_breaker(true)
@@ -40,8 +39,8 @@ let config = ResilienceConfig::new()
     .with_bulkhead_max_concurrent(100);    // max 100 concurrent calls
 
 // Each constructor returns `None` when that pattern is disabled
-if let Some(layer) = config.circuit_breaker_layer::<Request<()>, String>() {
-    // Attach to your tower service stack
+if let Some(layer) = config.circuit_breaker_layer() {
+    // Attach to your outbound tower client stack
 }
 
 if let Some(layer) = config.bulkhead_layer() {
@@ -50,6 +49,24 @@ if let Some(layer) = config.bulkhead_layer() {
 ```
 
 Both constructors return `Option`, so a disabled pattern costs you nothing at runtime.
+
+### Protecting an Inbound Router
+
+For an inbound axum router, use `apply_resilience` rather than attaching the layers by hand:
+
+```rust
+use acton_service::middleware::resilience::{apply_resilience, ResilienceConfig};
+use axum::{routing::get, Router};
+
+let app = Router::new().route("/", get(handler));
+let app = apply_resilience(app, &ResilienceConfig::default());
+```
+
+This wires up three things that are easy to get wrong individually:
+
+1. **A 5xx-aware failure classifier.** An inbound axum route is infallible — a handler that fails returns `Ok(Response)` with a 500 status, never `Err`. The default classifier counts only `Err` as a failure, so a hand-attached breaker would compile, look correct, and never open. `apply_resilience` classifies any 5xx response as a failure. A 4xx is the caller's fault and never trips the circuit.
+2. **An error handler.** Both layers change the service error type, but `Router::layer` requires `Infallible`. Rejections are converted to `503 Service Unavailable` and logged.
+3. **Ordering.** The bulkhead sits inside the breaker, so a concurrency rejection becomes a 503 that the breaker observes — sustained overload can open the circuit.
 
 ## Circuit Breaker
 
@@ -153,20 +170,21 @@ There is no `with_circuit_breaker_min_requests()`, `with_circuit_breaker_timeout
 
 ### Building the Layer
 
-`circuit_breaker_layer()` is generic over the request and error types of the service you're wrapping, and returns `None` when the circuit breaker is disabled:
+`circuit_breaker_layer()` takes no type parameters and returns `None` when the circuit breaker is disabled:
 
 ```rust
 use acton_service::middleware::resilience::ResilienceConfig;
-use http::Request;
 
 let config = ResilienceConfig::default();
 
-if let Some(layer) = config.circuit_breaker_layer::<Request<()>, String>() {
-    // Apply the layer to your service
+if let Some(layer) = config.circuit_breaker_layer() {
+    // Apply the layer to your outbound service stack
 }
 ```
 
-The request type must be `Clone` (the breaker may need to inspect a request more than once), so the circuit breaker is most useful around **outbound** tower stacks — the clients you use to call databases and downstream services — rather than around the inbound axum router, whose `Request<Body>` is not cloneable.
+This layer counts `Err` results as failures, which suits **outbound** tower stacks — the clients you use to call databases and downstream services, where a transport failure surfaces as `Err`.
+
+For an **inbound** axum router, reach for `apply_resilience` instead. If you need the pieces separately, `http_circuit_breaker_layer()` returns a breaker that classifies 5xx responses as failures; you must still pair it with an error handler before calling `Router::layer`.
 
 ### Configuration Reference
 
