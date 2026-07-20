@@ -103,6 +103,13 @@ struct TlsConfigSourceInner {
     current: ArcSwap<ServerConfig>,
     /// The file paths a reload rereads. `None` for a static source.
     origin: Option<TlsConfig>,
+    /// A content fingerprint of the credential files as they were when this
+    /// source loaded them, captured at build time. `None` for a static source
+    /// or when the files could not be hashed at load. Seeds the reload poll's
+    /// baseline so a rotation that lands between this load and the poll task
+    /// being spawned is caught on the first tick rather than missed until the
+    /// next rotation.
+    initial_fingerprint: Option<u64>,
 }
 
 impl TlsConfigSource {
@@ -117,6 +124,7 @@ impl TlsConfigSource {
             inner: Arc::new(TlsConfigSourceInner {
                 current: ArcSwap::new(server_config),
                 origin: None,
+                initial_fingerprint: None,
             }),
         }
     }
@@ -128,11 +136,20 @@ impl TlsConfigSource {
     /// so [`reload`](Self::reload) can reread them. Returns the load error if
     /// the initial read fails, leaving no source to serve from.
     pub fn from_tls_config(tls_config: &TlsConfig) -> Result<Self> {
+        // Fingerprint the files *before* loading them, so the recorded baseline
+        // can only be as old as — never newer than — the credentials actually
+        // installed. A rotation during startup then reads as "the files differ
+        // from the baseline" on the first poll tick and is picked up, instead of
+        // being masked by a baseline captured after the rotation. A read failure
+        // here leaves the baseline unset, which makes the first successful tick
+        // reconcile.
+        let initial_fingerprint = fingerprint_credentials(tls_config).ok();
         let server_config = load_server_config(tls_config)?;
         Ok(Self {
             inner: Arc::new(TlsConfigSourceInner {
                 current: ArcSwap::new(server_config),
                 origin: Some(tls_config.clone()),
+                initial_fingerprint,
             }),
         })
     }
@@ -158,6 +175,16 @@ impl TlsConfigSource {
     #[must_use]
     pub fn origin(&self) -> Option<&TlsConfig> {
         self.inner.origin.as_ref()
+    }
+
+    /// The fingerprint of the credential files at the moment this source loaded
+    /// them, captured at build time.
+    ///
+    /// `None` for a static source, or when the files could not be hashed at
+    /// load. Seeds the reload poll's baseline so a rotation between this load and
+    /// the poll task being spawned is detected on the first tick.
+    pub(crate) fn initial_fingerprint(&self) -> Option<u64> {
+        self.inner.initial_fingerprint
     }
 
     /// Whether two handles are clones of the same source.
@@ -517,19 +544,21 @@ pub(crate) fn reload_tick(
 /// The returned task runs until it is aborted. It holds only a clone of the
 /// source, so it never keeps a listener alive.
 ///
-/// The first tick establishes a baseline from the files as they are now, so a
-/// service that starts and never rotates does no reloading at all.
+/// The baseline is the fingerprint the source captured when it *loaded* its
+/// credentials (not when this task spawns), so a rotation that lands during the
+/// rest of startup — after the load, before this task exists — is caught on the
+/// first tick rather than mistaken for the baseline. A service that starts and
+/// never rotates still does no reloading at all.
 pub(crate) fn spawn_reload_poll(
     source: TlsConfigSource,
     listener: TlsListenerKind,
     period: Duration,
 ) -> tokio::task::JoinHandle<()> {
-    // Seed the baseline from the files the source was just built from. A read
-    // failure here leaves it unset, so the first successful tick establishes it
-    // — reloading once, redundantly, rather than missing a rotation.
-    let mut last_seen = source
-        .origin()
-        .and_then(|o| fingerprint_credentials(o).ok());
+    // Seed the baseline from the load-time fingerprint the source recorded. A
+    // source whose files could not be hashed at load carries `None`, so the
+    // first successful tick establishes it — reloading once, redundantly, rather
+    // than missing a rotation.
+    let mut last_seen = source.initial_fingerprint();
 
     tracing::info!(
         listener = listener.as_str(),
@@ -549,9 +578,29 @@ pub(crate) fn spawn_reload_poll(
 
         loop {
             ticker.tick().await;
-            if let ReloadTick::Reloaded { fingerprint } = reload_tick(&source, listener, last_seen)
+            // The tick reads and hashes the credential files with blocking
+            // `std::fs`. Run it on the blocking pool so a slow or networked
+            // secret mount stalls only a blocking thread, never a runtime worker
+            // that is also driving live connections. The tick stays fail-closed:
+            // it installs new credentials only on a clean read-and-load.
+            let source_for_tick = source.clone();
+            match tokio::task::spawn_blocking(move || {
+                reload_tick(&source_for_tick, listener, last_seen)
+            })
+            .await
             {
-                last_seen = Some(fingerprint);
+                Ok(ReloadTick::Reloaded { fingerprint }) => last_seen = Some(fingerprint),
+                Ok(_) => {}
+                // The tick never panics by construction; a `JoinError` here would
+                // mean the blocking thread was cancelled or panicked. Log and
+                // retry next tick rather than letting the poll task die and take
+                // rotation down silently.
+                Err(e) => tracing::error!(
+                    listener = listener.as_str(),
+                    error = %e,
+                    "TLS reload poll tick did not run to completion; \
+                     retrying on the next tick"
+                ),
             }
         }
     })
@@ -586,10 +635,20 @@ pub(crate) fn spawn_sighup_reload(handle: TlsReloadHandle) -> Result<tokio::task
     Ok(tokio::spawn(async move {
         while hangup.recv().await.is_some() {
             tracing::info!("received SIGHUP; reloading TLS credentials");
-            // Outcomes are logged per listener by `reload_all`. A failure keeps
-            // the previous credentials serving and the handler installed, so a
-            // later SIGHUP after fixing the files still works.
-            let _ = handle.reload_all();
+            // `reload_all` rereads the credential files with blocking `std::fs`;
+            // run it on the blocking pool so a slow secret mount cannot stall a
+            // runtime worker while the signal is handled. Outcomes are logged per
+            // listener by `reload_all`, and a failure keeps the previous
+            // credentials serving and the handler installed, so a later SIGHUP
+            // after fixing the files still works.
+            let reload_handle = handle.clone();
+            if let Err(e) = tokio::task::spawn_blocking(move || reload_handle.reload_all()).await {
+                tracing::error!(
+                    error = %e,
+                    "SIGHUP TLS reload did not run to completion; \
+                     the next SIGHUP will retry"
+                );
+            }
         }
     }))
 }
@@ -1127,7 +1186,22 @@ pub fn load_server_config(tls_config: &TlsConfig) -> Result<Arc<ServerConfig>> {
             let verifier = build_client_verifier(roots, tls_config.client_auth_optional)?;
             builder.with_client_cert_verifier(verifier)
         }
-        None => builder.with_no_client_auth(),
+        None => {
+            // `client_auth_optional` only governs how a *configured* client-CA
+            // bundle is enforced. Without `client_ca_path` there is no bundle,
+            // so no client certificate is ever requested and the flag does
+            // nothing. Warn rather than reject: rejecting would turn a harmless
+            // leftover setting into a startup failure, but silence would let an
+            // operator believe optional mutual TLS is armed when it is not.
+            if tls_config.client_auth_optional {
+                tracing::warn!(
+                    "client_auth_optional = true has no effect without client_ca_path: \
+                     no client certificate is requested and none is verified. Set \
+                     client_ca_path to enable mutual TLS, or remove client_auth_optional."
+                );
+            }
+            builder.with_no_client_auth()
+        }
     }
     .with_single_cert(cert_chain, key)
     .map_err(|e| {
@@ -1534,6 +1608,88 @@ mod tests {
         assert!(
             !Arc::ptr_eq(&listener_side.load(), &before),
             "the clone held by the listener must see the rotation"
+        );
+    }
+
+    /// A rotation that lands *during startup* — after the source loaded its
+    /// credentials but before the poll task is spawned — must still be caught on
+    /// the first tick. The baseline is captured at load time, so the rotated
+    /// files fingerprint differently from it and the first tick reconciles.
+    /// Seeding the baseline at spawn time instead would record the post-rotation
+    /// files as "already seen" and miss the rotation until the next one.
+    #[test]
+    fn a_startup_rotation_is_detected_from_the_load_time_baseline() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let first = generate_cert("localhost");
+        let tls_config = write_credentials(dir.path(), &first);
+
+        // The source loads `first` and records its fingerprint at load time.
+        let source = TlsConfigSource::from_tls_config(&tls_config).expect("initial load");
+        let baseline = source
+            .initial_fingerprint()
+            .expect("a file-backed source fingerprints its files at load time");
+        let before = source.load();
+
+        // A rotation lands before any poll task exists.
+        let second = generate_cert("localhost");
+        std::fs::write(&tls_config.cert_path, &second.cert_pem).expect("rewrite cert");
+        std::fs::write(&tls_config.key_path, &second.key_pem).expect("rewrite key");
+
+        // The very first tick, seeded from the load-time baseline, must catch it.
+        let tick = reload_tick(&source, TlsListenerKind::Http, source.initial_fingerprint());
+        let ReloadTick::Reloaded { fingerprint } = tick else {
+            panic!("a rotation between load and the first poll must be detected, got {tick:?}");
+        };
+        assert_ne!(
+            fingerprint, baseline,
+            "the reconciling reload must observe a fingerprint different from the baseline"
+        );
+        assert!(
+            !Arc::ptr_eq(&source.load(), &before),
+            "the startup rotation must now be the config the listener serves"
+        );
+    }
+
+    /// A non-atomic rotation caught mid-flight — the cert file already holds the
+    /// new leaf while the key file still holds the old key — must be rejected by
+    /// the key/cert consistency check inside `load_server_config`, leaving the
+    /// last-good credentials serving, and must self-heal once the key catches up.
+    /// This pins the behaviour so a future rustls or loader change cannot silently
+    /// weaken it into installing a mismatched pair.
+    #[test]
+    fn a_cert_read_with_a_mismatched_key_is_rejected_and_self_heals() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let first = generate_cert("localhost");
+        let tls_config = write_credentials(dir.path(), &first);
+        let source = TlsConfigSource::from_tls_config(&tls_config).expect("initial load");
+        let last_good = source.load();
+
+        // Rewrite only the cert: the key file still holds `first`'s key, so the
+        // pair no longer matches.
+        let second = generate_cert("localhost");
+        std::fs::write(&tls_config.cert_path, &second.cert_pem).expect("rewrite cert only");
+
+        let err = source.reload().expect_err(
+            "a new certificate paired with the old key must be rejected, not installed",
+        );
+        assert!(
+            !err.to_string().is_empty(),
+            "the mismatch must be reported to the caller: {err}"
+        );
+        assert!(
+            Arc::ptr_eq(&source.load(), &last_good),
+            "the mismatched pair must leave the last-good credentials serving"
+        );
+
+        // The writer finishes: the key file catches up. The next reload sees a
+        // matching pair and succeeds.
+        std::fs::write(&tls_config.key_path, &second.key_pem).expect("finish key");
+        source
+            .reload()
+            .expect("a matching new certificate and key must reload cleanly");
+        assert!(
+            !Arc::ptr_eq(&source.load(), &last_good),
+            "the completed rotation must now be serving"
         );
     }
 
@@ -2262,6 +2418,53 @@ mod tests {
         good_client
             .await
             .expect("the healthy client task must not panic");
+    }
+
+    /// The rate-limit and request-context extractors must recover the peer
+    /// address from `ConnectInfo<TlsConnectInfo>` on a TLS listener, not only
+    /// from the plain `ConnectInfo<SocketAddr>` that plain-TCP listeners install.
+    /// Constructed here because `TlsConnectInfo`'s fields are private to this
+    /// module.
+    #[test]
+    fn connect_info_remote_addr_recovers_the_peer_from_tls_connect_info() {
+        use axum::extract::ConnectInfo;
+
+        let addr: SocketAddr = "203.0.113.7:8443".parse().expect("addr");
+        let mut extensions = axum::http::Extensions::new();
+        extensions.insert(ConnectInfo(TlsConnectInfo {
+            remote_addr: addr,
+            peer_certificates: None,
+        }));
+
+        assert_eq!(
+            crate::middleware::request_context::connect_info_remote_addr(&extensions),
+            Some(addr),
+            "a TLS listener's connect-info must still yield the peer address"
+        );
+    }
+
+    /// `client_auth_optional` without `client_ca_path` is a no-op that must be
+    /// tolerated (warned, not rejected): the server config still builds so the
+    /// listener serves rather than refusing to start over a leftover setting.
+    #[test]
+    fn client_auth_optional_without_a_ca_still_builds() {
+        let server = generate_cert("localhost");
+        let cert_file = write_temp(&server.cert_pem);
+        let key_file = write_temp(&server.key_pem);
+
+        let config = TlsConfig {
+            enabled: true,
+            cert_path: cert_file.path().to_path_buf(),
+            key_path: key_file.path().to_path_buf(),
+            client_ca_path: None,
+            client_auth_optional: true,
+            reload_interval_secs: None,
+            reload_on_sighup: false,
+            handshake_timeout_secs: None,
+        };
+
+        load_server_config(&config)
+            .expect("an ineffective client_auth_optional must warn, not fail the build");
     }
 
     #[test]
