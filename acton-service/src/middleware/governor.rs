@@ -17,7 +17,7 @@ use std::sync::Arc;
 use axum::{
     body::Body,
     extract::{ConnectInfo, OriginalUri, Request, State},
-    http::{header::HeaderValue, HeaderMap, HeaderName},
+    http::{header::HeaderValue, HeaderName},
     middleware::Next,
     response::Response,
 };
@@ -32,6 +32,11 @@ use governor::{
 };
 #[cfg(feature = "governor")]
 use tracing::{debug, warn};
+
+// Single source of truth for client-IP resolution; the governor supplies its
+// own `trust_forwarded_headers` policy rather than the request-context default.
+#[cfg(feature = "governor")]
+use super::request_context::extract_client_ip;
 
 #[cfg(feature = "governor")]
 use crate::config::RateLimitConfig;
@@ -155,43 +160,6 @@ impl RateLimitExceeded {
 /// Type alias for a governor rate limiter
 #[cfg(feature = "governor")]
 type GovernorLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
-
-/// Resolve the client IP for an unauthenticated request.
-///
-/// Order of precedence:
-/// 1. If `trust_forwarded_headers` is true:
-///    - The first parseable IP in `X-Forwarded-For` (comma-separated, left-most).
-///    - The single IP in `X-Real-IP`.
-/// 2. The direct TCP peer from `ConnectInfo<SocketAddr>`.
-///
-/// Returns `None` when no IP can be resolved. Pure function — easy to unit-test.
-#[cfg(feature = "governor")]
-pub(crate) fn extract_client_ip(
-    headers: &HeaderMap,
-    connect_info: Option<&SocketAddr>,
-    trust_forwarded_headers: bool,
-) -> Option<IpAddr> {
-    if trust_forwarded_headers {
-        if let Some(value) = headers.get("x-forwarded-for") {
-            if let Ok(s) = value.to_str() {
-                if let Some(first) = s.split(',').next() {
-                    if let Ok(ip) = first.trim().parse::<IpAddr>() {
-                        return Some(ip);
-                    }
-                }
-            }
-        }
-        if let Some(value) = headers.get("x-real-ip") {
-            if let Ok(s) = value.to_str() {
-                if let Ok(ip) = s.trim().parse::<IpAddr>() {
-                    return Some(ip);
-                }
-            }
-        }
-    }
-
-    connect_info.map(|sa| sa.ip())
-}
 
 /// Governor-based rate limiting middleware state
 ///
@@ -709,69 +677,5 @@ mod tests {
 
         let second = rl.check_rate_limit("GET", "/x", None, None);
         assert!(matches!(second, Err(Error::RateLimitExceeded)));
-    }
-
-    #[cfg(feature = "governor")]
-    #[test]
-    fn test_extract_client_ip_xff_first_value() {
-        use axum::http::HeaderMap;
-
-        let mut headers = HeaderMap::new();
-        headers.insert("x-forwarded-for", "203.0.113.5, 10.0.0.1".parse().unwrap());
-
-        let ip = extract_client_ip(&headers, None, true).expect("IP from XFF");
-        assert_eq!(ip.to_string(), "203.0.113.5");
-    }
-
-    #[cfg(feature = "governor")]
-    #[test]
-    fn test_extract_client_ip_real_ip() {
-        use axum::http::HeaderMap;
-
-        let mut headers = HeaderMap::new();
-        headers.insert("x-real-ip", "198.51.100.7".parse().unwrap());
-
-        let ip = extract_client_ip(&headers, None, true).expect("IP from X-Real-IP");
-        assert_eq!(ip.to_string(), "198.51.100.7");
-    }
-
-    #[cfg(feature = "governor")]
-    #[test]
-    fn test_extract_client_ip_connect_info_fallback() {
-        use axum::http::HeaderMap;
-        use std::net::{Ipv4Addr, SocketAddr};
-
-        let headers = HeaderMap::new();
-        let sa = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 9)), 12345);
-
-        let ip = extract_client_ip(&headers, Some(&sa), true)
-            .expect("IP from connect info");
-        assert_eq!(ip.to_string(), "192.0.2.9");
-    }
-
-    #[cfg(feature = "governor")]
-    #[test]
-    fn test_extract_client_ip_distrust_headers() {
-        use axum::http::HeaderMap;
-        use std::net::{Ipv4Addr, SocketAddr};
-
-        let mut headers = HeaderMap::new();
-        headers.insert("x-forwarded-for", "203.0.113.5".parse().unwrap());
-        let sa = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 9)), 12345);
-
-        // trust=false MUST ignore XFF and use connect info.
-        let ip = extract_client_ip(&headers, Some(&sa), false)
-            .expect("IP from connect info despite XFF");
-        assert_eq!(ip.to_string(), "192.0.2.9");
-    }
-
-    #[cfg(feature = "governor")]
-    #[test]
-    fn test_extract_client_ip_none() {
-        use axum::http::HeaderMap;
-
-        let headers = HeaderMap::new();
-        assert!(extract_client_ip(&headers, None, true).is_none());
-        assert!(extract_client_ip(&headers, None, false).is_none());
     }
 }

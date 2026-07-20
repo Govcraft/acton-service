@@ -79,53 +79,6 @@ pub(crate) fn parse_custom_kind(s: &str) -> String {
     s.strip_prefix("custom.").unwrap_or(s).to_string()
 }
 
-#[cfg(all(
-    test,
-    any(
-        feature = "database",
-        feature = "turso",
-        feature = "surrealdb",
-        feature = "clickhouse"
-    )
-))]
-mod helper_tests {
-    use super::{looks_like_framework_kind, parse_custom_kind};
-
-    #[test]
-    fn framework_prefixes_detected() {
-        assert!(looks_like_framework_kind("auth.token.invalid"));
-        assert!(looks_like_framework_kind("http.request.denied"));
-        assert!(looks_like_framework_kind("account.created"));
-        assert!(looks_like_framework_kind("config.drift_detected"));
-    }
-
-    #[test]
-    fn non_framework_prefixes_ignored() {
-        assert!(!looks_like_framework_kind("custom.user.exported"));
-        assert!(!looks_like_framework_kind("user.signed_up"));
-        assert!(!looks_like_framework_kind("billing.invoice.paid"));
-        assert!(!looks_like_framework_kind(""));
-    }
-
-    #[test]
-    fn parse_custom_strips_custom_prefix() {
-        assert_eq!(parse_custom_kind("custom.user.exported"), "user.exported");
-    }
-
-    #[test]
-    fn parse_custom_preserves_unprefixed_user_strings() {
-        assert_eq!(parse_custom_kind("billing.invoice.paid"), "billing.invoice.paid");
-    }
-
-    #[test]
-    fn parse_custom_passes_through_framework_strings_for_visibility() {
-        // The warn fires (verified manually / via tracing subscribers in
-        // integration tests); we assert the returned string preserves the
-        // original so operators can grep for it in their event store.
-        assert_eq!(parse_custom_kind("auth.token.invalid"), "auth.token.invalid");
-    }
-}
-
 /// Trait for audit event persistence backends
 ///
 /// Implementations MUST enforce append-only semantics at the database level
@@ -184,5 +137,52 @@ pub trait AuditStorage: Send + Sync {
     /// sequence instead of restarting at zero.
     async fn ensure_ready(&self) -> Result<(), Error> {
         Ok(())
+    }
+}
+
+#[cfg(all(
+    test,
+    any(
+        feature = "database",
+        feature = "turso",
+        feature = "surrealdb",
+        feature = "clickhouse"
+    )
+))]
+mod helper_tests {
+    use super::{looks_like_framework_kind, parse_custom_kind};
+
+    #[test]
+    fn framework_prefixes_detected() {
+        assert!(looks_like_framework_kind("auth.token.invalid"));
+        assert!(looks_like_framework_kind("http.request.denied"));
+        assert!(looks_like_framework_kind("account.created"));
+        assert!(looks_like_framework_kind("config.drift_detected"));
+    }
+
+    #[test]
+    fn non_framework_prefixes_ignored() {
+        assert!(!looks_like_framework_kind("custom.user.exported"));
+        assert!(!looks_like_framework_kind("user.signed_up"));
+        assert!(!looks_like_framework_kind("billing.invoice.paid"));
+        assert!(!looks_like_framework_kind(""));
+    }
+
+    #[test]
+    fn parse_custom_strips_custom_prefix() {
+        assert_eq!(parse_custom_kind("custom.user.exported"), "user.exported");
+    }
+
+    #[test]
+    fn parse_custom_preserves_unprefixed_user_strings() {
+        assert_eq!(parse_custom_kind("billing.invoice.paid"), "billing.invoice.paid");
+    }
+
+    #[test]
+    fn parse_custom_passes_through_framework_strings_for_visibility() {
+        // The warn fires (verified manually / via tracing subscribers in
+        // integration tests); we assert the returned string preserves the
+        // original so operators can grep for it in their event store.
+        assert_eq!(parse_custom_kind("auth.token.invalid"), "auth.token.invalid");
     }
 }

@@ -142,6 +142,7 @@ The middleware that `ServiceBuilder` wires up lives in `acton_service::middlewar
 | `GovernorRateLimit` | Local in-memory rate limiting | `governor` |
 | `RateLimit` | Redis-backed distributed rate limiting | `cache` |
 | `ResilienceConfig` | Circuit breaker and bulkhead layers | `resilience` |
+| `RequestContext` | Per-request client IP, request ID, and user agent, resolved once | always available |
 
 ## Execution Order
 
@@ -149,6 +150,7 @@ The middleware that `ServiceBuilder` wires up lives in `acton_service::middlewar
 
 ```text
 Request → framework middleware (request ID, tracing, CORS, compression, timeouts)
+        → Request context                    — resolves client IP, request ID, user agent
         → Token auth (PasetoAuth / JwtAuth)  — populates Claims
         → Audit logging                      — sees Claims
         → Cedar authorization                — sees Claims
@@ -156,7 +158,11 @@ Request → framework middleware (request ID, tracing, CORS, compression, timeou
         → Handler
 ```
 
-Token authentication runs first so that `Claims` are available downstream: audit records the authenticated principal, Cedar evaluates policies against it, and the rate limiter applies `per_user_rpm` / `per_client_rpm` buckets keyed by the caller. Anonymous requests fall back to per-IP limits.
+The request-context stage runs after the request ID has been generated and before anything that consumes it. It resolves the client IP once — from `X-Forwarded-For` or `X-Real-IP` when present, falling back to the TCP peer address — and stores it, together with the request ID and user agent, in a `RequestContext` request extension. Every downstream consumer (auth failure audit events, the audit logger, custom handlers) reads that extension instead of re-parsing headers, so audit events carry a real IP and request ID even when an upstream proxy strips forwarding headers.
+
+Token authentication runs next so that `Claims` are available downstream: audit records the authenticated principal, Cedar evaluates policies against it, and the rate limiter applies `per_user_rpm` / `per_client_rpm` buckets keyed by the caller. Anonymous requests fall back to per-IP limits.
+
+If you assemble a `Router` by hand instead of using `ServiceBuilder`, preserve this ordering yourself: apply `request_context_middleware` outside (before) the auth and audit layers, and inside (after) `request_id_layer()`. Consumers fall back to raw header extraction when the extension is missing, but that fallback cannot see the peer address or a generated request ID.
 
 Each stage is skipped when its configuration or feature flag is absent — for example, the governor layer is only attached when the `governor` feature is enabled and `rate_limit.auto_apply` is `true`.
 

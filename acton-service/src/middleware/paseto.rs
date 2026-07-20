@@ -175,30 +175,11 @@ impl PasetoAuth {
             return Ok(next.run(request).await);
         }
 
-        // Build audit source info before validation (available regardless of outcome)
+        // Build audit source info before validation (available regardless of outcome).
+        // Prefers the RequestContext extension so failures still carry the peer IP
+        // and generated request ID; falls back to headers for hand-wired routers.
         #[cfg(feature = "audit")]
-        let audit_source = {
-            use crate::audit::event::AuditSource;
-            AuditSource {
-                ip: request
-                    .headers()
-                    .get("x-forwarded-for")
-                    .or_else(|| request.headers().get("x-real-ip"))
-                    .and_then(|v| v.to_str().ok())
-                    .map(|s| s.split(',').next().unwrap_or(s).trim().to_string()),
-                user_agent: request
-                    .headers()
-                    .get("user-agent")
-                    .and_then(|v| v.to_str().ok())
-                    .map(String::from),
-                subject: None, // Not yet known
-                request_id: request
-                    .headers()
-                    .get("x-request-id")
-                    .and_then(|v| v.to_str().ok())
-                    .map(String::from),
-            }
-        };
+        let audit_source = crate::middleware::request_context::audit_source_for_request(&request);
 
         #[cfg(feature = "audit")]
         let audit_logger = request
