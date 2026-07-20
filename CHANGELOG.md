@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **tls**: A `[tls]` or `[grpc.tls]` section with `enabled = true` whose
+  certificate or key fails to load is now a hard startup failure. Previously
+  the loader logged the error and returned `None`, and the listener came up
+  in **plaintext** on whatever bind was configured — including a
+  non-loopback one — while the application believed it was serving TLS. A
+  section that says `enabled = true` is the operator's explicit statement of
+  intended posture; silently serving a weaker posture than configured
+  inverts the fail-safe direction. (#41)
+- **auth**: Invalid PASETO or JWT token configuration is likewise fatal.
+  It previously logged a warning and *skipped the authentication middleware
+  entirely*, so a typo in the token config silently published every
+  authenticated route unauthenticated. (#41)
+
+### Features
+
+- **builder**: `ServiceBuilder::try_build()` returns
+  `Result<ActonService<T>>`, reporting the misconfigurations above at build
+  time. The existing infallible `build()` is unchanged and remains the
+  ergonomic path — it defers the same error to `serve()`, which now returns
+  it before binding any listener. (#41)
+- **tls**: `ServiceBuilder::with_tls_config()` and
+  `with_grpc_tls_config()` accept a pre-built
+  `Arc<rustls::ServerConfig>`. An application that has already loaded and
+  validated its key material can hand the builder exactly the object it
+  checked, eliminating the second read of the cert files and with it the
+  time-of-check/time-of-use window in which renewal hooks or permission
+  changes could alter the material between validation and listen. When set,
+  the override wins over the corresponding config section. (#41)
+
+### Notes
+
+- The strict behavior is the default rather than an opt-in flag: there is no
+  coherent posture in which "attempt TLS, but plaintext is acceptable" is
+  the intended outcome of an enabled TLS section. Deployments that were
+  unknowingly relying on the degrade will now fail to start — which is the
+  point, and the failure names the cert path that could not be loaded.
+
 ## [acton-service-v0.28.0] - 2026-07-17
 
 ### Features
