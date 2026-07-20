@@ -716,11 +716,35 @@ use std::pin::Pin;
 #[cfg(feature = "grpc")]
 use std::task::{Context as TaskContext, Poll};
 #[cfg(feature = "grpc")]
-use tonic::{body::Body as TonicBody, Request as TonicRequest, Response as TonicResponse, Status};
+use tonic::{server::NamedService, Status};
 #[cfg(feature = "grpc")]
 use tower::{Layer, Service};
 
 /// Tower Layer for Cedar authorization in gRPC services
+///
+/// Operates at the HTTP level (`http::Request<B>` → `http::Response<B>`), the
+/// shape of tonic's generated servers, so a wrapped service can be registered
+/// with [`GrpcServicesBuilder::add_service`](crate::grpc::server::GrpcServicesBuilder::add_service)
+/// (the `NamedService` impl forwards the inner service's name). Authorization
+/// requires [`Claims`] in the request extensions, so an HTTP-level
+/// authentication layer such as
+/// [`GrpcTokenAuthLayer`](crate::grpc::middleware::GrpcTokenAuthLayer) must
+/// wrap this layer (run before it). Denials are returned as gRPC status
+/// responses (`PERMISSION_DENIED`), not transport errors.
+///
+/// # Example
+/// ```ignore
+/// let cedar_layer = CedarAuthzLayer::new(cedar);
+/// let auth_layer = GrpcTokenAuthLayer::new(paseto_auth);
+///
+/// let services = GrpcServicesBuilder::new()
+///     .add_service(auth_layer.layer(cedar_layer.layer(MyServiceServer::new(svc))))
+///     .build(None);
+/// ```
+///
+/// When Cedar and token auth are configured through [`Config`], the framework
+/// applies both to all gRPC routes automatically; this layer is for manual
+/// composition.
 #[cfg(feature = "grpc")]
 #[derive(Clone)]
 pub struct CedarAuthzLayer {
@@ -748,6 +772,8 @@ impl<S> Layer<S> for CedarAuthzLayer {
 }
 
 /// Tower Service for Cedar authorization in gRPC
+///
+/// See [`CedarAuthzLayer`] for usage and composition requirements.
 #[cfg(feature = "grpc")]
 #[derive(Clone)]
 pub struct CedarAuthzService<S> {
@@ -756,16 +782,19 @@ pub struct CedarAuthzService<S> {
 }
 
 #[cfg(feature = "grpc")]
-impl<S, ReqBody> Service<TonicRequest<ReqBody>> for CedarAuthzService<S>
+impl<S: NamedService> NamedService for CedarAuthzService<S> {
+    const NAME: &'static str = S::NAME;
+}
+
+#[cfg(feature = "grpc")]
+impl<S, ReqBody, ResBody> Service<http::Request<ReqBody>> for CedarAuthzService<S>
 where
-    S: Service<TonicRequest<ReqBody>, Response = TonicResponse<TonicBody>, Error = Status>
-        + Clone
-        + Send
-        + 'static,
+    S: Service<http::Request<ReqBody>, Response = http::Response<ResBody>> + Clone + Send + 'static,
     S::Future: Send + 'static,
     ReqBody: Send + 'static,
+    ResBody: Default + Send + 'static,
 {
-    type Response = S::Response;
+    type Response = http::Response<ResBody>;
     type Error = S::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
@@ -773,99 +802,113 @@ where
         self.inner.poll_ready(cx)
     }
 
-    fn call(&mut self, req: TonicRequest<ReqBody>) -> Self::Future {
-        let mut inner = self.inner.clone();
+    fn call(&mut self, req: http::Request<ReqBody>) -> Self::Future {
+        // Take the ready inner service and leave a fresh clone in its place,
+        // so the readiness obtained via poll_ready is the one consumed here.
+        let clone = self.inner.clone();
+        let mut inner = std::mem::replace(&mut self.inner, clone);
         let authz = self.authz.clone();
 
+        // Owned copies, so the authorization future does not borrow the
+        // request (whose body type need not be Sync) across an await point.
+        let headers = req.headers().clone();
+        let extensions = req.extensions().clone();
+        let method_path = req.uri().path().to_string();
+
         Box::pin(async move {
-            // Skip if Cedar is disabled
-            if !authz.config.enabled {
-                return inner.call(req).await;
-            }
-
-            // Extract JWT claims from request extensions (set by JWT interceptor)
-            let claims = req
-                .extensions()
-                .get::<Claims>()
-                .ok_or_else(|| {
-                    Status::unauthenticated(
-                        "Missing JWT claims. Ensure JWT interceptor runs before Cedar layer.",
-                    )
-                })?
-                .clone();
-
-            #[cfg(feature = "audit")]
-            let audit_logger = req
-                .extensions()
-                .get::<crate::audit::AuditLogger>()
-                .cloned();
-
-            // Extract gRPC method path from metadata
-            let method_path = req
-                .metadata()
-                .get(":path")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("unknown")
-                .to_string();
-
-            // Build Cedar authorization request
-            let principal = build_principal(&claims)
-                .map_err(|_| Status::internal("Failed to build principal"))?;
-
-            let action = build_action_grpc(&method_path)
-                .map_err(|_| Status::internal("Failed to build action"))?;
-
-            let context = build_context_grpc(req.metadata(), &claims)
-                .map_err(|_| Status::internal("Failed to build context"))?;
-
-            // For gRPC, we use default resource
-            let resource: EntityUid = r#"Resource::"default""#
-                .parse()
-                .map_err(|_| Status::internal("Failed to parse resource"))?;
-
-            let decision = authz
-                .authorize(&principal, &action, &resource, context, &claims)
-                .await
-                .map_err(|e| Status::internal(format!("Cedar authorization error: {}", e)))?;
-
-            match decision {
-                Decision::Allow => inner.call(req).await,
-                Decision::Deny => {
-                    tracing::warn!(
-                        method = %method_path,
-                        "Cedar policy denied gRPC request"
-                    );
-                    #[cfg(feature = "audit")]
-                    if let Some(ref logger) = audit_logger {
-                        if logger.config().audit_auth_events {
-                            use crate::audit::event::AuditSource;
-                            let source = AuditSource {
-                                ip: None,
-                                user_agent: req
-                                    .metadata()
-                                    .get("user-agent")
-                                    .and_then(|v| v.to_str().ok())
-                                    .map(String::from),
-                                subject: Some(claims.sub.clone()),
-                                request_id: req
-                                    .metadata()
-                                    .get("x-request-id")
-                                    .and_then(|v| v.to_str().ok())
-                                    .map(String::from),
-                            };
-                            logger
-                                .log_auth(
-                                    crate::audit::event::AuditEventKind::AuthPermissionDenied,
-                                    crate::audit::event::AuditSeverity::Warning,
-                                    source,
-                                )
-                                .await;
-                        }
-                    }
-                    Err(Status::permission_denied("Access denied by policy"))
-                }
+            match authorize_grpc_request(&authz, &headers, &extensions, &method_path).await {
+                Ok(()) => inner.call(req).await,
+                Err(status) => Ok(status.into_http()),
             }
         })
+    }
+}
+
+/// Evaluate Cedar policies for a gRPC request at the HTTP level.
+///
+/// The gRPC method (`/package.Service/Method`) is read from the request URI
+/// path and the metadata-derived fields from the HTTP headers, which carry
+/// the same data tonic exposes as `MetadataMap`. Health and reflection
+/// service methods are exempt, mirroring the `/health` and `/ready`
+/// exemptions on the HTTP side.
+#[cfg(feature = "grpc")]
+async fn authorize_grpc_request(
+    authz: &CedarAuthz,
+    headers: &HeaderMap,
+    extensions: &http::Extensions,
+    method_path: &str,
+) -> Result<(), Status> {
+    // Skip if Cedar is disabled
+    if !authz.config.enabled {
+        return Ok(());
+    }
+
+    if crate::grpc::middleware::is_grpc_infra_path(method_path) {
+        return Ok(());
+    }
+
+    // Extract claims from request extensions (set by a token auth layer)
+    let claims = extensions
+        .get::<Claims>()
+        .ok_or_else(|| {
+            Status::unauthenticated(
+                "Missing authentication claims. Ensure a token authentication \
+                 layer runs before the Cedar layer.",
+            )
+        })?
+        .clone();
+
+    // Build Cedar authorization request
+    let principal =
+        build_principal(&claims).map_err(|_| Status::internal("Failed to build principal"))?;
+
+    let action =
+        build_action_grpc(method_path).map_err(|_| Status::internal("Failed to build action"))?;
+
+    let context = build_context_grpc(headers, &claims)
+        .map_err(|_| Status::internal("Failed to build context"))?;
+
+    let resource = build_resource().map_err(|_| Status::internal("Failed to parse resource"))?;
+
+    let decision = authz
+        .authorize(&principal, &action, &resource, context, &claims)
+        .await
+        .map_err(|e| Status::internal(format!("Cedar authorization error: {}", e)))?;
+
+    match decision {
+        Decision::Allow => Ok(()),
+        Decision::Deny => {
+            tracing::warn!(
+                method = %method_path,
+                "Cedar policy denied gRPC request"
+            );
+            #[cfg(feature = "audit")]
+            if let Some(logger) = extensions.get::<crate::audit::AuditLogger>() {
+                if logger.config().audit_auth_events {
+                    use crate::audit::event::AuditSource;
+                    let source = AuditSource {
+                        ip: extract_grpc_client_ip(headers),
+                        user_agent: headers
+                            .get("user-agent")
+                            .and_then(|v| v.to_str().ok())
+                            .map(String::from),
+                        subject: Some(claims.sub.clone()),
+                        request_id: headers
+                            .get("x-request-id")
+                            .and_then(|v| v.to_str().ok())
+                            .map(String::from),
+                    };
+                    logger
+                        .log_auth(
+                            crate::audit::event::AuditEventKind::AuthPermissionDenied,
+                            crate::audit::event::AuditSeverity::Warning,
+                            source,
+                        )
+                        .await;
+                }
+            }
+            Err(Status::permission_denied("Access denied by policy"))
+        }
     }
 }
 
@@ -882,12 +925,12 @@ fn build_action_grpc(method_path: &str) -> Result<EntityUid, Error> {
     Ok(action)
 }
 
-/// Build Cedar context from gRPC metadata and claims
+/// Build Cedar context from gRPC request headers and claims
+///
+/// gRPC metadata is carried in HTTP headers, so reading headers here is
+/// equivalent to reading tonic's `MetadataMap`.
 #[cfg(feature = "grpc")]
-fn build_context_grpc(
-    metadata: &tonic::metadata::MetadataMap,
-    claims: &Claims,
-) -> Result<Context, Error> {
+fn build_context_grpc(headers: &HeaderMap, claims: &Claims) -> Result<Context, Error> {
     let mut context_map = serde_json::Map::new();
 
     // Add user roles
@@ -917,18 +960,18 @@ fn build_context_grpc(
         }),
     );
 
-    // Add IP address from gRPC metadata
-    if let Some(ip) = extract_grpc_client_ip(metadata) {
+    // Add IP address from gRPC request headers
+    if let Some(ip) = extract_grpc_client_ip(headers) {
         context_map.insert("ip".to_string(), json!(ip));
     }
 
     // Add request ID if present
-    if let Some(request_id) = metadata.get("x-request-id").and_then(|v| v.to_str().ok()) {
+    if let Some(request_id) = headers.get("x-request-id").and_then(|v| v.to_str().ok()) {
         context_map.insert("requestId".to_string(), json!(request_id));
     }
 
     // Add user-agent if present
-    if let Some(user_agent) = metadata.get("user-agent").and_then(|v| v.to_str().ok()) {
+    if let Some(user_agent) = headers.get("user-agent").and_then(|v| v.to_str().ok()) {
         context_map.insert("userAgent".to_string(), json!(user_agent));
     }
 
@@ -936,18 +979,18 @@ fn build_context_grpc(
         .map_err(|e| Error::Internal(format!("Failed to build gRPC context: {}", e)))
 }
 
-/// Extract client IP from gRPC metadata
+/// Extract client IP from gRPC request headers
 #[cfg(feature = "grpc")]
-fn extract_grpc_client_ip(metadata: &tonic::metadata::MetadataMap) -> Option<String> {
+fn extract_grpc_client_ip(headers: &HeaderMap) -> Option<String> {
     // Try X-Forwarded-For header first
-    if let Some(xff) = metadata.get("x-forwarded-for") {
+    if let Some(xff) = headers.get("x-forwarded-for") {
         if let Ok(xff_str) = xff.to_str() {
             return xff_str.split(',').next().map(|s| s.trim().to_string());
         }
     }
 
     // Try X-Real-IP header
-    if let Some(xri) = metadata.get("x-real-ip") {
+    if let Some(xri) = headers.get("x-real-ip") {
         if let Ok(xri_str) = xri.to_str() {
             return Some(xri_str.to_string());
         }
@@ -996,4 +1039,195 @@ mod tests {
     // Note: test_build_action_http removed as it requires constructing a full Request<Body>
     // which is complex. The path normalization logic is tested via test_normalize_path_generic.
     // Integration tests should cover the full middleware flow.
+
+    #[cfg(feature = "grpc")]
+    mod grpc_layer {
+        use super::super::*;
+        use std::convert::Infallible;
+
+        fn test_claims() -> Claims {
+            Claims {
+                sub: "user:123".to_string(),
+                email: None,
+                username: None,
+                roles: vec!["user".to_string()],
+                perms: vec![],
+                exp: 0,
+                iat: None,
+                jti: None,
+                iss: None,
+                aud: None,
+                custom: Default::default(),
+            }
+        }
+
+        async fn test_authz(policy: &str, enabled: bool) -> CedarAuthz {
+            let policy_file = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(policy_file.path(), policy).unwrap();
+            let config = CedarConfig {
+                enabled,
+                policy_path: policy_file.path().to_path_buf(),
+                hot_reload: false,
+                hot_reload_interval_secs: 60,
+                cache_enabled: false,
+                cache_ttl_secs: 60,
+                fail_open: false,
+            };
+            CedarAuthz::builder(config).build().await.unwrap()
+        }
+
+        /// Minimal HTTP-level service in the shape of a tonic generated server
+        #[derive(Clone)]
+        struct TestSvc;
+
+        impl NamedService for TestSvc {
+            const NAME: &'static str = "test.v1.TestService";
+        }
+
+        impl Service<http::Request<String>> for TestSvc {
+            type Response = http::Response<String>;
+            type Error = Infallible;
+            type Future = std::future::Ready<Result<Self::Response, Self::Error>>;
+
+            fn poll_ready(
+                &mut self,
+                _cx: &mut TaskContext<'_>,
+            ) -> Poll<Result<(), Self::Error>> {
+                Poll::Ready(Ok(()))
+            }
+
+            fn call(&mut self, _req: http::Request<String>) -> Self::Future {
+                std::future::ready(Ok(http::Response::new("ok".to_string())))
+            }
+        }
+
+        fn grpc_request(path: &str, claims: Option<Claims>) -> http::Request<String> {
+            let mut req = http::Request::builder()
+                .uri(path)
+                .body(String::new())
+                .unwrap();
+            if let Some(claims) = claims {
+                req.extensions_mut().insert(claims);
+            }
+            req
+        }
+
+        fn grpc_status(resp: &http::Response<String>) -> Option<&str> {
+            resp.headers()
+                .get("grpc-status")
+                .and_then(|v| v.to_str().ok())
+        }
+
+        #[test]
+        fn named_service_impl_forwards_the_inner_name() {
+            assert_eq!(
+                <CedarAuthzService<TestSvc> as NamedService>::NAME,
+                "test.v1.TestService"
+            );
+        }
+
+        #[tokio::test]
+        async fn permitted_request_reaches_the_inner_service() {
+            let authz = test_authz("permit(principal, action, resource);", true).await;
+            let mut svc = CedarAuthzLayer::new(authz).layer(TestSvc);
+            let resp = svc
+                .call(grpc_request(
+                    "/test.v1.TestService/Do",
+                    Some(test_claims()),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(resp.body(), "ok");
+        }
+
+        #[tokio::test]
+        async fn denied_request_gets_permission_denied_not_a_transport_error() {
+            // An empty policy set denies by default (fail_open = false)
+            let authz = test_authz("", true).await;
+            let mut svc = CedarAuthzLayer::new(authz).layer(TestSvc);
+            let resp = svc
+                .call(grpc_request(
+                    "/test.v1.TestService/Do",
+                    Some(test_claims()),
+                ))
+                .await
+                .unwrap();
+            // tonic Code::PermissionDenied == 7
+            assert_eq!(grpc_status(&resp), Some("7"));
+        }
+
+        #[tokio::test]
+        async fn missing_claims_is_unauthenticated() {
+            let authz = test_authz("permit(principal, action, resource);", true).await;
+            let mut svc = CedarAuthzLayer::new(authz).layer(TestSvc);
+            let resp = svc
+                .call(grpc_request("/test.v1.TestService/Do", None))
+                .await
+                .unwrap();
+            // tonic Code::Unauthenticated == 16
+            assert_eq!(grpc_status(&resp), Some("16"));
+        }
+
+        #[tokio::test]
+        async fn disabled_cedar_passes_through() {
+            let authz = test_authz("", false).await;
+            let mut svc = CedarAuthzLayer::new(authz).layer(TestSvc);
+            let resp = svc
+                .call(grpc_request("/test.v1.TestService/Do", None))
+                .await
+                .unwrap();
+            assert_eq!(resp.body(), "ok");
+        }
+
+        #[tokio::test]
+        async fn health_service_is_exempt() {
+            // Deny-everything policy set, no claims: the health service must
+            // still be reachable for infrastructure probes.
+            let authz = test_authz("", true).await;
+            let mut svc = CedarAuthzLayer::new(authz).layer(TestSvc);
+            let resp = svc
+                .call(grpc_request("/grpc.health.v1.Health/Check", None))
+                .await
+                .unwrap();
+            assert_eq!(resp.body(), "ok");
+        }
+
+        #[tokio::test]
+        async fn cedar_wrapped_service_registers_with_the_grpc_builder() {
+            use tonic::body::Body as TonicBody;
+
+            /// Tonic-body twin of TestSvc to satisfy `add_service` bounds
+            #[derive(Clone)]
+            struct TonicSvc;
+
+            impl NamedService for TonicSvc {
+                const NAME: &'static str = "test.v1.TonicService";
+            }
+
+            impl Service<http::Request<TonicBody>> for TonicSvc {
+                type Response = http::Response<TonicBody>;
+                type Error = Infallible;
+                type Future = std::future::Ready<Result<Self::Response, Self::Error>>;
+
+                fn poll_ready(
+                    &mut self,
+                    _cx: &mut TaskContext<'_>,
+                ) -> Poll<Result<(), Self::Error>> {
+                    Poll::Ready(Ok(()))
+                }
+
+                fn call(&mut self, _req: http::Request<TonicBody>) -> Self::Future {
+                    std::future::ready(Ok(http::Response::new(TonicBody::empty())))
+                }
+            }
+
+            // The point of this test is that the issue's repro now compiles:
+            // a Cedar-wrapped (and auth-wrapped) tonic service is accepted by
+            // GrpcServicesBuilder::add_service.
+            let authz = test_authz("permit(principal, action, resource);", true).await;
+            let _routes = crate::grpc::server::GrpcServicesBuilder::new()
+                .add_service(CedarAuthzLayer::new(authz).layer(TonicSvc))
+                .build(None);
+        }
+    }
 }

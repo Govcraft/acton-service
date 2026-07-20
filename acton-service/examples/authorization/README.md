@@ -371,7 +371,7 @@ fail_open = true
 
 1. **Add more policies**: Extend the example with your use cases
 2. **Integrate with database**: Load resource attributes from DB
-3. **Add gRPC support**: Use `CedarAuthzLayer` for gRPC services
+3. **Add gRPC support**: Enable `[cedar]` alongside gRPC and every method is authorized automatically — see the `cedar-grpc` example
 4. **Implement policy management API**: CRUD operations for policies
 5. **Add policy testing**: Unit tests for Cedar policies
 6. **Monitor policy decisions**: Track allow/deny metrics

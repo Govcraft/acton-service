@@ -260,6 +260,9 @@ pub mod prelude {
     #[cfg(all(feature = "cedar-authz", feature = "grpc"))]
     pub use crate::middleware::{CedarAuthzLayer, CedarAuthzService};
 
+    #[cfg(feature = "grpc")]
+    pub use crate::grpc::{GrpcTokenAuthLayer, GrpcTokenAuthService};
+
     #[cfg(feature = "observability")]
     pub use crate::observability::init_tracing;
 

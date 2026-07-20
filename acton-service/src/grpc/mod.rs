@@ -3,12 +3,25 @@
 //! This module provides gRPC server functionality that can run alongside HTTP services.
 //! It supports both single-port (HTTP + gRPC multiplexed) and dual-port modes.
 //!
+//! ## Authentication and Authorization
+//!
+//! When `[token]` is configured, `ServiceBuilder` automatically applies
+//! token authentication ([`GrpcTokenAuthLayer`]) to all registered gRPC
+//! services, validating the `authorization` metadata and injecting
+//! [`Claims`](crate::middleware::token::Claims) into request extensions.
+//! With the `cedar-authz` feature and `[cedar]` enabled, each method is
+//! additionally authorized against Cedar policies as
+//! `Action::"/package.Service/Method"`. Health and reflection services are
+//! exempt, as are configured `public_paths` prefixes. See the `cedar-grpc`
+//! example for an end-to-end demonstration.
+//!
 //! ## Middleware and Interceptors
 //!
-//! The gRPC implementation provides middleware parity with HTTP:
+//! For manual composition, the module also provides:
 //! - **Request ID**: Automatic generation and propagation
 //! - **Tracing**: OpenTelemetry integration with proper span context
-//! - **Authentication**: PASETO (default) or JWT token validation via interceptors
+//! - **Authentication**: [`GrpcTokenAuthLayer`] as an HTTP-level tower
+//!   layer, or PASETO/JWT interceptors for use with `with_interceptor`
 //! - **Rate Limiting**: Governor-based rate limiting (when `governor` feature is enabled)
 //!
 //! ## Example
@@ -72,7 +85,10 @@ pub use interceptors::{
 pub use interceptors::jwt_auth_interceptor;
 
 #[cfg(feature = "grpc")]
-pub use middleware::{GrpcTracingLayer, GrpcTracingService, LoggingLayer, LoggingService};
+pub use middleware::{
+    GrpcTokenAuthLayer, GrpcTokenAuthService, GrpcTracingLayer, GrpcTracingService, LoggingLayer,
+    LoggingService,
+};
 
 #[cfg(all(feature = "grpc", feature = "governor"))]
 pub use middleware::{GrpcRateLimitLayer, GrpcRateLimitService};

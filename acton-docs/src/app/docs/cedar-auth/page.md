@@ -508,8 +508,8 @@ When the `audit` feature is enabled, the Cedar middleware automatically emits an
 The event records:
 
 - The authenticated subject (from JWT `sub`)
-- Client user-agent and request-id (HTTP picks these up from headers; gRPC picks them up from metadata)
-- Client IP (HTTP only; gRPC has no peer IP at this layer)
+- Client user-agent and request-id (from headers for HTTP; gRPC metadata is carried in the same headers)
+- Client IP (from `x-forwarded-for`/`x-real-ip` when present)
 
 No additional code is required — emission is on by default when `audit_auth_events: true` is set in the audit configuration (the default). See [Audit Logging](/docs/audit) for storage and SIEM export.
 
@@ -551,28 +551,50 @@ Token authentication provides authentication (who you are), Cedar provides autho
 
 ### gRPC Support
 
-With the `grpc` feature, Cedar is available as a tower layer for tonic
-services: `CedarAuthzLayer` wraps a service in `CedarAuthzService`, which
-authorizes each request from the `Claims` that the PASETO/JWT interceptor
-placed in request extensions.
+With the `grpc` feature, the same configuration that protects HTTP routes
+protects gRPC services — no per-service wiring required. When `[token]` is
+configured, `ServiceBuilder` applies token authentication to all registered
+gRPC services (validating the `authorization` metadata and injecting
+`Claims`), and when `[cedar]` is enabled it authorizes every method as
+`Action::"/package.Service/Method"`:
 
-`CedarAuthzLayer::new` takes a built `CedarAuthz` instance (not a
-`CedarConfig`), so construct the authorizer first and apply the layer where
-you compose your tonic service stack:
-
-```rust
-use acton_service::middleware::{CedarAuthz, CedarAuthzLayer};
-
-let cedar = CedarAuthz::builder(config.cedar.clone())
-    .build()
-    .await?;
-
-// A tower layer over tonic services — apply it when composing a tonic
-// stack manually (e.g. tonic's Server::builder().layer(...)).
-let cedar_layer = CedarAuthzLayer::new(cedar);
+```cedar
+permit(
+    principal,
+    action == Action::"/hello.v1.HelloService/SayHello",
+    resource
+) when { context.roles.contains("user") };
 ```
 
-Path normalization handles gRPC method names automatically.
+Health (`grpc.health.v1.Health`) and reflection services are exempt so
+infrastructure probes work without credentials, and `public_paths` prefixes
+in the token configuration are honored for intentionally public methods.
+Denials are returned as gRPC statuses (`UNAUTHENTICATED`,
+`PERMISSION_DENIED`), not transport errors.
+
+For manual stack composition, both layers are available as HTTP-level tower
+layers that forward `NamedService`, so wrapped services register directly
+with `GrpcServicesBuilder::add_service`:
+
+```rust
+use acton_service::grpc::GrpcTokenAuthLayer;
+use acton_service::middleware::cedar::{CedarAuthz, CedarAuthzLayer};
+use tower::Layer;
+
+let cedar = CedarAuthz::builder(cedar_config).build().await?;
+
+let services = GrpcServicesBuilder::new()
+    .add_service(
+        // Auth outermost: it injects the Claims that Cedar authorizes.
+        GrpcTokenAuthLayer::new(paseto_auth).layer(
+            CedarAuthzLayer::new(cedar).layer(MyServiceServer::new(svc)),
+        ),
+    )
+    .build(None);
+```
+
+See the runnable `cedar-grpc` example for an end-to-end demonstration with
+test tokens and grpcurl commands.
 
 ## Next Steps
 

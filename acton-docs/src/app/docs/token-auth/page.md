@@ -420,7 +420,33 @@ The middleware no longer emits `AuthLoginFailed`. That event is reserved for app
 
 ## gRPC Support
 
-Token authentication is available for gRPC services via interceptors:
+When `[token]` is configured, `ServiceBuilder` applies token authentication
+to all registered gRPC services automatically — the same configuration that
+protects HTTP routes protects gRPC methods, with no per-service wiring. The
+`authorization` metadata is validated and `Claims` are injected into request
+extensions where handlers (and Cedar) can read them. Failures are returned
+as gRPC statuses (`UNAUTHENTICATED`), health
+(`grpc.health.v1.Health`) and reflection services stay credential-free for
+infrastructure probes, and `public_paths` prefixes are honored for
+intentionally public methods (match against the full method path, e.g.
+`"/hello.v1.HelloService/"`).
+
+For manually composed stacks, `GrpcTokenAuthLayer` is the same layer as a
+public type — it forwards `NamedService`, so a wrapped service registers
+directly with `GrpcServicesBuilder::add_service`:
+
+```rust
+use acton_service::grpc::GrpcTokenAuthLayer;
+use tower::Layer;
+
+let services = GrpcServicesBuilder::new()
+    .add_service(GrpcTokenAuthLayer::new(paseto_auth).layer(MyServiceServer::new(svc)))
+    .build(None);
+```
+
+Tonic interceptors remain available for custom `with_interceptor` stacks
+(note that combining them with the framework-managed layer validates the
+token twice — harmless, but redundant):
 
 ```rust
 use acton_service::grpc::{paseto_auth_interceptor, request_id_interceptor};

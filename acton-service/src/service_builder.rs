@@ -1166,16 +1166,26 @@ where
                                     Some(cedar)
                                 }
                                 Err(e) => {
-                                    tracing::warn!(
-                                        "Failed to initialize Cedar middleware: {}",
-                                        e
-                                    );
+                                    let err = crate::error::Error::Internal(format!(
+                                        "Cedar authorization is enabled but its initialization \
+                                         failed; refusing to start rather than serving routes \
+                                         without policy enforcement: {e}"
+                                    ));
+                                    tracing::error!("{}", err);
+                                    record_startup_error(&mut startup_error, err);
                                     None
                                 }
                             }
                         }
                         Err(_) => {
-                            tracing::warn!("No tokio runtime available for Cedar initialization");
+                            let err = crate::error::Error::Internal(
+                                "Cedar authorization is enabled but no tokio runtime is \
+                                 available to initialize it; refusing to start rather than \
+                                 serving routes without policy enforcement"
+                                    .to_string(),
+                            );
+                            tracing::error!("{}", err);
+                            record_startup_error(&mut startup_error, err);
                             None
                         }
                     }
@@ -1186,6 +1196,11 @@ where
                 None
             }
         };
+
+        // Keep a Cedar handle for the gRPC routes; the HTTP middleware
+        // section below consumes `cedar_authz` itself.
+        #[cfg(all(feature = "grpc", feature = "cedar-authz"))]
+        let grpc_cedar = cedar_authz.clone();
 
         // Merge GraphQL routes (if any) BEFORE general middleware so GraphQL
         // endpoints inherit auth, tracing, CORS, etc.
@@ -1348,6 +1363,13 @@ where
         // Auto-apply token authentication middleware if configured
         // NOTE: Token auth must be applied AFTER Cedar because Axum layers run in reverse order
         // This ensures the execution order is: Request → General Middleware → Token Auth → Cedar → Handler
+        //
+        // The constructed validators are also kept for the gRPC routes below,
+        // so both listeners enforce the same identity configuration.
+        #[cfg(feature = "grpc")]
+        let mut grpc_paseto: Option<crate::middleware::paseto::PasetoAuth> = None;
+        #[cfg(all(feature = "grpc", feature = "jwt"))]
+        let mut grpc_jwt: Option<crate::middleware::jwt::JwtAuth> = None;
         if let Some(token_config) = &config.token {
             match token_config {
                 crate::config::TokenConfig::Paseto(paseto_config) => {
@@ -1359,6 +1381,10 @@ where
                             } else {
                                 paseto_auth
                             };
+                            #[cfg(feature = "grpc")]
+                            {
+                                grpc_paseto = Some(paseto_auth.clone());
+                            }
                             tracing::debug!("Auto-applying PASETO authentication middleware");
                             app = app.layer(axum::middleware::from_fn_with_state(
                                 paseto_auth,
@@ -1386,6 +1412,10 @@ where
                             } else {
                                 jwt_auth
                             };
+                            #[cfg(feature = "grpc")]
+                            {
+                                grpc_jwt = Some(jwt_auth.clone());
+                            }
                             tracing::debug!("Auto-applying JWT authentication middleware");
                             app = app.layer(axum::middleware::from_fn_with_state(
                                 jwt_auth,
@@ -1499,13 +1529,68 @@ where
             }
         };
 
+        // Convert gRPC routes to an axum router and apply their own auth and
+        // authorization stack. Merged routers do not inherit each other's
+        // layers, so without this the gRPC listener would serve every method
+        // unauthenticated regardless of what `[token]` and `[cedar]` declare.
+        // Token auth (outermost) validates the `authorization` metadata and
+        // injects Claims; Cedar (inner) then authorizes each method. Health
+        // and reflection services are exempt, as are `public_paths` prefixes.
+        #[cfg(feature = "grpc")]
+        let grpc_router: Option<axum::Router> = match self.grpc_services {
+            Some(routes) => {
+                let mut grpc_app = routes.into_axum_router();
+
+                #[cfg(feature = "cedar-authz")]
+                if let Some(cedar) = grpc_cedar {
+                    tracing::debug!("Auto-applying Cedar authorization to gRPC routes");
+                    grpc_app =
+                        grpc_app.layer(crate::middleware::cedar::CedarAuthzLayer::new(cedar));
+                }
+
+                if let Some(paseto) = grpc_paseto {
+                    tracing::debug!("Auto-applying PASETO authentication to gRPC routes");
+                    let public_paths = match &config.token {
+                        Some(crate::config::TokenConfig::Paseto(c)) => c.public_paths.clone(),
+                        _ => Vec::new(),
+                    };
+                    grpc_app = grpc_app.layer(
+                        crate::grpc::middleware::GrpcTokenAuthLayer::new(paseto)
+                            .with_public_paths(public_paths),
+                    );
+                }
+                #[cfg(feature = "jwt")]
+                if let Some(jwt) = grpc_jwt {
+                    tracing::debug!("Auto-applying JWT authentication to gRPC routes");
+                    let public_paths = match &config.token {
+                        Some(crate::config::TokenConfig::Jwt(c)) => c.public_paths.clone(),
+                        _ => Vec::new(),
+                    };
+                    grpc_app = grpc_app.layer(
+                        crate::grpc::middleware::GrpcTokenAuthLayer::new(jwt)
+                            .with_public_paths(public_paths),
+                    );
+                }
+
+                // Make the audit logger visible to the Cedar layer for denial
+                // events. Outermost, so it is inserted before auth/Cedar run.
+                #[cfg(feature = "audit")]
+                if let Some(ref logger) = audit_logger {
+                    grpc_app = grpc_app.layer(axum::Extension(logger.clone()));
+                }
+
+                Some(grpc_app)
+            }
+            None => None,
+        };
+
         ActonService {
             config,
             state: state_clone,
             listener_addr,
             app,
             #[cfg(feature = "grpc")]
-            grpc_routes: self.grpc_services,
+            grpc_routes: grpc_router,
             #[cfg(feature = "tls")]
             tls_config,
             #[cfg(all(feature = "grpc", feature = "tls"))]
@@ -1831,7 +1916,7 @@ where
     listener_addr: std::net::SocketAddr,
     app: Router,
     #[cfg(feature = "grpc")]
-    grpc_routes: Option<tonic::service::Routes>,
+    grpc_routes: Option<axum::Router>,
     #[cfg(feature = "tls")]
     tls_config: Option<std::sync::Arc<tokio_rustls::rustls::ServerConfig>>,
     /// Per-listener TLS config for the separate-port gRPC listener. Falls back
@@ -1926,8 +2011,9 @@ where
                         let http_listener = TcpListener::bind(&self.listener_addr).await?;
                         let grpc_listener = TcpListener::bind(&grpc_addr).await?;
 
-                        // Convert Routes to axum router for the gRPC listener
-                        let grpc_app = grpc_routes.into_axum_router();
+                        // The gRPC axum router (auth and Cedar layers were
+                        // applied at build time)
+                        let grpc_app = grpc_routes;
 
                         // Spawn gRPC server on separate task (with optional
                         // per-listener TLS, falling back to the HTTP TLS config).
@@ -2001,8 +2087,9 @@ where
 
                         let listener = TcpListener::bind(&self.listener_addr).await?;
 
-                        // Merge HTTP and gRPC services
-                        let hybrid_service = grpc_routes.into_axum_router().merge(self.app);
+                        // Merge HTTP and gRPC services (the gRPC router keeps
+                        // its own auth and Cedar layers through the merge)
+                        let hybrid_service = grpc_routes.merge(self.app);
 
                         // Note: the TLS path does not use ConnectInfo (orphan
                         // rules; see comment in dual-port path above).
@@ -2191,6 +2278,69 @@ mod tests {
         // let routes = VersionedRoutes { router: Router::new() };
 
         // The ONLY way to create VersionedRoutes is through VersionedApiBuilder
+    }
+
+    /// A `[cedar]` section whose policy file cannot be loaded must be a hard
+    /// failure. Serving every route without policy enforcement where the
+    /// operator configured Cedar is the same silent downgrade class as
+    /// serving plaintext where TLS was configured.
+    #[cfg(feature = "cedar-authz")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cedar_init_failure_is_fatal_not_an_unenforced_downgrade() {
+        use crate::config::{CedarConfig, Config};
+        use crate::prelude::ServiceBuilder;
+
+        let config = Config::<()> {
+            cedar: Some(CedarConfig {
+                enabled: true,
+                policy_path: "/nonexistent/policies.cedar".into(),
+                hot_reload: false,
+                hot_reload_interval_secs: 60,
+                cache_enabled: false,
+                cache_ttl_secs: 60,
+                fail_open: false,
+            }),
+            ..Default::default()
+        };
+
+        let error = ServiceBuilder::new()
+            .with_config(config)
+            .try_build()
+            .err()
+            .expect("an unloadable Cedar policy set must fail the build, not skip authorization");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("refusing to start rather than serving routes without policy enforcement"),
+            "error must explain the refusal, got: {message}"
+        );
+    }
+
+    /// A disabled `[cedar]` section must not be fatal — only an enabled one
+    /// that cannot be initialized.
+    #[cfg(feature = "cedar-authz")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn disabled_cedar_section_builds_successfully() {
+        use crate::config::{CedarConfig, Config};
+        use crate::prelude::ServiceBuilder;
+
+        let config = Config::<()> {
+            cedar: Some(CedarConfig {
+                enabled: false,
+                policy_path: "/nonexistent/policies.cedar".into(),
+                hot_reload: false,
+                hot_reload_interval_secs: 60,
+                cache_enabled: false,
+                cache_ttl_secs: 60,
+                fail_open: false,
+            }),
+            ..Default::default()
+        };
+
+        ServiceBuilder::new()
+            .with_config(config)
+            .try_build()
+            .expect("a disabled cedar section must not fail the build");
     }
 
     /// A `[tls]` section pointing at cert material that cannot be loaded must be
