@@ -135,6 +135,7 @@ rustls-pki-types = { version = "1.14.1", features = ["std"], optional = true }
 arc-swap = { version = "1.9.2", optional = true }
 zeroize = { version = "1.9.0", optional = true }
 webpki-roots = { version = "1.0.9", optional = true }
+hyper-util = { version = "0.1.20", features = ["tokio"], optional = true }
 
 [features]
 default = ["http", "observability", "crypto-aws-lc-rs"]
@@ -161,7 +162,7 @@ crypto-ring = [
     "tonic?/tls-ring",
 ]
 http = []
-grpc = ["dep:tonic", "dep:prost", "dep:tonic-prost", "dep:tonic-prost-build", "dep:tokio-stream", "dep:tonic-health", "dep:tonic-reflection"]
+grpc = ["dep:tonic", "dep:prost", "dep:tonic-prost", "dep:tonic-prost-build", "dep:tokio-stream", "dep:tonic-health", "dep:tonic-reflection", "dep:hyper-util"]
 database = ["dep:sqlx"]
 turso = ["dep:libsql"]
 surrealdb = ["dep:surrealdb"]
