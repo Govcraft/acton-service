@@ -957,6 +957,73 @@ pub struct TlsConfig {
     pub client_auth_optional: bool,
 }
 
+/// Client-side mutual-TLS identity (requires `tls` feature)
+///
+/// Describes the certificate this service presents *as a client* when it calls
+/// another mutual-TLS service, and the trust anchors it uses to verify that
+/// peer. It is the outbound mirror of [`TlsConfig`], which describes the
+/// certificate this service presents as a server.
+///
+/// Deliberately not a field of [`Config`]. A service commonly calls several
+/// peers, and those calls may legitimately use different identities or trust
+/// different roots, so a single framework-level slot would be the wrong shape.
+/// Deserialize one of these per peer from wherever the peer is configured, and
+/// build a [`crate::client_tls::ClientIdentitySource`] from each.
+#[cfg(feature = "tls")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClientIdentityConfig {
+    /// Enable the client identity (default: true when the section is present).
+    ///
+    /// This flag is advisory: the loaders in [`crate::client_tls`] do not
+    /// consult it, because a caller that asked for a client identity and got a
+    /// plain client back would silently lose its authentication. Branch on it
+    /// yourself before choosing to build an identity-bearing client at all.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Path to this service's PEM-encoded client certificate chain, leaf first.
+    pub cert_path: PathBuf,
+
+    /// Path to this service's PEM-encoded client private key.
+    pub key_path: PathBuf,
+
+    /// Path to a PEM-encoded CA bundle used to verify the *peer's* server
+    /// certificate.
+    ///
+    /// Set this when calling a peer whose server certificate is issued by a
+    /// private CA that the public web PKI does not chain to, which is the
+    /// normal case for internal mutual-TLS meshes. When absent (the default),
+    /// the peer is verified against the built-in web PKI roots alone.
+    #[serde(default)]
+    pub root_ca_path: Option<PathBuf>,
+
+    /// Whether [`root_ca_path`](Self::root_ca_path) *replaces* the built-in web
+    /// PKI roots rather than adding to them.
+    ///
+    /// Defaults to `false`: the private CA is added alongside the public roots,
+    /// matching `reqwest`'s `add_root_certificate` semantics. That default
+    /// exists because mixed peer sets are ordinary — one client often calls
+    /// both an internal mesh service and a publicly-signed endpoint — and a
+    /// replace-by-default would break the public calls the moment a private CA
+    /// was configured.
+    ///
+    /// # Security tradeoff
+    ///
+    /// The default is the permissive one. With `false`, any certificate that
+    /// chains to *any* public root is accepted for the peer, so a mis-issued
+    /// public certificate for the peer's hostname would be trusted even though
+    /// the peer is only ever supposed to present a private-CA certificate. Set
+    /// this to `true` for a client that talks exclusively to a private mesh:
+    /// it pins trust to your own CA and removes the entire public root set from
+    /// the attack surface. Do not set it for a client that also calls
+    /// publicly-signed endpoints, because those calls will then fail to verify.
+    ///
+    /// Ignored when `root_ca_path` is absent: dropping the built-in roots
+    /// without supplying replacements would leave nothing to verify against.
+    #[serde(default = "default_false")]
+    pub exclusive_roots: bool,
+}
+
 /// Journald logging configuration (requires `journald` feature)
 ///
 /// When enabled, tracing events are written directly to the systemd journal

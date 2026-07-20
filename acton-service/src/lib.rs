@@ -151,6 +151,9 @@ pub mod audit;
 #[cfg(feature = "tls")]
 pub mod tls;
 
+#[cfg(feature = "tls")]
+pub mod client_tls;
+
 #[cfg(feature = "login-lockout")]
 pub mod lockout;
 

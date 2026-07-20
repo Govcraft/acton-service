@@ -162,6 +162,29 @@ referrer_policy = "strict-origin-when-cross-origin"
 # cert_path = "./certs/server.pem"       # PEM-encoded certificate chain
 # key_path = "./certs/server-key.pem"    # PEM-encoded private key
 
+# ----------------------------------------------------------------------------
+# CLIENT mTLS IDENTITY (Optional) — the certificate this service PRESENTS when
+# it CALLS another mutual-TLS service. The outbound mirror of [tls] above.
+# Requires feature: tls
+#
+# This section is not read by the framework Config: a service may call several peers with
+# different identities, so there is no single framework-level slot. Deserialize
+# one ClientIdentityConfig per peer from wherever that peer is configured, then
+# build an acton_service::client_tls::ClientIdentitySource from each.
+# ----------------------------------------------------------------------------
+# [client_identity]
+# enabled = true
+# cert_path = "./certs/client.pem"       # This service's client cert chain
+# key_path = "./certs/client-key.pem"    # This service's client private key
+# root_ca_path = "./certs/peer-ca.pem"   # CA that signed the PEER's server cert
+# exclusive_roots = false                # false: root_ca_path is ADDED to the
+#                                        #   public web PKI roots (default; safe
+#                                        #   for clients that also call
+#                                        #   publicly-signed endpoints)
+#                                        # true: root_ca_path REPLACES them,
+#                                        #   pinning trust to your own CA. Use
+#                                        #   for private-mesh-only clients.
+
 # ============================================================================
 # DATABASE CONFIGURATION (Optional)
 # ============================================================================
