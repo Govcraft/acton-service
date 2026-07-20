@@ -99,7 +99,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-acton-service = "0.29"
+acton-service = "0.30"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -502,7 +502,7 @@ Defaults: `http`, `observability`, `crypto-aws-lc-rs`. Enable only what you need
 
 ```toml
 [dependencies]
-acton-service = { version = "0.29", features = ["grpc", "database", "cache"] }
+acton-service = { version = "0.30", features = ["grpc", "database", "cache"] }
 ```
 
 **Transports & protocols**
@@ -575,7 +575,7 @@ Or use `full` to enable everything (with PostgreSQL as the database backend):
 
 ```toml
 [dependencies]
-acton-service = { version = "0.29", features = ["full"] }
+acton-service = { version = "0.30", features = ["full"] }
 ```
 
 See the [Feature Flags guide](https://govcraft.github.io/acton-service/docs/feature-flags) for a decision tree.
@@ -592,7 +592,7 @@ that `aws-lc-rs` requires at build time:
 
 ```toml
 [dependencies]
-acton-service = { version = "0.29", default-features = false, features = [
+acton-service = { version = "0.30", default-features = false, features = [
     "http",
     "observability",
     "crypto-ring",
