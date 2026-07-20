@@ -692,7 +692,7 @@ Rustls-based HTTPS listener for terminating TLS directly in the service, plus a
 **When to use**: Serving HTTPS without a TLS-terminating proxy in front, and/or
 calling peers that require mutual TLS
 
-**Dependencies**: tokio-rustls, rustls-pki-types, zeroize, webpki-roots
+**Dependencies**: tokio-rustls, rustls-pki-types, arc-swap, zeroize, webpki-roots
 
 **Provides**:
 - TLS-enabled server listener
