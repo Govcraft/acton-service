@@ -223,6 +223,66 @@ impl std::fmt::Display for AuditEventKind {
     }
 }
 
+impl AuditEventKind {
+    /// Parse a kind back from its wire string — the exact inverse of
+    /// [`Display`](std::fmt::Display), which the chain hash and the syslog
+    /// `kind` param both consume. A verifier rebuilding events from exported
+    /// lines needs this to recompute hashes, so the two `match`es must stay
+    /// mirror images.
+    ///
+    /// Returns `None` for a string this build does not know — either a kind
+    /// introduced by a newer producer, or one behind a feature this build
+    /// compiled out. Verification cannot proceed past such an event, which is
+    /// the honest answer: an unknown kind cannot be re-hashed faithfully.
+    pub fn from_wire(s: &str) -> Option<Self> {
+        if let Some(name) = s.strip_prefix("custom.") {
+            return Some(Self::Custom(name.to_string()));
+        }
+        match s {
+            "auth.login.success" => Some(Self::AuthLoginSuccess),
+            "auth.login.failed" => Some(Self::AuthLoginFailed),
+            "auth.token.missing" => Some(Self::AuthTokenMissing),
+            "auth.token.invalid" => Some(Self::AuthTokenInvalid),
+            "auth.logout" => Some(Self::AuthLogout),
+            "auth.token.refresh" => Some(Self::AuthTokenRefresh),
+            "auth.token.revoked" => Some(Self::AuthTokenRevoked),
+            "auth.password.changed" => Some(Self::AuthPasswordChanged),
+            "auth.apikey.created" => Some(Self::AuthApiKeyCreated),
+            "auth.apikey.revoked" => Some(Self::AuthApiKeyRevoked),
+            "auth.oauth.callback" => Some(Self::AuthOAuthCallback),
+            "auth.permission.denied" => Some(Self::AuthPermissionDenied),
+            #[cfg(feature = "login-lockout")]
+            "auth.account.locked" => Some(Self::AuthAccountLocked),
+            #[cfg(feature = "login-lockout")]
+            "auth.account.unlocked" => Some(Self::AuthAccountUnlocked),
+            #[cfg(feature = "accounts")]
+            "account.created" => Some(Self::AccountCreated),
+            #[cfg(feature = "accounts")]
+            "account.disabled" => Some(Self::AccountDisabled),
+            #[cfg(feature = "accounts")]
+            "account.enabled" => Some(Self::AccountEnabled),
+            #[cfg(feature = "accounts")]
+            "account.locked" => Some(Self::AccountLocked),
+            #[cfg(feature = "accounts")]
+            "account.unlocked" => Some(Self::AccountUnlocked),
+            #[cfg(feature = "accounts")]
+            "account.expired" => Some(Self::AccountExpired),
+            #[cfg(feature = "accounts")]
+            "account.deleted" => Some(Self::AccountDeleted),
+            #[cfg(feature = "accounts")]
+            "account.updated" => Some(Self::AccountUpdated),
+            "auth.key.rotated" => Some(Self::AuthKeyRotated),
+            "auth.key.retired" => Some(Self::AuthKeyRetired),
+            "auth.key.rotation_failed" => Some(Self::AuthKeyRotationFailed),
+            "config.loaded" => Some(Self::ConfigLoaded),
+            "config.drift_detected" => Some(Self::ConfigDriftDetected),
+            "http.request" => Some(Self::HttpRequest),
+            "http.request.denied" => Some(Self::HttpRequestDenied),
+            _ => None,
+        }
+    }
+}
+
 /// Audit event severity levels
 ///
 /// Maps directly to syslog severity values (RFC 5424).
@@ -324,6 +384,59 @@ mod tests {
             AuditEventKind::Custom("user.delete".to_string()).to_string(),
             "custom.user.delete"
         );
+    }
+
+    #[test]
+    fn every_kind_round_trips_through_its_wire_string() {
+        let mut kinds = vec![
+            AuditEventKind::AuthLoginSuccess,
+            AuditEventKind::AuthLoginFailed,
+            AuditEventKind::AuthTokenMissing,
+            AuditEventKind::AuthTokenInvalid,
+            AuditEventKind::AuthLogout,
+            AuditEventKind::AuthTokenRefresh,
+            AuditEventKind::AuthTokenRevoked,
+            AuditEventKind::AuthPasswordChanged,
+            AuditEventKind::AuthApiKeyCreated,
+            AuditEventKind::AuthApiKeyRevoked,
+            AuditEventKind::AuthOAuthCallback,
+            AuditEventKind::AuthPermissionDenied,
+            AuditEventKind::AuthKeyRotated,
+            AuditEventKind::AuthKeyRetired,
+            AuditEventKind::AuthKeyRotationFailed,
+            AuditEventKind::ConfigLoaded,
+            AuditEventKind::ConfigDriftDetected,
+            AuditEventKind::HttpRequest,
+            AuditEventKind::HttpRequestDenied,
+            AuditEventKind::Custom("user.delete".to_string()),
+        ];
+        #[cfg(feature = "login-lockout")]
+        kinds.extend([
+            AuditEventKind::AuthAccountLocked,
+            AuditEventKind::AuthAccountUnlocked,
+        ]);
+        #[cfg(feature = "accounts")]
+        kinds.extend([
+            AuditEventKind::AccountCreated,
+            AuditEventKind::AccountDisabled,
+            AuditEventKind::AccountEnabled,
+            AuditEventKind::AccountLocked,
+            AuditEventKind::AccountUnlocked,
+            AuditEventKind::AccountExpired,
+            AuditEventKind::AccountDeleted,
+            AuditEventKind::AccountUpdated,
+        ]);
+
+        for kind in kinds {
+            let wire = kind.to_string();
+            assert_eq!(
+                AuditEventKind::from_wire(&wire),
+                Some(kind),
+                "from_wire must invert Display for `{wire}`"
+            );
+        }
+
+        assert_eq!(AuditEventKind::from_wire("no.such.kind"), None);
     }
 
     #[test]

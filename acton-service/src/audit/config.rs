@@ -33,6 +33,18 @@ pub struct AuditConfig {
     #[serde(default = "default_true")]
     pub audit_config_events: bool,
 
+    /// Mount the `GET /admin/config/drift` endpoint (default: false)
+    ///
+    /// The drift endpoint reports the active config fingerprint and which
+    /// sections changed on disk. It carries no authentication of its own and
+    /// is mounted on the outer router, outside any route-level middleware —
+    /// so it discloses configuration metadata to any caller that can reach
+    /// the listener. It stays unmounted unless explicitly enabled, and
+    /// deployments that enable it should front it with their own access
+    /// control.
+    #[serde(default)]
+    pub drift_endpoint_enabled: bool,
+
     /// Syslog export configuration
     #[serde(default)]
     pub syslog: SyslogConfig,
@@ -75,6 +87,7 @@ impl Default for AuditConfig {
             audit_all_requests: false,
             audit_auth_events: true,
             audit_config_events: true,
+            drift_endpoint_enabled: false,
             syslog: SyslogConfig::default(),
             otlp_logs_enabled: false,
             audited_routes: Vec::new(),
@@ -250,6 +263,7 @@ mod tests {
             audit_all_requests: true,
             audit_auth_events: false,
             audit_config_events: true,
+            drift_endpoint_enabled: false,
             syslog: SyslogConfig {
                 transport: "tcp".to_string(),
                 address: "syslog.example.com:514".to_string(),
