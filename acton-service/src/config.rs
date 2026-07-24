@@ -184,6 +184,22 @@ pub struct ServiceConfig {
     /// Environment (dev, staging, production)
     #[serde(default = "default_environment")]
     pub environment: String,
+
+    /// Whether the request context trusts forwarded-for headers when resolving
+    /// the client IP.
+    ///
+    /// Governs the [`RequestContext`](crate::middleware::request_context::RequestContext)
+    /// resolution every downstream consumer shares — including audit-event
+    /// source capture. When `true`, `X-Forwarded-For` (first value) and
+    /// `X-Real-IP` are consulted before the direct TCP/TLS peer address. Only
+    /// enable behind a proxy you trust to set these headers — a direct client
+    /// can otherwise spoof the IP recorded in its audit trail.
+    ///
+    /// Defaults to `false` (do not trust) to be safe by default. Rate limiting
+    /// has its own independent flag ([`RateLimitConfig::trust_forwarded_headers`])
+    /// so the governor's trust posture can differ from the audit record's.
+    #[serde(default = "default_false")]
+    pub trust_forwarded_headers: bool,
 }
 
 /// Token authentication configuration
@@ -1760,6 +1776,7 @@ where
                 log_level: default_log_level(),
                 timeout_secs: default_timeout(),
                 environment: default_environment(),
+                trust_forwarded_headers: false,
             },
             token: None,
             rate_limit: RateLimitConfig::default(),
@@ -1917,6 +1934,7 @@ mod tests {
                 log_level: "debug".to_string(),
                 timeout_secs: 30,
                 environment: "test".to_string(),
+                trust_forwarded_headers: false,
             },
             token: Some(TokenConfig::Paseto(PasetoConfig {
                 version: "v4".to_string(),
@@ -1992,6 +2010,7 @@ mod tests {
                 log_level: "info".to_string(),
                 timeout_secs: 30,
                 environment: "dev".to_string(),
+                trust_forwarded_headers: false,
             },
             token: None,
             rate_limit: RateLimitConfig {

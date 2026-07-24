@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.31.2] - 2026-07-24
+
+Hardens the audit trail for deployments that treat the exported stream as the
+audit record. Three fixes, found while wiring the `audit` feature into a
+downstream admin plane: the chain hash ignored half the event, the drift
+endpoint mounted itself unauthenticated, and the audit source IP trusted
+client-supplied headers. No breaking API changes; two new config keys, both
+default-off.
+
+### Fixed
+
+- **audit**: The chain hash now covers the whole event. The legacy scheme
+  omitted `metadata`, source IP, user agent, request ID, and duration — a
+  tampered role list or forged origin verified as intact. New events seal
+  under a self-describing `v2:`-prefixed hash with length-framed fields;
+  the version travels inside the hash string itself, so storage schemas are
+  unchanged and chains spanning the upgrade verify per event. Metadata is
+  hashed as canonical recursively-key-sorted JSON, stable across
+  `preserve_order` feature unification and JSON-normalizing stores. A
+  mid-chain downgrade forgery is caught by the successor's `previous_hash`.
+- **audit**: The syslog export now emits every hash input (event id,
+  canonical RFC 3339 timestamp, kind, severity, service, user agent,
+  canonical metadata, previous hash), so a chain rebuilt from exported lines
+  alone recomputes and verifies — required when syslog is the only durable
+  store. `AuditEventKind::from_wire` provides the Display-inverse a verifier
+  needs; a round-trip test pins export → parse → verify.
+- **audit**: `GET /admin/config/drift` is no longer mounted unconditionally.
+  It carries no authentication and sits on the outer router, outside any
+  route-level middleware, so compiling the `audit` feature in exposed config
+  fingerprints and drift sections to any caller. It now mounts only when the
+  new `[audit] drift_endpoint_enabled` flag (default `false`) is set.
+- **middleware**: The request context no longer hardcodes trust in
+  `X-Forwarded-For` / `X-Real-IP` when resolving the client IP that audit
+  events record. Trust is now `[service] trust_forwarded_headers` (default
+  `false`: the direct TCP/TLS peer wins, so a direct client cannot falsify
+  its recorded origin). The header-only fallback used by hand-assembled
+  routers records no IP at all rather than a spoofable one. Rate limiting
+  keeps its own independent flag.
+
 ## [acton-service-v0.31.1] - 2026-07-20
 
 Makes gRPC-over-TLS work end to end. Two complementary bugs left an

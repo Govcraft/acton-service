@@ -20,6 +20,16 @@
 //! position automatically; services that assemble a `Router` by hand are
 //! responsible for the same ordering, and consumers fall back to header-only
 //! extraction when the extension is absent.
+//!
+//! # Forwarded-header trust
+//!
+//! The client IP resolves from the direct TCP/TLS peer address unless
+//! `[service] trust_forwarded_headers = true` opts into consulting
+//! `X-Forwarded-For` / `X-Real-IP` first. The flag defaults to `false`: these
+//! headers are client-supplied, and trusting them without a fronting proxy
+//! lets any caller falsify the IP recorded in its own audit trail. The
+//! header-only fallback used when this layer is not wired never resolves an
+//! IP at all, for the same reason.
 
 use axum::{
     extract::{ConnectInfo, Request},
@@ -43,11 +53,16 @@ pub struct RequestContext {
 impl RequestContext {
     /// Resolve the context from request parts. Pure — the middleware is a thin
     /// wrapper around this so the resolution logic stays unit-testable.
-    pub(crate) fn resolve(headers: &HeaderMap, connect_info: Option<&SocketAddr>) -> Self {
+    ///
+    /// `trust_forwarded_headers` comes from `[service] trust_forwarded_headers`
+    /// (default `false`); the governor applies its own trust policy separately.
+    pub(crate) fn resolve(
+        headers: &HeaderMap,
+        connect_info: Option<&SocketAddr>,
+        trust_forwarded_headers: bool,
+    ) -> Self {
         Self {
-            // Forwarding headers are trusted here to match the extraction this
-            // replaces; the governor applies its own trust policy separately.
-            ip: extract_client_ip(headers, connect_info, true),
+            ip: extract_client_ip(headers, connect_info, trust_forwarded_headers),
             request_id: header_string(headers, "x-request-id"),
             user_agent: header_string(headers, "user-agent"),
         }
@@ -155,16 +170,15 @@ pub(crate) fn audit_source_for_request<B>(
 
 /// Header-only [`AuditSource`](crate::audit::event::AuditSource) extraction.
 ///
-/// Unlike [`extract_client_ip`] this does not parse the IP, so a malformed
-/// `X-Forwarded-For` still round-trips verbatim into the audit record.
+/// Used only when the [`RequestContext`] extension is absent (hand-assembled
+/// routers that skip [`request_context_middleware`]). The IP is deliberately
+/// left unresolved: on this path there is no connect-info to fall back to, so
+/// the only candidates are client-supplied forwarding headers — and recording
+/// a spoofable value in an audit trail is worse than recording none.
 #[cfg(feature = "audit")]
 pub(crate) fn audit_source_from_headers(headers: &HeaderMap) -> crate::audit::event::AuditSource {
     crate::audit::event::AuditSource {
-        ip: headers
-            .get("x-forwarded-for")
-            .or_else(|| headers.get("x-real-ip"))
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.split(',').next().unwrap_or(s).trim().to_string()),
+        ip: None,
         user_agent: header_string(headers, "user-agent"),
         subject: None,
         request_id: header_string(headers, "x-request-id"),
@@ -173,11 +187,20 @@ pub(crate) fn audit_source_from_headers(headers: &HeaderMap) -> crate::audit::ev
 
 /// Middleware that inserts a [`RequestContext`] into the request extensions.
 ///
-/// Use with [`axum::middleware::from_fn`]. See the module docs for the ordering
-/// this requires.
-pub async fn request_context_middleware(mut request: Request, next: Next) -> Response {
+/// Use with [`axum::middleware::from_fn_with_state`], where the state is the
+/// `[service] trust_forwarded_headers` flag. See the module docs for the
+/// ordering this requires and the trust semantics.
+pub async fn request_context_middleware(
+    axum::extract::State(trust_forwarded_headers): axum::extract::State<bool>,
+    mut request: Request,
+    next: Next,
+) -> Response {
     let connect_info = connect_info_remote_addr(request.extensions());
-    let context = RequestContext::resolve(request.headers(), connect_info.as_ref());
+    let context = RequestContext::resolve(
+        request.headers(),
+        connect_info.as_ref(),
+        trust_forwarded_headers,
+    );
     request.extensions_mut().insert(context);
     next.run(request).await
 }
@@ -246,7 +269,7 @@ mod tests {
         headers.insert("x-request-id", "req_abc123".parse().unwrap());
         headers.insert("user-agent", "acton-test/1.0".parse().unwrap());
 
-        let ctx = RequestContext::resolve(&headers, None);
+        let ctx = RequestContext::resolve(&headers, None, false);
         assert_eq!(ctx.request_id.as_deref(), Some("req_abc123"));
         assert_eq!(ctx.user_agent.as_deref(), Some("acton-test/1.0"));
         assert!(ctx.ip.is_none());
@@ -254,14 +277,24 @@ mod tests {
 
     #[test]
     fn resolve_yields_all_none_for_bare_request() {
-        let ctx = RequestContext::resolve(&HeaderMap::new(), None);
+        let ctx = RequestContext::resolve(&HeaderMap::new(), None, false);
         assert!(ctx.ip.is_none());
         assert!(ctx.request_id.is_none());
         assert!(ctx.user_agent.is_none());
     }
 
+    #[test]
+    fn resolve_ignores_forwarded_headers_by_default_posture() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "203.0.113.5".parse().unwrap());
+        let sa = peer([192, 0, 2, 9], 12345);
+
+        let ctx = RequestContext::resolve(&headers, Some(&sa), false);
+        assert_eq!(ctx.ip.map(|ip| ip.to_string()).as_deref(), Some("192.0.2.9"));
+    }
+
     /// Captures the context observed by a downstream handler.
-    fn capture_router(sink: Arc<Mutex<Option<RequestContext>>>) -> Router {
+    fn capture_router(sink: Arc<Mutex<Option<RequestContext>>>, trust: bool) -> Router {
         Router::new()
             .route(
                 "/",
@@ -274,13 +307,16 @@ mod tests {
                     }
                 }),
             )
-            .layer(axum::middleware::from_fn(request_context_middleware))
+            .layer(axum::middleware::from_fn_with_state(
+                trust,
+                request_context_middleware,
+            ))
     }
 
     #[tokio::test]
-    async fn middleware_inserts_context_from_headers() {
+    async fn middleware_inserts_context_from_headers_when_trusted() {
         let sink = Arc::new(Mutex::new(None));
-        let router = capture_router(Arc::clone(&sink));
+        let router = capture_router(Arc::clone(&sink), true);
 
         let request = http::Request::builder()
             .uri("/")
@@ -302,12 +338,38 @@ mod tests {
         assert_eq!(ctx.user_agent.as_deref(), Some("curl/8.0"));
     }
 
+    /// A direct client cannot falsify its recorded origin: with the default
+    /// untrusted posture, a spoofed `X-Forwarded-For` loses to the peer address.
+    #[tokio::test]
+    async fn middleware_records_peer_over_spoofed_headers_by_default() {
+        let sink = Arc::new(Mutex::new(None));
+        let router = capture_router(Arc::clone(&sink), false);
+
+        let mut request = http::Request::builder()
+            .uri("/")
+            .header("x-forwarded-for", "203.0.113.5")
+            .body(Body::empty())
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(peer([198, 51, 100, 42], 51234)));
+
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let ctx = sink.lock().unwrap().clone().expect("context inserted");
+        assert_eq!(
+            ctx.ip.map(|ip| ip.to_string()).as_deref(),
+            Some("198.51.100.42")
+        );
+    }
+
     /// The issue #17 regression: with proxy headers stripped, the peer address
     /// must still reach downstream consumers.
     #[tokio::test]
     async fn middleware_uses_connect_info_when_headers_absent() {
         let sink = Arc::new(Mutex::new(None));
-        let router = capture_router(Arc::clone(&sink));
+        let router = capture_router(Arc::clone(&sink), false);
 
         let mut request = http::Request::builder()
             .uri("/")
@@ -387,9 +449,11 @@ mod tests {
         assert_eq!(source.request_id.as_deref(), Some("req_generated"));
     }
 
+    /// The header-only fallback (no [`RequestContext`] wired) never resolves
+    /// an IP: the only candidates are client-supplied forwarding headers.
     #[cfg(feature = "audit")]
     #[test]
-    fn audit_source_for_request_falls_back_to_headers() {
+    fn audit_source_for_request_falls_back_to_headers_without_an_ip() {
         let request = http::Request::builder()
             .uri("/")
             .header("x-forwarded-for", "203.0.113.5, 10.0.0.1")
@@ -399,7 +463,7 @@ mod tests {
             .unwrap();
 
         let source = audit_source_for_request(&request);
-        assert_eq!(source.ip.as_deref(), Some("203.0.113.5"));
+        assert!(source.ip.is_none());
         assert_eq!(source.request_id.as_deref(), Some("req_client"));
         assert_eq!(source.user_agent.as_deref(), Some("curl/8.0"));
         assert!(source.subject.is_none());

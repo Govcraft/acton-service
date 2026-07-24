@@ -9,6 +9,12 @@ port = 8080
 log_level = "info"  # trace, debug, info, warn, error
 timeout_secs = 30
 environment = "dev"  # dev, staging, production
+# trust_forwarded_headers = false  # Trust X-Forwarded-For / X-Real-IP for the client IP
+                                   # the request context (and audit events) record.
+                                   # Default false: only enable behind a proxy you trust
+                                   # to set these headers — a direct client can otherwise
+                                   # spoof the IP in its own audit trail. Rate limiting
+                                   # has its own flag under [rate_limit].
 
 # ============================================================================
 # gRPC ([grpc] section, requires the `grpc` feature)
@@ -298,6 +304,10 @@ lazy_init = true      # Initialize connection in background
 # otlp_logs_enabled = false         # Export audit logs via OTLP (requires observability)
 # audited_routes = ["/api/v1/admin/*"]   # Glob patterns for per-route auditing
 # excluded_routes = ["/health", "/ready", "/metrics"]
+# drift_endpoint_enabled = false    # Mount GET /admin/config/drift. Default false: the
+                                    # endpoint has no auth of its own and sits outside
+                                    # route-level middleware — front it with your own
+                                    # access control if you enable it.
 #
 # retention_days = 90               # Days to keep events (omit for infinite)
 # archive_path = "/var/audit/archive"  # JSONL archive dir before purge (omit to skip)

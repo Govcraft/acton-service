@@ -1241,15 +1241,28 @@ where
         // AppState uses Arc internally, so this is a cheap reference-count bump.
         let state_clone = state.clone();
 
+        // The drift endpoint carries no authentication of its own and sits on
+        // the outer router, outside any route-level middleware — it stays
+        // unmounted unless the deployment opts in.
+        #[cfg(feature = "audit")]
+        let drift_endpoint_enabled = config
+            .audit
+            .as_ref()
+            .is_some_and(|audit| audit.enabled && audit.drift_endpoint_enabled);
+
         // Handle both types of versioned routes
         let app = match routes {
             VersionedRoutes::WithState(router) => {
                 // Health routes already added, just attach state
                 #[cfg(feature = "audit")]
-                let router = router.route(
-                    "/admin/config/drift",
-                    axum::routing::get(crate::audit::config_audit::drift_check_handler::<T>),
-                );
+                let router = if drift_endpoint_enabled {
+                    router.route(
+                        "/admin/config/drift",
+                        axum::routing::get(crate::audit::config_audit::drift_check_handler::<T>),
+                    )
+                } else {
+                    router
+                };
                 #[cfg(feature = "prometheus-metrics")]
                 let router = router.route(
                     "/metrics",
@@ -1265,10 +1278,14 @@ where
                     .route("/ready", get(crate::health::readiness));
 
                 #[cfg(feature = "audit")]
-                let health_router = health_router.route(
-                    "/admin/config/drift",
-                    get(crate::audit::config_audit::drift_check_handler::<T>),
-                );
+                let health_router = if drift_endpoint_enabled {
+                    health_router.route(
+                        "/admin/config/drift",
+                        get(crate::audit::config_audit::drift_check_handler::<T>),
+                    )
+                } else {
+                    health_router
+                };
 
                 #[cfg(feature = "prometheus-metrics")]
                 let health_router =
@@ -2183,7 +2200,8 @@ where
         // request-tracking layers below (later-added layer = outer = runs first) and
         // before auth/audit, which would otherwise see a request ID that has not been
         // generated yet and no ConnectInfo-derived IP (issue #17).
-        app = app.layer(axum::middleware::from_fn(
+        app = app.layer(axum::middleware::from_fn_with_state(
+            config.service.trust_forwarded_headers,
             crate::middleware::request_context::request_context_middleware,
         ));
 
