@@ -147,6 +147,12 @@ where
     /// serve time. See [`ServiceBuilder::with_tls_reload`].
     #[cfg(feature = "tls")]
     tls_reload_hook: Option<Box<dyn FnOnce(crate::tls::TlsReloadHandle) + Send>>,
+    /// App-defined liveness checks folded into `/health`.
+    liveness_checks: Vec<crate::checks::RegisteredCheck>,
+    /// App-defined readiness checks folded into `/ready`.
+    readiness_checks: Vec<crate::checks::RegisteredCheck>,
+    /// Shared deadline for one endpoint's registered checks.
+    check_deadline: std::time::Duration,
 }
 
 impl<T> ServiceBuilder<T>
@@ -175,7 +181,61 @@ where
             grpc_tls_config_override: None,
             #[cfg(feature = "tls")]
             tls_reload_hook: None,
+            liveness_checks: Vec::new(),
+            readiness_checks: Vec::new(),
+            check_deadline: crate::checks::DEFAULT_CHECK_DEADLINE,
         }
+    }
+
+    /// Register an app-defined **readiness** check folded into `/ready`.
+    ///
+    /// The closure runs on every probe hit, concurrently with the other
+    /// registered checks under one shared deadline (see
+    /// [`with_check_deadline`](Self::with_check_deadline)). Its outcome is
+    /// rendered as a dependency named `name` in the readiness body:
+    /// [`CheckOutcome::Unready`](crate::checks::CheckOutcome::Unready) turns
+    /// `/ready` into `503` (drain traffic);
+    /// [`CheckOutcome::Degraded`](crate::checks::CheckOutcome::Degraded) shows
+    /// the dependency unhealthy **without** flipping overall readiness.
+    ///
+    /// Repeatable; checks report in registration order.
+    pub fn with_readiness_check<F, Fut>(mut self, name: impl Into<String>, check: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = crate::checks::CheckOutcome> + Send + 'static,
+    {
+        self.readiness_checks
+            .push(crate::checks::RegisteredCheck::new(name, check));
+        self
+    }
+
+    /// Register an app-defined **liveness** check folded into `/health`.
+    ///
+    /// Liveness answers "should the process be restarted?" — any registered
+    /// check returning
+    /// [`CheckOutcome::Unready`](crate::checks::CheckOutcome::Unready) turns
+    /// `/health` into `503`. A `Degraded` outcome counts as healthy here:
+    /// liveness is binary, and a degraded-but-working process must not be
+    /// killed. Repeatable.
+    pub fn with_liveness_check<F, Fut>(mut self, name: impl Into<String>, check: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = crate::checks::CheckOutcome> + Send + 'static,
+    {
+        self.liveness_checks
+            .push(crate::checks::RegisteredCheck::new(name, check));
+        self
+    }
+
+    /// Override the shared deadline for one endpoint's registered checks
+    /// (default [`DEFAULT_CHECK_DEADLINE`](crate::checks::DEFAULT_CHECK_DEADLINE)).
+    ///
+    /// All of an endpoint's checks run concurrently under this single
+    /// deadline, so N stalled checks cost one deadline, not N; a check
+    /// unresolved at the deadline reports `Unready("check timed out")`.
+    pub fn with_check_deadline(mut self, deadline: std::time::Duration) -> Self {
+        self.check_deadline = deadline;
+        self
     }
 
     /// Supply a pre-built HTTP TLS configuration.
@@ -1170,7 +1230,7 @@ where
         let routes = self.routes.unwrap_or_default();
 
         // Build AppState with agent-managed pools
-        let state = if let Some(provided_state) = self.state {
+        let mut state = if let Some(provided_state) = self.state {
             provided_state
         } else {
             let mut state = AppState::new(config.clone());
@@ -1236,6 +1296,15 @@ where
 
             state
         };
+
+        // Install app-defined checks on whichever state is in play — built
+        // here or caller-provided — so `/health` and `/ready` see them either
+        // way.
+        state.set_health_checks(crate::checks::HealthChecks::new(
+            std::mem::take(&mut self.liveness_checks),
+            std::mem::take(&mut self.readiness_checks),
+            self.check_deadline,
+        ));
 
         // Clone state before it's consumed by Router::with_state().
         // AppState uses Arc internally, so this is a cheap reference-count bump.

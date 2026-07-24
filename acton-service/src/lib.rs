@@ -82,6 +82,7 @@ compile_error!(
      Enable `crypto-aws-lc-rs` (default) or `crypto-ring`."
 );
 
+pub mod checks;
 pub mod config;
 pub mod crypto;
 pub mod error;
@@ -201,6 +202,7 @@ pub mod prelude {
     #[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
     pub use crate::error::{DatabaseError, DatabaseErrorKind, DatabaseOperation};
 
+    pub use crate::checks::CheckOutcome;
     pub use crate::health::{health, pool_metrics, readiness};
     pub use crate::ids::{MakeTypedRequestId, RequestId, RequestIdError};
     pub use crate::pool_health::PoolHealthSummary;
