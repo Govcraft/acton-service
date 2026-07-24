@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.32.0] - 2026-07-24
+
+Lets a service tell the truth on its probe endpoints. Until now `/health`
+could never fail and `/ready` probed only framework-managed backends
+(database, cache, events); a service whose real readiness lives in
+application state — a writer task, a consensus quorum, a sidecar — had no
+way to surface it. Additive only; services registering no checks behave
+exactly as before.
+
+### Added
+
+- **checks**: App-defined probe checks, registered on the builder:
+  `ServiceBuilder::with_readiness_check(name, || async { … })` folds into
+  `/ready`, `with_liveness_check` into `/health`; both repeatable. A check
+  returns `CheckOutcome::Ready`, `Degraded(message)` (rendered as an
+  unhealthy dependency in the readiness body **without** flipping overall
+  readiness — visible to operators, invisible to the load balancer), or
+  `Unready(message)` (flips the endpoint to 503). Liveness treats `Degraded`
+  as alive — liveness is binary, and a degraded-but-working process must not
+  be killed.
+- **checks**: All of an endpoint's registered checks run concurrently under
+  **one shared deadline** (`with_check_deadline`, default 2s) — N stalled
+  checks cost one deadline, not N; a check unresolved at the deadline
+  reports `Unready("check timed out")`.
+- **state**: `AppState::health_checks()` exposes the installed check set;
+  checks are installed by `build()` whether the state was framework-built or
+  caller-provided.
+
+### Changed
+
+- **health**: `/health` answers 503 with `status: "unhealthy"` when a
+  registered liveness check fails. With no registered checks it cannot fail,
+  exactly as before. `/ready`'s response shape is unchanged; app-defined
+  checks appear as additional entries in `dependencies`.
+
 ## [acton-service-v0.31.2] - 2026-07-24
 
 Hardens the audit trail for deployments that treat the exported stream as the

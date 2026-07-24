@@ -113,6 +113,9 @@ where
 
     /// User-registered actor extensions
     actor_extensions: crate::extensions::ActorExtensions,
+
+    /// App-defined liveness/readiness checks folded into `/health` and `/ready`
+    health_checks: crate::checks::HealthChecks,
 }
 
 impl<T> Default for AppState<T>
@@ -145,6 +148,7 @@ where
             background_worker: None,
             broker: None,
             actor_extensions: crate::extensions::ActorExtensions::default(),
+            health_checks: crate::checks::HealthChecks::default(),
         }
     }
 }
@@ -183,6 +187,7 @@ where
             background_worker: None,
             broker: None,
             actor_extensions: crate::extensions::ActorExtensions::default(),
+            health_checks: crate::checks::HealthChecks::default(),
         }
     }
 
@@ -194,6 +199,17 @@ where
     /// Get the configuration
     pub fn config(&self) -> &Config<T> {
         &self.config
+    }
+
+    /// The app-defined liveness/readiness checks (empty unless registered
+    /// through the service builder).
+    pub fn health_checks(&self) -> &crate::checks::HealthChecks {
+        &self.health_checks
+    }
+
+    /// Install the app-defined check set (called once by the service builder).
+    pub(crate) fn set_health_checks(&mut self, checks: crate::checks::HealthChecks) {
+        self.health_checks = checks;
     }
 
     /// Get the database pool
@@ -850,6 +866,7 @@ where
             background_worker: None,
             broker: None,
             actor_extensions: crate::extensions::ActorExtensions::default(),
+            health_checks: crate::checks::HealthChecks::default(),
         })
     }
 }

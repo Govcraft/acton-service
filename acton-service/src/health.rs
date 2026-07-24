@@ -46,19 +46,29 @@ pub struct DependencyStatus {
 
 /// Simple health check (liveness probe)
 ///
-/// Always returns 200 OK if the service is running.
-/// This is used by Kubernetes to determine if the pod should be restarted.
+/// Returns 200 OK while the process should keep running. When the service has
+/// registered app-defined liveness checks (see
+/// [`ServiceBuilder::with_liveness_check`](crate::service_builder::ServiceBuilder::with_liveness_check)),
+/// any check answering `Unready` turns this into 503 — the signal an
+/// orchestrator restarts on. With no registered checks the endpoint cannot
+/// fail, exactly as before.
 pub async fn health<T>(State(state): State<AppState<T>>) -> impl IntoResponse
 where
     T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
 {
+    let alive = state.health_checks().liveness_ok().await;
     let response = HealthResponse {
-        status: "healthy".to_string(),
+        status: if alive { "healthy" } else { "unhealthy" }.to_string(),
         service: state.config().service.name.clone(),
         version: Some(env!("CARGO_PKG_VERSION").to_string()),
     };
 
-    (StatusCode::OK, Json(response))
+    let status = if alive {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (status, Json(response))
 }
 
 /// Readiness check with dependency validation (readiness probe)
@@ -70,29 +80,9 @@ pub async fn readiness<T>(State(state): State<AppState<T>>) -> Result<impl IntoR
 where
     T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
 {
-    #[cfg_attr(
-        not(any(
-            feature = "database",
-            feature = "cache",
-            feature = "events",
-            feature = "turso",
-            feature = "surrealdb",
-            feature = "clickhouse"
-        )),
-        allow(unused_mut)
-    )]
+    // Unconditionally `mut`: app-defined checks below can update both even
+    // when no backend feature is compiled in.
     let mut dependencies = HashMap::new();
-    #[cfg_attr(
-        not(any(
-            feature = "database",
-            feature = "cache",
-            feature = "events",
-            feature = "turso",
-            feature = "surrealdb",
-            feature = "clickhouse"
-        )),
-        allow(unused_mut)
-    )]
     let mut all_ready = true;
 
     // Check database connection
@@ -614,6 +604,31 @@ where
         );
     }
 
+    // App-defined checks run after the built-in backend probes, concurrently
+    // under one shared deadline. `Unready` flips overall readiness; `Degraded`
+    // renders the dependency unhealthy without flipping it — visible to the
+    // operator, invisible to the load balancer.
+    for (name, outcome) in state.health_checks().readiness_outcomes().await {
+        let status = match outcome {
+            crate::checks::CheckOutcome::Ready => DependencyStatus {
+                healthy: true,
+                message: None,
+            },
+            crate::checks::CheckOutcome::Degraded(message) => DependencyStatus {
+                healthy: false,
+                message: Some(message),
+            },
+            crate::checks::CheckOutcome::Unready(message) => {
+                all_ready = false;
+                DependencyStatus {
+                    healthy: false,
+                    message: Some(message),
+                }
+            }
+        };
+        dependencies.insert(name, status);
+    }
+
     let response = ReadinessResponse {
         ready: all_ready,
         service: state.config().service.name.clone(),
@@ -676,5 +691,100 @@ mod tests {
 
         assert!(status.healthy);
         assert_eq!(status.message, Some("OK".to_string()));
+    }
+
+    mod app_defined_checks {
+        use super::super::*;
+        use crate::checks::{CheckOutcome, HealthChecks, RegisteredCheck};
+        use std::time::Duration;
+
+        fn state_with(liveness: Vec<RegisteredCheck>, readiness: Vec<RegisteredCheck>) -> AppState {
+            let mut state = AppState::<()>::default();
+            state.set_health_checks(HealthChecks::new(
+                liveness,
+                readiness,
+                Duration::from_millis(200),
+            ));
+            state
+        }
+
+        async fn body_json(response: axum::response::Response) -> serde_json::Value {
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("body");
+            serde_json::from_slice(&bytes).expect("json")
+        }
+
+        #[tokio::test]
+        async fn health_without_checks_stays_200() {
+            let response = health(State(state_with(Vec::new(), Vec::new())))
+                .await
+                .into_response();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        #[tokio::test]
+        async fn unready_liveness_check_fails_health() {
+            let state = state_with(
+                vec![RegisteredCheck::new("writer", || async {
+                    CheckOutcome::Unready("writer task exited".to_string())
+                })],
+                Vec::new(),
+            );
+            let response = health(State(state)).await.into_response();
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            let body = body_json(response).await;
+            assert_eq!(body["status"], "unhealthy");
+        }
+
+        #[tokio::test]
+        async fn unready_readiness_check_fails_ready_with_message() {
+            let state = state_with(
+                Vec::new(),
+                vec![RegisteredCheck::new("quorum", || async {
+                    CheckOutcome::Unready("no quorum".to_string())
+                })],
+            );
+            let response = readiness(State(state)).await.expect("ok").into_response();
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            let body = body_json(response).await;
+            assert_eq!(body["ready"], false);
+            assert_eq!(body["dependencies"]["quorum"]["healthy"], false);
+            assert_eq!(body["dependencies"]["quorum"]["message"], "no quorum");
+        }
+
+        #[tokio::test]
+        async fn degraded_readiness_check_is_visible_but_ready() {
+            let state = state_with(
+                Vec::new(),
+                vec![
+                    RegisteredCheck::new("signing", || async {
+                        CheckOutcome::Degraded("sidecar unreachable; 3 mints pending".to_string())
+                    }),
+                    RegisteredCheck::new("journal", || async { CheckOutcome::Ready }),
+                ],
+            );
+            let response = readiness(State(state)).await.expect("ok").into_response();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = body_json(response).await;
+            assert_eq!(body["ready"], true);
+            assert_eq!(body["dependencies"]["signing"]["healthy"], false);
+            assert_eq!(body["dependencies"]["journal"]["healthy"], true);
+        }
+
+        #[tokio::test]
+        async fn timed_out_readiness_check_reports_unready() {
+            let state = state_with(
+                Vec::new(),
+                vec![RegisteredCheck::new("stuck", || async {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    CheckOutcome::Ready
+                })],
+            );
+            let response = readiness(State(state)).await.expect("ok").into_response();
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            let body = body_json(response).await;
+            assert_eq!(body["dependencies"]["stuck"]["message"], "check timed out");
+        }
     }
 }
