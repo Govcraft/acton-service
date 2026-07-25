@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.33.0] - 2026-07-24
+
+A healthy dependency can now speak. `CheckOutcome::Ready` carries no
+message, which left no way for a readiness check to affirm *what* is
+healthy — e.g. the verified identity of a mounted artifact — without
+abusing `Degraded` (and reporting `healthy: false` for a healthy concern).
+
+### Added
+
+- `CheckOutcome::ReadyWithMessage(String)`: healthy, with an
+  operator-facing affirmation rendered as the dependency's `message` on
+  `/ready`. `healthy` stays `true`; the endpoint's answer is unaffected;
+  liveness treats it as alive.
+
+### Changed
+
+- **Breaking**: adding a variant to the exhaustive `CheckOutcome` enum
+  requires downstream exhaustive matches to add an arm — hence 0.33.0.
+
 ## [acton-service-v0.32.0] - 2026-07-24
 
 Lets a service tell the truth on its probe endpoints. Until now `/health`

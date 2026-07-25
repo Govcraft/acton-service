@@ -614,6 +614,10 @@ where
                 healthy: true,
                 message: None,
             },
+            crate::checks::CheckOutcome::ReadyWithMessage(message) => DependencyStatus {
+                healthy: true,
+                message: Some(message),
+            },
             crate::checks::CheckOutcome::Degraded(message) => DependencyStatus {
                 healthy: false,
                 message: Some(message),
@@ -770,6 +774,27 @@ mod tests {
             assert_eq!(body["ready"], true);
             assert_eq!(body["dependencies"]["signing"]["healthy"], false);
             assert_eq!(body["dependencies"]["journal"]["healthy"], true);
+        }
+
+        #[tokio::test]
+        async fn ready_with_message_affirms_while_staying_healthy() {
+            let state = state_with(
+                Vec::new(),
+                vec![RegisteredCheck::new("lake", || async {
+                    CheckOutcome::ReadyWithMessage(
+                        "The verified lake is mounted at freeze sequence 7.".to_string(),
+                    )
+                })],
+            );
+            let response = readiness(State(state)).await.expect("ok").into_response();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = body_json(response).await;
+            assert_eq!(body["ready"], true);
+            assert_eq!(body["dependencies"]["lake"]["healthy"], true);
+            assert_eq!(
+                body["dependencies"]["lake"]["message"],
+                "The verified lake is mounted at freeze sequence 7."
+            );
         }
 
         #[tokio::test]
