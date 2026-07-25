@@ -42,6 +42,11 @@ const TIMED_OUT: &str = "check timed out";
 pub enum CheckOutcome {
     /// The checked concern is healthy.
     Ready,
+    /// The checked concern is healthy and carries an operator-facing
+    /// affirmation — e.g. the verified identity of a mounted artifact —
+    /// rendered as the dependency's message on `/ready` without affecting
+    /// the endpoint's answer.
+    ReadyWithMessage(String),
     /// The checked concern is impaired but the endpoint's overall answer is
     /// unaffected: rendered as an unhealthy dependency on `/ready`, ignored
     /// for `/health`. The message should say what is impaired and why traffic
