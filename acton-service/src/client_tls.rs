@@ -30,6 +30,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
@@ -65,6 +66,25 @@ const GRPC_ALPN: [&[u8]; 1] = [b"h2"];
 /// Mirrors the `"client CA"` role the server side passes to the same loader, so
 /// a failure names which side of the handshake the bundle belongs to.
 const PEER_CA_ROLE: &str = "peer CA";
+
+/// How long a connection attempt may spend on the TCP connect plus the TLS
+/// handshake before it is abandoned.
+///
+/// Bounds the phase before any request is sent. Without it, a peer that
+/// completes the TCP connect and then stalls the handshake holds the attempt
+/// open indefinitely: the OS bounds the connect phase only loosely, and nothing
+/// bounds the handshake at all.
+///
+/// tonic normally applies `Endpoint::connect_timeout` inside the connector
+/// wrapper that [`ClientIdentitySource::grpc_channel`] deliberately bypasses
+/// (see #97), and it exposes no getter for the value, so it cannot be read back
+/// and re-applied. This constant is the replacement bound.
+///
+/// Deliberately generous. It exists to stop an indefinite stall, not to enforce
+/// latency — a per-RPC deadline remains the caller's to set. Override per peer
+/// with `connect_timeout_secs`.
+#[cfg(feature = "tls")]
+pub const DEFAULT_CLIENT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A validated client certificate chain and private key, in both the parsed and
 /// the raw PEM form.
@@ -873,6 +893,20 @@ impl ClientIdentitySource {
         Ok((key, verifier))
     }
 
+    /// The bound this source applies to TCP connect plus TLS handshake.
+    ///
+    /// Resolved from `connect_timeout_secs` on the configuration this source was
+    /// built from, falling back to [`DEFAULT_CLIENT_CONNECT_TIMEOUT`]. A
+    /// configured `0` is treated as "no override" rather than "fail instantly",
+    /// which is the only reading under which a channel still works.
+    pub fn connect_timeout(&self) -> Duration {
+        self.inner
+            .origin
+            .connect_timeout_secs
+            .filter(|secs| *secs > 0)
+            .map_or(DEFAULT_CLIENT_CONNECT_TIMEOUT, Duration::from_secs)
+    }
+
     /// The rustls configuration behind this source, with `alpn` as its ALPN
     /// protocol list.
     ///
@@ -915,11 +949,16 @@ impl ClientIdentitySource {
     /// only applies it inside its own connector wrapper, which this method
     /// deliberately bypasses (that wrapper rejects an `https` URI outright unless
     /// the endpoint carries a `tonic`-owned TLS config, so it cannot coexist with
-    /// this source's rotating connector). `tonic` exposes no way to read the
-    /// value back and re-apply it. A caller that needs to bound how long a stalled
-    /// peer may hold a pending connection should wrap the first RPC in
-    /// [`tokio::time::timeout`]; the per-RPC `timeout` above does not cover the
-    /// connect and handshake.
+    /// this source's rotating connector), and `tonic` exposes no way to read the
+    /// value back and re-apply it.
+    ///
+    /// The connector supplies its own bound instead, so the connect and
+    /// handshake are never unbounded: see
+    /// [`connect_timeout`](Self::connect_timeout), configurable per peer with
+    /// `connect_timeout_secs` and defaulting to
+    /// [`DEFAULT_CLIENT_CONNECT_TIMEOUT`]. That bound covers only the phase
+    /// before any request is sent — a per-RPC deadline is still the endpoint's
+    /// `timeout` to set.
     ///
     /// ALPN is fixed to `h2` alone, because gRPC is defined over HTTP/2 only; a
     /// channel that negotiated `http/1.1` would connect and then fail every
@@ -954,6 +993,7 @@ impl ClientIdentitySource {
 
         let connector = RotatingTlsConnector {
             tls: Arc::new(self.tls_config_with_alpn(&GRPC_ALPN)),
+            connect_timeout: self.connect_timeout(),
         };
 
         // Build the lazy channel through `Channel::new` rather than
@@ -1025,6 +1065,8 @@ impl std::fmt::Debug for ClientIdentitySource {
 struct RotatingTlsConnector {
     /// Shared with the owning source; ALPN restricted to `h2`.
     tls: Arc<ClientConfig>,
+    /// Bound on TCP connect plus handshake for each connection this opens.
+    connect_timeout: Duration,
 }
 
 #[cfg(feature = "grpc")]
@@ -1054,7 +1096,8 @@ impl tower::Service<http::Uri> for RotatingTlsConnector {
 
     fn call(&mut self, uri: http::Uri) -> Self::Future {
         let tls = Arc::clone(&self.tls);
-        Box::pin(async move { connect_tls(tls, uri).await })
+        let budget = self.connect_timeout;
+        Box::pin(async move { connect_tls(tls, uri, budget).await })
     }
 }
 
@@ -1102,6 +1145,31 @@ fn resolve_target(host: &str) -> Result<(&str, ServerName<'static>)> {
 /// function that can be reasoned about, and tested, on its own.
 #[cfg(feature = "grpc")]
 async fn connect_tls(
+    tls: Arc<ClientConfig>,
+    uri: http::Uri,
+    connect_timeout: Duration,
+) -> Result<hyper_util::rt::TokioIo<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>> {
+    // One budget spanning connect *and* handshake, rather than one each. A
+    // stall can sit in either phase, and two independent bounds would let a
+    // peer burn both in sequence.
+    tokio::time::timeout(connect_timeout, connect_tls_unbounded(tls, uri.clone()))
+        .await
+        .map_err(|_| {
+            Error::Internal(format!(
+                "Connecting to gRPC endpoint '{}' exceeded the {}s connect timeout \
+                 before the TLS handshake completed",
+                uri,
+                connect_timeout.as_secs()
+            ))
+        })?
+}
+
+/// The unbounded connect-and-handshake, wrapped by [`connect_tls`].
+///
+/// Split out so the timeout has a single future to cover and this stays an
+/// ordinary async function to read.
+#[cfg(feature = "grpc")]
+async fn connect_tls_unbounded(
     tls: Arc<ClientConfig>,
     uri: http::Uri,
 ) -> Result<hyper_util::rt::TokioIo<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>> {
@@ -1215,6 +1283,7 @@ mod tests {
             key_path,
             root_ca_path: None,
             exclusive_roots: false,
+            connect_timeout_secs: None,
         }
     }
 
@@ -1939,6 +2008,7 @@ mod tests {
 
         let connector = RotatingTlsConnector {
             tls: Arc::new(source.tls_config_with_alpn(&GRPC_ALPN)),
+            connect_timeout: source.connect_timeout(),
         };
 
         assert_eq!(
@@ -2437,5 +2507,96 @@ mod tests {
 
         assert_eq!(response.into_inner().message, "pong: strict");
         server.abort();
+    }
+
+    /// Coverage for the connect/handshake bound (#103).
+    ///
+    /// `grpc_channel` builds through `Channel::new` to bypass tonic's
+    /// scheme-inspecting connector wrapper, and that wrapper is also where
+    /// tonic applies `Endpoint::connect_timeout`. tonic exposes no getter for
+    /// the value, so it cannot be read back and re-applied; these cover the
+    /// bound that replaces it.
+    mod connect_timeout {
+        use super::*;
+
+        #[test]
+        fn an_unset_timeout_resolves_to_the_default() {
+            let dir = tempfile::tempdir().expect("temp dir");
+            let config = write_identity(dir.path(), &generate_cert("client"));
+            let source = ClientIdentitySource::from_config(&config).expect("initial load");
+
+            assert_eq!(source.connect_timeout(), DEFAULT_CLIENT_CONNECT_TIMEOUT);
+        }
+
+        #[test]
+        fn a_configured_timeout_is_honoured() {
+            let dir = tempfile::tempdir().expect("temp dir");
+            let mut config = write_identity(dir.path(), &generate_cert("client"));
+            config.connect_timeout_secs = Some(3);
+            let source = ClientIdentitySource::from_config(&config).expect("initial load");
+
+            assert_eq!(source.connect_timeout(), Duration::from_secs(3));
+        }
+
+        #[test]
+        fn a_zero_timeout_falls_back_rather_than_failing_every_connection() {
+            // Taken literally, zero would elapse before the connect could make
+            // any progress. The server side refuses a zero handshake timeout at
+            // boot; here there is no boot-time validation hook, so the only
+            // reading under which a channel still works is "no override".
+            let dir = tempfile::tempdir().expect("temp dir");
+            let mut config = write_identity(dir.path(), &generate_cert("client"));
+            config.connect_timeout_secs = Some(0);
+            let source = ClientIdentitySource::from_config(&config).expect("initial load");
+
+            assert_eq!(source.connect_timeout(), DEFAULT_CLIENT_CONNECT_TIMEOUT);
+        }
+
+        #[tokio::test]
+        #[cfg(feature = "grpc")]
+        async fn a_peer_that_stalls_the_handshake_is_abandoned() {
+            // The reported failure mode: the peer completes the TCP connect and
+            // then never speaks. Nothing bounded the handshake, so the attempt
+            // hung indefinitely. Accept the connection and hold it silent.
+            crate::crypto::ensure_default_crypto_provider();
+
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind ephemeral port");
+            let addr = listener.local_addr().expect("local addr");
+
+            let silent_peer = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.expect("accept");
+                // Never write, never close: hold the socket open past the bound.
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                drop(stream);
+            });
+
+            let dir = tempfile::tempdir().expect("temp dir");
+            let config = write_identity(dir.path(), &generate_cert("client"));
+            let source = ClientIdentitySource::from_config(&config).expect("initial load");
+            let tls = Arc::new(source.tls_config_with_alpn(&GRPC_ALPN));
+            let uri: http::Uri = format!("https://{addr}").parse().expect("uri");
+
+            let budget = Duration::from_millis(300);
+            let started = tokio::time::Instant::now();
+            let outcome = connect_tls(tls, uri, budget).await;
+            let elapsed = started.elapsed();
+
+            assert!(
+                outcome.is_err(),
+                "a peer that never completes the handshake must not yield a connection"
+            );
+            assert!(
+                outcome.unwrap_err().to_string().contains("connect timeout"),
+                "the error must name the timeout rather than some downstream symptom"
+            );
+            assert!(
+                elapsed < Duration::from_secs(5),
+                "the attempt must be abandoned at the bound, not held open; took {elapsed:?}"
+            );
+
+            silent_peer.abort();
+        }
     }
 }

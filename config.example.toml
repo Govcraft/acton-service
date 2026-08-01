@@ -292,6 +292,13 @@ referrer_policy = "strict-origin-when-cross-origin"
 #                                        # true: root_ca_path REPLACES them,
 #                                        #   pinning trust to your own CA. Use
 #                                        #   for private-mesh-only clients.
+# connect_timeout_secs = 30              # Bound on TCP connect + TLS handshake
+#                                        #   for one connection attempt. Omit for
+#                                        #   the 30s default. Stops a peer that
+#                                        #   connects then stalls the handshake
+#                                        #   from holding the attempt open
+#                                        #   indefinitely. Not a per-RPC deadline
+#                                        #   — set that on the Endpoint.
 
 # ============================================================================
 # DATABASE CONFIGURATION (Optional)

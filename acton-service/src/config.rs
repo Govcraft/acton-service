@@ -1187,6 +1187,25 @@ pub struct ClientIdentityConfig {
     /// without supplying replacements would leave nothing to verify against.
     #[serde(default = "default_false")]
     pub exclusive_roots: bool,
+
+    /// Seconds to allow for the TCP connect plus the TLS handshake when opening
+    /// a connection to a peer.
+    ///
+    /// Bounds the phase before any request is sent. A peer that completes the
+    /// TCP connect and then stalls the handshake would otherwise hold the
+    /// attempt open indefinitely — the OS bounds the connect phase loosely and
+    /// nothing bounds the handshake at all.
+    ///
+    /// Unset resolves to
+    /// [`DEFAULT_CLIENT_CONNECT_TIMEOUT`](crate::client_tls::DEFAULT_CLIENT_CONNECT_TIMEOUT).
+    /// The default is deliberately generous, so a legitimately slow link is not
+    /// clipped; it exists to stop an indefinite stall, not to enforce latency.
+    /// A per-RPC deadline is still the caller's to set.
+    ///
+    /// This is the client-side counterpart to the listener's
+    /// `handshake_timeout_secs`.
+    #[serde(default)]
+    pub connect_timeout_secs: Option<u64>,
 }
 
 /// Journald logging configuration (requires `journald` feature)
