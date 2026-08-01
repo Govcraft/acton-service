@@ -11,7 +11,7 @@
 //! - **Resilience**: Circuit breaker, retry with backoff, bulkhead (concurrency limiting)
 //! - **Observability**: OpenTelemetry tracing, HTTP metrics, request ID propagation
 //! - **Audit logging**: BLAKE3 hash-chained trails over PostgreSQL, Turso, SurrealDB, or ClickHouse
-//! - **TLS**: rustls listener with mutual TLS and restart-free credential rotation
+//! - **TLS**: rustls listener with mutual TLS, SAN-allowlist caller authorization, and restart-free credential rotation
 //! - **Connection pooling**: PostgreSQL, Redis, NATS JetStream
 //! - **Health checks**: Liveness and readiness probes
 //! - **Graceful shutdown**: Proper signal handling (SIGTERM, SIGINT)
