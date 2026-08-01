@@ -4,9 +4,9 @@
 //! manages (database, cache, events, …). Services whose real readiness lives
 //! in application state — a writer task, a consensus quorum, a sidecar —
 //! register checks here via
-//! [`ServiceBuilder::with_readiness_check`](crate::service::ServiceBuilder::with_readiness_check)
+//! [`ServiceBuilder::with_readiness_check`](crate::service_builder::ServiceBuilder::with_readiness_check)
 //! and
-//! [`ServiceBuilder::with_liveness_check`](crate::service::ServiceBuilder::with_liveness_check).
+//! [`ServiceBuilder::with_liveness_check`](crate::service_builder::ServiceBuilder::with_liveness_check).
 //!
 //! Semantics:
 //!
