@@ -216,12 +216,71 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
           key: audit-${{ matrix.backend }}
       - uses: taiki-e/install-action@nextest
+      - name: Clippy
+        run: cargo clippy -p acton-service --all-targets ${{ matrix.features }} -- -D warnings
       - name: Nextest
         run: cargo nextest run -p acton-service ${{ matrix.features }}
+
+  # Lint-only legs for feature combinations no test job compiles. `--all-features`
+  # cannot stand in for these: the crate's mutual-exclusion `compile_error!`
+  # guards (database/turso/surrealdb, crypto-aws-lc-rs/crypto-ring) reject it by
+  # design, so narrow combinations are the only way to reach cfg-gated code.
+  #
+  # These run clippy without nextest. The `full` legs above already own test
+  # coverage; what is missing is a compiler that ever *looks* at code behind a
+  # narrower gate. Adding legs here is cheap -- extend the list whenever a new
+  # feature introduces its own cfg-gated paths.
+  feature-combos:
+    name: lint ${{ matrix.combo }}
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The floor: no optional subsystem at all.
+          - combo: minimal
+            features: "http,crypto-aws-lc-rs"
+          # TLS without gRPC. This combination is what let two dead-code
+          # warnings survive in client_tls.rs until #76.
+          - combo: tls-no-grpc
+            features: "http,tls,crypto-aws-lc-rs"
+          # The mirror image: gRPC transport with no TLS material.
+          - combo: grpc-no-tls
+            features: "http,grpc,crypto-aws-lc-rs"
+          # Token validation and issuance without cache-backed revocation.
+          - combo: tokens
+            features: "http,jwt,auth,crypto-aws-lc-rs"
+          # Server-rendered stack.
+          - combo: frontend
+            features: "http,htmx,askama,sse,session-memory,crypto-aws-lc-rs"
+          # GraphQL transport plus its Cedar resolver hooks.
+          - combo: graphql
+            features: "http,graphql,graphql-cedar,cedar-authz,crypto-aws-lc-rs"
+          # Audit with no storage backend compiled in.
+          - combo: audit-nodb
+            features: "http,audit,crypto-aws-lc-rs"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: combo-${{ matrix.combo }}
+      - name: Clippy
+        run: |
+          cargo clippy -p acton-service --all-targets \
+            --no-default-features --features "${{ matrix.features }}" -- -D warnings
 
   # Builds the documentation site so that broken Markdoc fails the pull request
   # rather than reaching the deploy job after the merge has already landed on
@@ -259,7 +318,7 @@ jobs:
   # those PRs, because a skipped job reports nothing at all.
   ci-gate:
     name: ci-gate
-    needs: [changes, aws-lc-rs, ring, audit-storage, docs-build]
+    needs: [changes, aws-lc-rs, ring, audit-storage, feature-combos, docs-build]
     if: always()
     runs-on: ubuntu-latest
     steps:
