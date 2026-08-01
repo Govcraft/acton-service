@@ -388,7 +388,7 @@ mod tests {
 
     #[test]
     fn every_kind_round_trips_through_its_wire_string() {
-        let mut kinds = vec![
+        let kinds = vec![
             AuditEventKind::AuthLoginSuccess,
             AuditEventKind::AuthLoginFailed,
             AuditEventKind::AuthTokenMissing,
@@ -410,22 +410,33 @@ mod tests {
             AuditEventKind::HttpRequestDenied,
             AuditEventKind::Custom("user.delete".to_string()),
         ];
+        // Shadow rather than declare `kinds` mutable up front: with neither
+        // feature enabled nothing ever extends it, and an unconditional `mut`
+        // would be an unused-mut warning reachable only in that combination.
         #[cfg(feature = "login-lockout")]
-        kinds.extend([
-            AuditEventKind::AuthAccountLocked,
-            AuditEventKind::AuthAccountUnlocked,
-        ]);
+        let kinds = {
+            let mut kinds = kinds;
+            kinds.extend([
+                AuditEventKind::AuthAccountLocked,
+                AuditEventKind::AuthAccountUnlocked,
+            ]);
+            kinds
+        };
         #[cfg(feature = "accounts")]
-        kinds.extend([
-            AuditEventKind::AccountCreated,
-            AuditEventKind::AccountDisabled,
-            AuditEventKind::AccountEnabled,
-            AuditEventKind::AccountLocked,
-            AuditEventKind::AccountUnlocked,
-            AuditEventKind::AccountExpired,
-            AuditEventKind::AccountDeleted,
-            AuditEventKind::AccountUpdated,
-        ]);
+        let kinds = {
+            let mut kinds = kinds;
+            kinds.extend([
+                AuditEventKind::AccountCreated,
+                AuditEventKind::AccountDisabled,
+                AuditEventKind::AccountEnabled,
+                AuditEventKind::AccountLocked,
+                AuditEventKind::AccountUnlocked,
+                AuditEventKind::AccountExpired,
+                AuditEventKind::AccountDeleted,
+                AuditEventKind::AccountUpdated,
+            ]);
+            kinds
+        };
 
         for kind in kinds {
             let wire = kind.to_string();

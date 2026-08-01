@@ -730,6 +730,11 @@ struct ClientIdentitySourceInner {
     /// with no ALPN protocols set. Each transport clones it and sets the ALPN
     /// list appropriate to its protocol; the rotating resolver and verifier are
     /// behind `Arc`s, so every clone rotates together.
+    ///
+    /// Only gRPC transports clone it — the HTTP client is built once in
+    /// `from_config` and keeps its own copy — so without `grpc` this is carried
+    /// solely for the tests that assert the ALPN lists.
+    #[cfg(any(feature = "grpc", test))]
     tls: ClientConfig,
     /// The files a reload rereads. Never absent: every source is reloadable.
     origin: ClientIdentityConfig,
@@ -774,6 +779,7 @@ impl ClientIdentitySource {
                 client: Arc::new(client),
                 resolver,
                 verifier,
+                #[cfg(any(feature = "grpc", test))]
                 tls,
                 origin: config.clone(),
             }),
@@ -872,6 +878,11 @@ impl ClientIdentitySource {
     ///
     /// The returned value shares this source's rotating resolver and verifier,
     /// so a transport built from it rotates with the source.
+    ///
+    /// Only the gRPC path builds transports this way; the HTTP client is
+    /// constructed once in `from_config`. The `test` arm keeps it available to
+    /// the ALPN assertions, which cover both protocols regardless of features.
+    #[cfg(any(feature = "grpc", test))]
     fn tls_config_with_alpn(&self, alpn: &[&[u8]]) -> ClientConfig {
         let mut tls = self.inner.tls.clone();
         tls.alpn_protocols = alpn.iter().map(|p| p.to_vec()).collect();
