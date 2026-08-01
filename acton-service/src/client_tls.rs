@@ -151,7 +151,7 @@ pub(crate) fn load_identity_material(config: &ClientIdentityConfig) -> Result<Id
     use rustls_pki_types::pem::PemObject;
 
     let cert_pem = std::fs::read(&config.cert_path).map_err(|e| {
-        Error::Internal(format!(
+        Error::Tls(format!(
             "Failed to open client identity cert file '{}': {}",
             config.cert_path.display(),
             e
@@ -159,7 +159,7 @@ pub(crate) fn load_identity_material(config: &ClientIdentityConfig) -> Result<Id
     })?;
 
     let key_pem = Zeroizing::new(std::fs::read(&config.key_path).map_err(|e| {
-        Error::Internal(format!(
+        Error::Tls(format!(
             "Failed to open client identity key file '{}': {}",
             config.key_path.display(),
             e
@@ -169,7 +169,7 @@ pub(crate) fn load_identity_material(config: &ClientIdentityConfig) -> Result<Id
     let chain: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&cert_pem)
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e| {
-            Error::Internal(format!(
+            Error::Tls(format!(
                 "Failed to parse client identity certificates from '{}': {}",
                 config.cert_path.display(),
                 e
@@ -177,14 +177,14 @@ pub(crate) fn load_identity_material(config: &ClientIdentityConfig) -> Result<Id
         })?;
 
     if chain.is_empty() {
-        return Err(Error::Internal(format!(
+        return Err(Error::Tls(format!(
             "Client identity cert file '{}' contains no certificates",
             config.cert_path.display()
         )));
     }
 
     let key = PrivateKeyDer::from_pem_slice(&key_pem).map_err(|e| {
-        Error::Internal(format!(
+        Error::Tls(format!(
             "Failed to parse client identity private key from '{}': {}",
             config.key_path.display(),
             e
@@ -223,7 +223,7 @@ fn certified_key_from_material(
     crate::crypto::ensure_default_crypto_provider();
 
     let provider = CryptoProvider::get_default().ok_or_else(|| {
-        Error::Internal(
+        Error::Tls(
             "No rustls crypto provider is installed; enable exactly one of the \
              `crypto-aws-lc-rs` or `crypto-ring` features"
                 .to_string(),
@@ -234,7 +234,7 @@ fn certified_key_from_material(
         .key_provider
         .load_private_key(material.key.clone_key())
         .map_err(|e| {
-            Error::Internal(format!(
+            Error::Tls(format!(
                 "Client identity private key from '{}' is not usable by the \
                  configured crypto provider: {}",
                 config.key_path.display(),
@@ -244,7 +244,7 @@ fn certified_key_from_material(
 
     let certified = CertifiedKey::new(material.chain.clone(), signing_key);
     certified.keys_match().map_err(|e| {
-        Error::Internal(format!(
+        Error::Tls(format!(
             "Client identity private key '{}' does not match the certificate \
              in '{}': {}",
             config.key_path.display(),
@@ -288,7 +288,7 @@ fn build_root_store(config: &ClientIdentityConfig) -> Result<RootCertStore> {
 fn read_validated_ca_bundle(path: &Path) -> Result<Vec<u8>> {
     crate::tls::load_root_store(path, PEER_CA_ROLE)?;
     std::fs::read(path).map_err(|e| {
-        Error::Internal(format!(
+        Error::Tls(format!(
             "Failed to read {} file '{}': {}",
             PEER_CA_ROLE,
             path.display(),
@@ -461,7 +461,7 @@ fn build_peer_verifier(config: &ClientIdentityConfig) -> Result<Arc<WebPkiServer
     WebPkiServerVerifier::builder(Arc::new(roots))
         .build()
         .map_err(|e| {
-            Error::Internal(format!(
+            Error::Tls(format!(
                 "Failed to build a peer certificate verifier from the configured \
                  {} roots: {}",
                 PEER_CA_ROLE, e
@@ -514,7 +514,7 @@ pub fn load_rustls_client_config(config: &ClientIdentityConfig) -> Result<Arc<Cl
     let client_config = ClientConfig::builder()
         .with_root_certificates(roots)
         .with_client_auth_cert(material.chain.clone(), material.key.clone_key())
-        .map_err(|e| Error::Internal(format!("Failed to build rustls client config: {}", e)))?;
+        .map_err(|e| Error::Tls(format!("Failed to build rustls client config: {}", e)))?;
 
     Ok(Arc::new(client_config))
 }
@@ -536,7 +536,7 @@ pub fn load_reqwest_identity(config: &ClientIdentityConfig) -> Result<reqwest::I
     let joined = concat_identity_pem(&material.cert_pem, &material.key_pem);
 
     reqwest::Identity::from_pem(&joined).map_err(|e| {
-        Error::Internal(format!(
+        Error::Tls(format!(
             "Failed to build a reqwest identity from '{}' and '{}': {}",
             config.cert_path.display(),
             config.key_path.display(),
@@ -578,7 +578,7 @@ pub fn reqwest_client_builder(config: &ClientIdentityConfig) -> Result<reqwest::
     if let Some(ref path) = config.root_ca_path {
         let pem = read_validated_ca_bundle(path)?;
         let certs = reqwest::Certificate::from_pem_bundle(&pem).map_err(|e| {
-            Error::Internal(format!(
+            Error::Tls(format!(
                 "Failed to build reqwest certificates from {} file '{}': {}",
                 PEER_CA_ROLE,
                 path.display(),
@@ -1161,7 +1161,7 @@ fn build_client(tls: &ClientConfig, config: &ClientIdentityConfig) -> Result<req
         .use_preconfigured_tls(tls)
         .build()
         .map_err(|e| {
-            Error::Internal(format!(
+            Error::Tls(format!(
                 "Failed to build a reqwest client for the identity in '{}': {}",
                 config.cert_path.display(),
                 e

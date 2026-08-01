@@ -212,7 +212,7 @@ impl TlsConfigSource {
     /// and then fail all at once.
     pub fn reload(&self) -> Result<()> {
         let Some(ref origin) = self.inner.origin else {
-            let err = crate::error::Error::Internal(
+            let err = crate::error::Error::Tls(
                 "TLS credentials cannot be reloaded: this source was built from an \
                  already-loaded ServerConfig and has no files to reread"
                     .to_string(),
@@ -708,7 +708,7 @@ pub const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) fn validate_handshake_timeout(tls_cfg: &TlsConfig, section: &str) -> Result<Duration> {
     match tls_cfg.handshake_timeout_secs {
         None => Ok(DEFAULT_HANDSHAKE_TIMEOUT),
-        Some(0) => Err(crate::error::Error::Internal(format!(
+        Some(0) => Err(crate::error::Error::Tls(format!(
             "{section} sets handshake_timeout_secs = 0, which would elapse before any \
              handshake could complete and so fail every connection. Omit the field to use \
              the default of {} seconds, or set a positive number of seconds.",
@@ -739,7 +739,7 @@ pub(crate) fn validate_reload_interval(
 ) -> Result<Option<Duration>> {
     match tls_cfg.reload_interval_secs {
         None => Ok(None),
-        Some(0) => Err(crate::error::Error::Internal(format!(
+        Some(0) => Err(crate::error::Error::Tls(format!(
             "{section} sets reload_interval_secs = 0, which would poll the certificate \
              files without pause. Omit the field to disable polling, or set a positive \
              number of seconds."
@@ -1062,7 +1062,7 @@ pub(crate) fn load_root_store(path: &Path, role: &str) -> Result<RootCertStore> 
 
     let ca_certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(path)
         .map_err(|e| {
-            crate::error::Error::Internal(format!(
+            crate::error::Error::Tls(format!(
                 "Failed to open {} file '{}': {}",
                 role,
                 path.display(),
@@ -1071,7 +1071,7 @@ pub(crate) fn load_root_store(path: &Path, role: &str) -> Result<RootCertStore> 
         })?
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e| {
-            crate::error::Error::Internal(format!(
+            crate::error::Error::Tls(format!(
                 "Failed to parse {} certificates from '{}': {}",
                 role,
                 path.display(),
@@ -1080,7 +1080,7 @@ pub(crate) fn load_root_store(path: &Path, role: &str) -> Result<RootCertStore> 
         })?;
 
     if ca_certs.is_empty() {
-        return Err(crate::error::Error::Internal(format!(
+        return Err(crate::error::Error::Tls(format!(
             "The {} file '{}' contains no certificates",
             role,
             path.display()
@@ -1090,7 +1090,7 @@ pub(crate) fn load_root_store(path: &Path, role: &str) -> Result<RootCertStore> 
     let mut roots = RootCertStore::empty();
     for cert in ca_certs {
         roots.add(cert).map_err(|e| {
-            crate::error::Error::Internal(format!(
+            crate::error::Error::Tls(format!(
                 "Failed to add {} certificate from '{}' to trust store: {}",
                 role,
                 path.display(),
@@ -1122,7 +1122,7 @@ pub fn build_client_verifier(
     }
 
     builder.build().map_err(|e| {
-        crate::error::Error::Internal(format!(
+        crate::error::Error::Tls(format!(
             "Failed to build client certificate verifier: {}",
             e
         ))
@@ -1145,7 +1145,7 @@ pub fn load_server_config(tls_config: &TlsConfig) -> Result<Arc<ServerConfig>> {
     let cert_chain: Vec<rustls::pki_types::CertificateDer<'static>> =
         CertificateDer::pem_file_iter(&tls_config.cert_path)
             .map_err(|e| {
-                crate::error::Error::Internal(format!(
+                crate::error::Error::Tls(format!(
                     "Failed to open TLS cert file '{}': {}",
                     tls_config.cert_path.display(),
                     e
@@ -1153,18 +1153,18 @@ pub fn load_server_config(tls_config: &TlsConfig) -> Result<Arc<ServerConfig>> {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| {
-                crate::error::Error::Internal(format!("Failed to parse TLS certificates: {}", e))
+                crate::error::Error::Tls(format!("Failed to parse TLS certificates: {}", e))
             })?;
 
     if cert_chain.is_empty() {
-        return Err(crate::error::Error::Internal(
+        return Err(crate::error::Error::Tls(
             "TLS cert file contains no certificates".to_string(),
         ));
     }
 
     // Read private key (first PEM-encoded key found in the file)
     let key = PrivateKeyDer::from_pem_file(&tls_config.key_path).map_err(|e| {
-        crate::error::Error::Internal(format!(
+        crate::error::Error::Tls(format!(
             "Failed to parse TLS private key from '{}': {}",
             tls_config.key_path.display(),
             e
@@ -1205,7 +1205,7 @@ pub fn load_server_config(tls_config: &TlsConfig) -> Result<Arc<ServerConfig>> {
     }
     .with_single_cert(cert_chain, key)
     .map_err(|e| {
-        crate::error::Error::Internal(format!("Failed to build TLS server config: {}", e))
+        crate::error::Error::Tls(format!("Failed to build TLS server config: {}", e))
     })?;
 
     // Advertise ALPN so the listener answers a client's protocol offer during
@@ -1400,6 +1400,129 @@ mod tests {
         let optional_roots = load_client_ca_roots(file.path()).expect("roots");
         build_client_verifier(optional_roots, true)
             .expect("a verifier allowing unauthenticated clients must build");
+    }
+
+    /// A configuration failure must not present itself as an internal fault.
+    ///
+    /// These errors reach an operator verbatim: a downstream service wraps the
+    /// string into its own boot message, so an `Internal server error:` prefix
+    /// tells them to suspect the framework instead of their own `cert_path`.
+    mod error_taxonomy {
+        use super::*;
+
+        fn config_pointing_at(cert: &Path, key: &Path) -> TlsConfig {
+            TlsConfig {
+                enabled: true,
+                cert_path: cert.to_path_buf(),
+                key_path: key.to_path_buf(),
+                client_ca_path: None,
+                client_auth_optional: false,
+                reload_interval_secs: None,
+                reload_on_sighup: false,
+                handshake_timeout_secs: None,
+            }
+        }
+
+        #[test]
+        fn a_missing_cert_file_is_a_tls_error_not_an_internal_one() {
+            let key = write_temp(&generate_cert("localhost").key_pem);
+            let config = config_pointing_at(Path::new("/nonexistent/server.crt"), key.path());
+
+            let err = load_server_config(&config).expect_err("a missing cert file must fail");
+
+            assert!(
+                matches!(err, crate::error::Error::Tls(_)),
+                "a missing cert file is an operator configuration mistake, got {err:?}"
+            );
+        }
+
+        #[test]
+        fn the_operator_facing_message_carries_no_internal_prefix() {
+            // The exact shape reported downstream:
+            //   "... TLS configuration is invalid: Internal server error: Failed
+            //    to open TLS cert file '/nonexistent/server.crt': ..."
+            let key = write_temp(&generate_cert("localhost").key_pem);
+            let config = config_pointing_at(Path::new("/nonexistent/server.crt"), key.path());
+
+            let rendered = load_server_config(&config)
+                .expect_err("a missing cert file must fail")
+                .to_string();
+
+            assert!(
+                !rendered.contains("Internal server error"),
+                "a boot-time config failure must not read as an internal fault: {rendered}"
+            );
+            assert!(
+                rendered.starts_with("TLS configuration error:"),
+                "the prefix must name the real category: {rendered}"
+            );
+            assert!(
+                rendered.contains("/nonexistent/server.crt"),
+                "the message must still name the offending path: {rendered}"
+            );
+        }
+
+        #[test]
+        fn an_empty_cert_file_is_a_tls_error() {
+            let cert = write_temp("# no certificates here\n");
+            let key = write_temp(&generate_cert("localhost").key_pem);
+
+            let err = load_server_config(&config_pointing_at(cert.path(), key.path()))
+                .expect_err("a cert file with no certificates must fail");
+
+            assert!(
+                matches!(err, crate::error::Error::Tls(_)),
+                "an empty cert bundle is a configuration mistake, got {err:?}"
+            );
+        }
+
+        #[test]
+        fn an_unparseable_key_is_a_tls_error() {
+            let server = generate_cert("localhost");
+            let cert = write_temp(&server.cert_pem);
+            let key = write_temp("-----BEGIN PRIVATE KEY-----\nnot base64\n");
+
+            let err = load_server_config(&config_pointing_at(cert.path(), key.path()))
+                .expect_err("an unparseable key must fail");
+
+            assert!(
+                matches!(err, crate::error::Error::Tls(_)),
+                "an unparseable key is a configuration mistake, got {err:?}"
+            );
+        }
+
+        #[test]
+        fn a_zero_handshake_timeout_is_a_tls_error() {
+            // Config-value validation, not material loading, but the same
+            // category: the operator wrote something that cannot work.
+            let server = generate_cert("localhost");
+            let cert = write_temp(&server.cert_pem);
+            let key = write_temp(&server.key_pem);
+            let mut config = config_pointing_at(cert.path(), key.path());
+            config.handshake_timeout_secs = Some(0);
+
+            let err = validate_handshake_timeout(&config, "[tls]")
+                .expect_err("a zero handshake timeout must be refused");
+
+            assert!(
+                matches!(err, crate::error::Error::Tls(_)),
+                "a nonsensical config value is a configuration mistake, got {err:?}"
+            );
+        }
+
+        #[test]
+        fn a_tls_error_still_maps_to_500_if_it_reaches_a_response() {
+            use axum::response::IntoResponse;
+
+            // These normally refuse startup and never reach a response. If one
+            // somehow surfaces mid-request it is a server-side fault like any
+            // other, and the operator detail must not go out on the wire.
+            let response =
+                crate::error::Error::Tls("cert_path '/etc/secret.pem' unreadable".to_string())
+                    .into_response();
+
+            assert_eq!(response.status(), axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+        }
     }
 
     #[test]
