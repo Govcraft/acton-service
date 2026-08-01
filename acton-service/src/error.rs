@@ -270,7 +270,12 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Main error type for the framework
 ///
 /// Large error variants are boxed to reduce stack size
+///
+/// Marked `#[non_exhaustive]`: new variants are added as the framework grows
+/// (`Tls` was added in 0.34), and downstream code must not be broken by that.
+/// Match with a `_` arm.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum Error {
     /// Configuration error
     #[error("Configuration error: {0}")]
@@ -357,6 +362,19 @@ pub enum Error {
     /// Internal server error
     #[error("Internal server error: {0}")]
     Internal(String),
+
+    /// TLS material could not be loaded, parsed or validated
+    ///
+    /// These are operator configuration mistakes — an unreadable path, an
+    /// unparseable PEM, a certificate file with no certificates in it — and
+    /// they surface at boot, not while serving. `Internal` would tell an
+    /// operator to suspect the service instead of their own `cert_path`.
+    ///
+    /// [`Config`](Self::Config) cannot carry them: it wraps a
+    /// [`figment::Error`], and none of these originate from figment.
+    #[cfg(feature = "tls")]
+    #[error("TLS configuration error: {0}")]
+    Tls(String),
 
     /// Generic error
     #[error("{0}")]
@@ -601,6 +619,24 @@ impl IntoResponse for Error {
 
             Error::Internal(msg) => {
                 tracing::error!("Internal error: {}", msg);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    ErrorResponse::with_code(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "INTERNAL_ERROR",
+                        "Internal server error",
+                    ),
+                )
+            }
+
+            // A TLS material failure is a boot-time configuration fault, so it
+            // normally refuses startup and never reaches a response at all. If
+            // one somehow surfaces mid-request it is a 500 like any other
+            // server-side fault, and the operator-facing detail stays in the
+            // log rather than going out on the wire.
+            #[cfg(feature = "tls")]
+            Error::Tls(msg) => {
+                tracing::error!("TLS configuration error: {}", msg);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     ErrorResponse::with_code(
