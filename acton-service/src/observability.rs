@@ -25,7 +25,10 @@ use {
 };
 
 #[cfg(feature = "_metrics")]
-use {opentelemetry::metrics::MeterProvider as _, opentelemetry_sdk::metrics::SdkMeterProvider};
+use {
+    opentelemetry::metrics::MeterProvider as _,
+    opentelemetry_sdk::metrics::{Aggregation, Instrument, InstrumentKind, SdkMeterProvider, Stream},
+};
 
 #[cfg(feature = "otel-metrics")]
 use {
@@ -344,6 +347,60 @@ pub fn get_meter() -> Option<opentelemetry::metrics::Meter> {
     None
 }
 
+/// Bucket boundaries, in seconds, for histograms declared with `.with_unit("s")`.
+///
+/// The OpenTelemetry SDK's own defaults are `[0, 5, 10, 25, …, 5000, 7500,
+/// 10000]` — chosen for **milliseconds**. Applied to a seconds-valued histogram
+/// they put every observation under five seconds into the first bucket, which
+/// is essentially every observation a healthy service will ever record. The
+/// metric still exports and still looks well-formed; it is simply incapable of
+/// distinguishing a fast request from a slow one, and every quantile computed
+/// from it is meaningless.
+///
+/// This list is the OpenTelemetry semantic-convention boundary set for
+/// `http.server.request.duration` — itself specified in seconds — extended
+/// downward with two sub-5ms boundaries. Keeping the semconv values intact means
+/// dashboards and alerts written against them still line up; the two additions
+/// give a service doing sub-millisecond work somewhere to land other than the
+/// bottom bucket.
+#[cfg(feature = "_metrics")]
+const SECONDS_HISTOGRAM_BOUNDARIES: &[f64] = &[
+    0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0,
+];
+
+/// Re-bucket seconds-valued histograms, leaving every other instrument alone.
+///
+/// Selects on the instrument's declared unit rather than its name, so any
+/// histogram that follows the semantic conventions is bucketed correctly without
+/// its author knowing this view exists. Returning `None` leaves the SDK default
+/// in place, which is what every non-histogram and every other unit wants.
+///
+/// The returned [`Stream`] sets no name, so the instrument keeps its own.
+#[cfg(feature = "_metrics")]
+fn seconds_histogram_view(instrument: &Instrument) -> Option<Stream> {
+    if instrument.kind() != InstrumentKind::Histogram || instrument.unit() != "s" {
+        return None;
+    }
+
+    Stream::builder()
+        .with_aggregation(Aggregation::ExplicitBucketHistogram {
+            boundaries: SECONDS_HISTOGRAM_BOUNDARIES.to_vec(),
+            record_min_max: true,
+        })
+        .build()
+        .inspect_err(|error| {
+            // Unreachable short of an SDK change: the builder sets no name, and
+            // boundaries are a sorted finite constant. Log rather than panic --
+            // a mis-bucketed metric must not take a service down at boot.
+            tracing::warn!(
+                %error,
+                "Failed to build the seconds histogram view; \
+                 falling back to SDK default buckets"
+            );
+        })
+        .ok()
+}
+
 /// Initialize the meter provider and set it globally.
 ///
 /// Assembles a single [`SdkMeterProvider`] with one reader per enabled export
@@ -352,6 +409,9 @@ pub fn get_meter() -> Option<opentelemetry::metrics::Meter> {
 /// both readers feed the same provider. Individual reader failures are logged
 /// and skipped so the service still starts; the provider is only installed when
 /// at least one reader was created.
+///
+/// A view is registered so that histograms declared in seconds are bucketed in
+/// seconds; see [`SECONDS_HISTOGRAM_BOUNDARIES`].
 ///
 /// This should be called once during service initialization.
 #[cfg(feature = "_metrics")]
@@ -363,7 +423,9 @@ where
         .with_service_name(config.service.name.clone())
         .build();
 
-    let mut builder = SdkMeterProvider::builder().with_resource(resource);
+    let mut builder = SdkMeterProvider::builder()
+        .with_resource(resource)
+        .with_view(seconds_histogram_view);
     let mut reader_count: usize = 0;
 
     #[cfg(feature = "otel-metrics")]
@@ -668,6 +730,119 @@ mod tests {
             text.contains("acton_test_total 3"),
             "encoded output should contain the counter value, got: {text}"
         );
+    }
+
+    /// End-to-end coverage for the seconds-histogram view.
+    ///
+    /// `Instrument`'s fields are `pub(crate)` in the SDK, so the view function
+    /// cannot be called with a hand-built instrument. These drive a real meter
+    /// provider through a real Prometheus scrape instead, which is also exactly
+    /// how the problem was originally observed.
+    #[cfg(all(test, feature = "prometheus-metrics"))]
+    mod seconds_histogram_view {
+        use super::*;
+
+        /// Record `values` into a histogram declared with `unit`, then return
+        /// the `le` upper bounds Prometheus reports for it.
+        fn scrape_bounds(name: &'static str, unit: &'static str, values: &[f64]) -> Vec<f64> {
+            let (reader, registry) =
+                prometheus_metric_reader().expect("prometheus reader builds");
+
+            // A local provider, never installed globally: these tests must not
+            // race the process-wide provider other tests may have set.
+            let provider = SdkMeterProvider::builder()
+                .with_reader(reader)
+                .with_view(seconds_histogram_view)
+                .build();
+
+            let histogram = provider.meter("test").f64_histogram(name).with_unit(unit).build();
+            for value in values {
+                histogram.record(*value, &[]);
+            }
+
+            registry
+                .gather()
+                .iter()
+                .filter(|family| family.name().contains("probe"))
+                .flat_map(|family| family.get_metric().to_vec())
+                .flat_map(|metric| metric.get_histogram().get_bucket().to_vec())
+                .map(|bucket| bucket.upper_bound())
+                .collect()
+        }
+
+        #[test]
+        fn a_seconds_histogram_gets_seconds_buckets() {
+            let bounds = scrape_bounds("probe.seconds", "s", &[0.000_196]);
+
+            assert_eq!(
+                bounds, SECONDS_HISTOGRAM_BOUNDARIES,
+                "a histogram declared with unit \"s\" must be bucketed in seconds"
+            );
+        }
+
+        #[test]
+        fn sub_millisecond_observations_are_not_all_in_the_bottom_bucket() {
+            // The regression from #107: four observations averaging ~196us all
+            // landed in `le=5`, i.e. "under five seconds", making every
+            // quantile identical. With seconds buckets they must be
+            // distinguishable from a slow request.
+            let bounds = scrape_bounds("probe.spread", "s", &[0.000_2, 0.03, 0.4, 3.0]);
+
+            let top = bounds.last().copied().unwrap_or_default();
+            assert!(
+                top <= 10.0,
+                "the top boundary must be 10s, not the SDK's millisecond-scaled 10000; got {top}"
+            );
+            assert!(
+                bounds.iter().filter(|b| **b < 1.0).count() >= 8,
+                "there must be real resolution below one second, got {bounds:?}"
+            );
+        }
+
+        #[test]
+        fn a_millisecond_histogram_keeps_the_sdk_defaults() {
+            // The view selects on unit. Anything not declared in seconds must be
+            // left exactly as the SDK bucketed it.
+            let bounds = scrape_bounds("probe.millis", "ms", &[12.0]);
+
+            assert_ne!(
+                bounds, SECONDS_HISTOGRAM_BOUNDARIES,
+                "a histogram declared in milliseconds must not be re-bucketed"
+            );
+        }
+
+        #[test]
+        fn the_boundaries_are_sorted_finite_and_positive() {
+            assert!(
+                SECONDS_HISTOGRAM_BOUNDARIES
+                    .windows(2)
+                    .all(|pair| pair[0] < pair[1]),
+                "explicit bucket boundaries must be strictly increasing"
+            );
+            assert!(
+                SECONDS_HISTOGRAM_BOUNDARIES
+                    .iter()
+                    .all(|b| b.is_finite() && *b > 0.0),
+                "every boundary must be finite and positive"
+            );
+        }
+
+        #[test]
+        fn the_semantic_convention_boundaries_are_preserved() {
+            // Dashboards and alerts written against the OTel semconv set for
+            // http.server.request.duration must keep lining up; this list is a
+            // superset, extended downward, never a replacement.
+            const SEMCONV: &[f64] = &[
+                0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0,
+            ];
+
+            for boundary in SEMCONV {
+                assert!(
+                    SECONDS_HISTOGRAM_BOUNDARIES.contains(boundary),
+                    "semconv boundary {boundary} must be preserved"
+                );
+            }
+        }
     }
 
     #[test]
