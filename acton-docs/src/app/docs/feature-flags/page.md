@@ -692,11 +692,14 @@ Rustls-based HTTPS listener for terminating TLS directly in the service, plus a
 **When to use**: Serving HTTPS without a TLS-terminating proxy in front, and/or
 calling peers that require mutual TLS
 
-**Dependencies**: tokio-rustls, rustls-pki-types, arc-swap, zeroize, webpki-roots
+**Dependencies**: tokio-rustls, rustls-pki-types, arc-swap, zeroize, webpki-roots, x509-parser
 
 **Provides**:
 - TLS-enabled server listener
 - Certificate and private key loading
+- `[caller_auth]` — SAN-allowlist authorization for mutual-TLS callers, so a
+  route admits named callers rather than everyone the CA has ever issued to;
+  see [TLS / HTTPS](/docs/tls#authorizing-the-caller-behind-the-certificate)
 - Credential rotation without a restart — poll the files on an interval,
   reload on `SIGHUP`, or drive it from your own trigger with
   `ServiceBuilder::with_tls_reload`; see [TLS / HTTPS](/docs/tls#rotating-credentials-without-a-restart)

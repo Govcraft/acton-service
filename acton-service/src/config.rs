@@ -134,6 +134,11 @@ where
     #[serde(default)]
     pub tls: Option<TlsConfig>,
 
+    /// Caller authorization for mutual TLS (optional, requires `tls` feature)
+    #[cfg(feature = "tls")]
+    #[serde(default)]
+    pub caller_auth: Option<CallerAuthConfig>,
+
     /// Journald configuration (optional, requires `journald` feature)
     #[cfg(feature = "journald")]
     #[serde(default)]
@@ -1025,6 +1030,98 @@ pub struct TlsConfig {
     pub handshake_timeout_secs: Option<u64>,
 }
 
+/// Caller authorization for mutual-TLS deployments (requires `tls` feature)
+///
+/// `[tls].client_ca_path` decides whose certificates are *accepted*; this
+/// section decides which of those callers may *proceed*. Without it, every
+/// principal the configured CA has ever issued to is admitted identically.
+///
+/// ```toml
+/// [caller_auth]
+/// mode = "mtls"                 # bearer | mtls | mtls-or-bearer
+/// allowlist = [
+///   "spiffe://cluster.local/ns/prod/sa/ingest",
+///   "reporter.internal",
+/// ]
+/// ```
+///
+/// Entries are matched byte-exactly against the DNS and URI `subjectAltName`
+/// values of the caller's leaf certificate. An entry containing `://` is
+/// treated as a URI SAN, anything else as a DNS SAN; there is no wildcard or
+/// suffix matching.
+///
+/// Combinations that would look like protection without being it are refused
+/// at startup rather than accepted: a certificate mode with no
+/// `client_ca_path` on the listener it guards, an allowlist under
+/// `mode = "bearer"` where nothing would consult it, and an empty allowlist.
+///
+/// See [`crate::caller_auth`] for the model and the layer that applies it.
+#[cfg(feature = "tls")]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+// Reject unknown keys: a typo like `allow_list` would otherwise be silently
+// ignored, leaving a service that looks allowlisted and admits everyone.
+#[serde(deny_unknown_fields)]
+pub struct CallerAuthConfig {
+    /// What a caller must present. Defaults to
+    /// [`CallerAuthMode::Bearer`](crate::caller_auth::CallerAuthMode::Bearer),
+    /// which leaves caller authorization inert.
+    #[serde(default)]
+    pub mode: crate::caller_auth::CallerAuthMode,
+
+    /// The callers permitted to proceed, by `subjectAltName`.
+    ///
+    /// Required by, and only meaningful for, the certificate modes.
+    #[serde(default)]
+    pub allowlist: Vec<String>,
+
+    /// Path prefixes exempt from caller authorization, in addition to the
+    /// built-in infrastructure paths (`/health`, `/ready`, `/swagger-ui` and
+    /// `/api-docs` on HTTP; the gRPC health and reflection services on gRPC).
+    #[serde(default)]
+    pub public_paths: Vec<String>,
+}
+
+#[cfg(feature = "tls")]
+impl CallerAuthConfig {
+    /// Build the policy this section describes.
+    ///
+    /// Pure: derives the policy solely from `self`. Cross-section checks that
+    /// need the TLS configuration live in
+    /// [`crate::caller_auth::validate_listener`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallerAuthConfigError`](crate::caller_auth::CallerAuthConfigError)
+    /// when the section cannot describe a policy that does what it appears to:
+    /// an allowlist under `mode = "bearer"`, a certificate mode with an empty
+    /// allowlist, or an entry that cannot name a caller.
+    pub fn to_policy(
+        &self,
+    ) -> std::result::Result<
+        crate::caller_auth::CallerAuthPolicy,
+        crate::caller_auth::CallerAuthConfigError,
+    > {
+        use crate::caller_auth::{CallerAllowlist, CallerAuthConfigError, CallerAuthMode};
+
+        let policy = match self.mode {
+            CallerAuthMode::Bearer => {
+                if !self.allowlist.is_empty() {
+                    return Err(CallerAuthConfigError::AllowlistWithoutCertificateMode);
+                }
+                crate::caller_auth::CallerAuthPolicy::bearer()
+            }
+            CallerAuthMode::Mtls => crate::caller_auth::CallerAuthPolicy::mtls(
+                CallerAllowlist::from_entries(&self.allowlist)?,
+            ),
+            CallerAuthMode::MtlsOrBearer => crate::caller_auth::CallerAuthPolicy::mtls_or_bearer(
+                CallerAllowlist::from_entries(&self.allowlist)?,
+            ),
+        };
+
+        Ok(policy.with_public_paths(self.public_paths.clone()))
+    }
+}
+
 /// Client-side mutual-TLS identity (requires `tls` feature)
 ///
 /// Describes the certificate this service presents *as a client* when it calls
@@ -1808,6 +1905,8 @@ where
             lockout: None,
             #[cfg(feature = "tls")]
             tls: None,
+            #[cfg(feature = "tls")]
+            caller_auth: None,
             #[cfg(feature = "journald")]
             journald: None,
             #[cfg(feature = "accounts")]
@@ -1849,6 +1948,89 @@ mod tests {
         assert!(
             !tls.client_auth_optional,
             "client auth must default to required when a CA is configured"
+        );
+    }
+
+    #[cfg(feature = "tls")]
+    #[test]
+    fn caller_auth_config_parses_modes_and_allowlist() {
+        let json = r#"{
+            "mode": "mtls-or-bearer",
+            "allowlist": ["spiffe://cluster.local/ns/prod/sa/ingest", "reporter.internal"],
+            "public_paths": ["/metrics"]
+        }"#;
+
+        let caller_auth: CallerAuthConfig =
+            serde_json::from_str(json).expect("caller auth config must parse");
+
+        assert_eq!(
+            caller_auth.mode,
+            crate::caller_auth::CallerAuthMode::MtlsOrBearer
+        );
+
+        let policy = caller_auth.to_policy().expect("valid policy");
+        let allowlist = policy.allowlist().expect("certificate mode carries a list");
+        assert!(allowlist.contains(
+            &crate::caller_auth::CallerSan::uri("spiffe://cluster.local/ns/prod/sa/ingest")
+                .expect("valid")
+        ));
+        assert!(allowlist
+            .contains(&crate::caller_auth::CallerSan::dns("reporter.internal").expect("valid")));
+        assert_eq!(policy.public_paths(), ["/metrics"]);
+    }
+
+    #[cfg(feature = "tls")]
+    #[test]
+    fn caller_auth_config_defaults_to_inert_bearer_mode() {
+        let caller_auth: CallerAuthConfig =
+            serde_json::from_str("{}").expect("an empty section must parse");
+
+        assert_eq!(caller_auth.mode, crate::caller_auth::CallerAuthMode::Bearer);
+        let policy = caller_auth.to_policy().expect("valid policy");
+        assert!(
+            !policy.requires_client_ca(),
+            "the default must not silently start demanding certificates"
+        );
+    }
+
+    #[cfg(feature = "tls")]
+    #[test]
+    fn caller_auth_config_refuses_a_typo_in_a_key() {
+        // `allow_list` instead of `allowlist` would otherwise deserialize to an
+        // empty allowlist, leaving a service that looks protected.
+        let json = r#"{ "mode": "mtls", "allow_list": ["reporter.internal"] }"#;
+
+        assert!(
+            serde_json::from_str::<CallerAuthConfig>(json).is_err(),
+            "an unknown key in [caller_auth] must be a parse error"
+        );
+    }
+
+    #[cfg(feature = "tls")]
+    #[test]
+    fn caller_auth_config_refuses_combinations_that_only_look_protective() {
+        let dead_allowlist = CallerAuthConfig {
+            mode: crate::caller_auth::CallerAuthMode::Bearer,
+            allowlist: vec!["reporter.internal".to_string()],
+            public_paths: Vec::new(),
+        };
+        assert_eq!(
+            dead_allowlist
+                .to_policy()
+                .expect_err("an allowlist nothing consults must be refused"),
+            crate::caller_auth::CallerAuthConfigError::AllowlistWithoutCertificateMode
+        );
+
+        let empty_allowlist = CallerAuthConfig {
+            mode: crate::caller_auth::CallerAuthMode::Mtls,
+            allowlist: Vec::new(),
+            public_paths: Vec::new(),
+        };
+        assert_eq!(
+            empty_allowlist
+                .to_policy()
+                .expect_err("a certificate mode with no allowed callers must be refused"),
+            crate::caller_auth::CallerAuthConfigError::EmptyAllowlist
         );
     }
 
@@ -1980,6 +2162,8 @@ mod tests {
             lockout: None,
             #[cfg(feature = "tls")]
             tls: None,
+            #[cfg(feature = "tls")]
+            caller_auth: None,
             #[cfg(feature = "journald")]
             journald: None,
             #[cfg(feature = "accounts")]
@@ -2049,6 +2233,8 @@ mod tests {
             lockout: None,
             #[cfg(feature = "tls")]
             tls: None,
+            #[cfg(feature = "tls")]
+            caller_auth: None,
             #[cfg(feature = "journald")]
             journald: None,
             #[cfg(feature = "accounts")]

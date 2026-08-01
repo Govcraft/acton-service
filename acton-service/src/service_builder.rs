@@ -1694,6 +1694,47 @@ where
             }
         }
 
+        // Auto-apply mutual-TLS caller authorization if configured.
+        //
+        // Applied AFTER token auth in source order, so — axum applying layers
+        // in reverse — it runs BEFORE it. That order is what makes
+        // `mode = "mtls-or-bearer"` possible: the caller identity has to be
+        // established before the token middleware decides whether to demand a
+        // token, because an allowlisted certificate waives it.
+        //
+        // A `[caller_auth]` section that cannot describe a coherent policy is
+        // fatal rather than ignored. Config that looks like an allowlist and
+        // silently admits everyone is worse than no config at all.
+        #[cfg(feature = "tls")]
+        let caller_auth_policy = match config.caller_auth.as_ref() {
+            Some(caller_auth_config) => match caller_auth_config.to_policy() {
+                Ok(policy) => Some(policy),
+                Err(e) => {
+                    let err = crate::error::Error::Internal(format!(
+                        "[caller_auth] is configured but its configuration is invalid; refusing \
+                         to start rather than serving mutual-TLS routes without caller \
+                         authorization: {e}"
+                    ));
+                    tracing::error!("{}", err);
+                    record_startup_error(&mut startup_error, err);
+                    None
+                }
+            },
+            None => None,
+        };
+
+        #[cfg(feature = "tls")]
+        if let Some(ref policy) = caller_auth_policy {
+            if policy.requires_client_ca() {
+                tracing::debug!(
+                    mode = %policy.mode(),
+                    allowed_callers = policy.allowlist().map_or(0, crate::caller_auth::CallerAllowlist::count),
+                    "Auto-applying mutual-TLS caller authorization"
+                );
+                app = app.layer(crate::caller_auth::CallerAuthLayer::http(policy.clone()));
+            }
+        }
+
         // Inject AuditLogger as a request extension so auth middleware can access it.
         // Applied last in layer order (runs first in execution), making it available
         // to all subsequent middleware including token auth.
@@ -1701,6 +1742,15 @@ where
         if let Some(ref logger) = audit_logger {
             app = app.layer(axum::Extension(logger.clone()));
         }
+
+        // Whether each listener's TLS came from the caller rather than from
+        // configuration. Captured before the overrides are taken below, so the
+        // caller-authorization cross-checks know when they are looking at a
+        // `ServerConfig` the framework cannot inspect.
+        #[cfg(feature = "tls")]
+        let http_tls_from_override = self.tls_config_override.is_some();
+        #[cfg(all(feature = "grpc", feature = "tls"))]
+        let grpc_tls_from_override = self.grpc_tls_config_override.is_some();
 
         let listener_addr = std::net::SocketAddr::new(config.service.bind, config.service.port);
 
@@ -1787,6 +1837,57 @@ where
                 None => tls_config.clone(),
             }
         };
+
+        // Cross-check the caller-authorization policy against the listeners it
+        // guards. A certificate mode on a listener that never asks for a client
+        // certificate rejects every caller, and does so with a message about
+        // credentials rather than about the missing `client_ca_path` that
+        // actually caused it. Refused here, before anything binds.
+        #[cfg(feature = "tls")]
+        if let Some(ref policy) = caller_auth_policy {
+            let http_listener = if http_tls_from_override {
+                crate::caller_auth::ListenerClientCa::Unknown
+            } else {
+                listener_client_ca(config.tls.as_ref())
+            };
+
+            if let Err(e) = crate::caller_auth::validate_listener(policy, http_listener, "[tls]") {
+                let err = crate::error::Error::Internal(e.to_string());
+                tracing::error!("{}", err);
+                record_startup_error(&mut startup_error, err);
+            }
+
+            // The separate-port gRPC listener is configured independently, so
+            // it is checked independently. A shared-port deployment is already
+            // covered by the HTTP check above: it is the same listener.
+            #[cfg(feature = "grpc")]
+            if self.grpc_services.is_some()
+                && config
+                    .grpc
+                    .as_ref()
+                    .is_some_and(|g| g.enabled && g.use_separate_port)
+            {
+                let grpc_tls_section = config.grpc.as_ref().and_then(|g| g.tls.as_ref());
+                let (grpc_listener, section) = if grpc_tls_from_override {
+                    (crate::caller_auth::ListenerClientCa::Unknown, "[grpc.tls]")
+                } else {
+                    match grpc_tls_section {
+                        // A present `[grpc.tls]` is authoritative for that
+                        // listener; only an absent section inherits `[tls]`.
+                        Some(grpc_tls) => (listener_client_ca(Some(grpc_tls)), "[grpc.tls]"),
+                        None => (http_listener, "[tls]"),
+                    }
+                };
+
+                if let Err(e) =
+                    crate::caller_auth::validate_listener(policy, grpc_listener, section)
+                {
+                    let err = crate::error::Error::Internal(e.to_string());
+                    tracing::error!("{}", err);
+                    record_startup_error(&mut startup_error, err);
+                }
+            }
+        }
 
         // Resolve the built-in credential-rotation triggers. Validation happens
         // here so an interval that would spin the runtime is reported by
@@ -1946,6 +2047,24 @@ where
                         crate::grpc::middleware::GrpcTokenAuthLayer::new(jwt)
                             .with_public_paths(public_paths),
                     );
+                }
+
+                // Caller authorization, applied after the token layers in
+                // source order so it runs before them — the same ordering, and
+                // for the same reason, as on the HTTP router. Refusals are
+                // shaped as gRPC statuses (UNAUTHENTICATED / PERMISSION_DENIED)
+                // rather than JSON, so a gRPC client sees a status it can act
+                // on instead of an opaque transport failure.
+                #[cfg(feature = "tls")]
+                if let Some(ref policy) = caller_auth_policy {
+                    if policy.requires_client_ca() {
+                        tracing::debug!(
+                            mode = %policy.mode(),
+                            "Auto-applying mutual-TLS caller authorization to gRPC routes"
+                        );
+                        grpc_app = grpc_app
+                            .layer(crate::caller_auth::CallerAuthLayer::grpc(policy.clone()));
+                    }
                 }
 
                 // Make the audit logger visible to the Cedar layer for denial
@@ -2317,6 +2436,24 @@ fn runtime_supports_block_in_place() -> Option<bool> {
 fn record_startup_error(slot: &mut Option<crate::error::Error>, error: crate::error::Error) {
     if slot.is_none() {
         *slot = Some(error);
+    }
+}
+
+/// What a listener's `[tls]`-shaped section says about client certificates.
+///
+/// A section that is present but `enabled = false` is plaintext, not
+/// "TLS without client verification": the distinction matters because the two
+/// cases have different fixes.
+///
+/// Pure: derives the verdict solely from its argument.
+#[cfg(feature = "tls")]
+fn listener_client_ca(
+    tls: Option<&crate::config::TlsConfig>,
+) -> crate::caller_auth::ListenerClientCa {
+    match tls.filter(|t| t.enabled) {
+        Some(t) if t.client_ca_path.is_some() => crate::caller_auth::ListenerClientCa::Verified,
+        Some(_) => crate::caller_auth::ListenerClientCa::NotVerified,
+        None => crate::caller_auth::ListenerClientCa::Plaintext,
     }
 }
 
@@ -3003,6 +3140,166 @@ mod tests {
             reload_on_sighup: false,
             handshake_timeout_secs: None,
         }
+    }
+
+    /// A certificate mode on a listener that never asks for a client
+    /// certificate rejects every caller. Boot fails rather than serving a
+    /// surface where nothing can succeed and the message blames credentials.
+    #[cfg(feature = "tls")]
+    #[test]
+    fn caller_auth_without_a_client_ca_is_rejected_at_build() {
+        use crate::config::{CallerAuthConfig, Config};
+        use crate::prelude::ServiceBuilder;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let tls = loadable_tls_section(dir.path());
+        assert!(tls.client_ca_path.is_none());
+
+        let error = ServiceBuilder::new()
+            .with_config(Config::<()> {
+                tls: Some(tls),
+                caller_auth: Some(CallerAuthConfig {
+                    mode: crate::caller_auth::CallerAuthMode::Mtls,
+                    allowlist: vec!["reporter.internal".to_string()],
+                    public_paths: Vec::new(),
+                }),
+                ..Default::default()
+            })
+            .try_build()
+            .err()
+            .expect("a certificate mode without a client CA must fail the build");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("client_ca_path"),
+            "the error must name what is missing, got: {message}"
+        );
+        assert!(
+            message.contains("[tls]"),
+            "the error must name the section to fix, got: {message}"
+        );
+    }
+
+    /// A certificate mode with no TLS at all is a different mistake with a
+    /// different fix, and says so.
+    #[cfg(feature = "tls")]
+    #[test]
+    fn caller_auth_on_a_plaintext_listener_is_rejected_at_build() {
+        use crate::config::{CallerAuthConfig, Config};
+        use crate::prelude::ServiceBuilder;
+
+        let error = ServiceBuilder::new()
+            .with_config(Config::<()> {
+                caller_auth: Some(CallerAuthConfig {
+                    mode: crate::caller_auth::CallerAuthMode::MtlsOrBearer,
+                    allowlist: vec!["reporter.internal".to_string()],
+                    public_paths: Vec::new(),
+                }),
+                ..Default::default()
+            })
+            .try_build()
+            .err()
+            .expect("a certificate mode with no TLS must fail the build");
+
+        assert!(
+            error.to_string().contains("terminates no TLS"),
+            "the error must say the listener is plaintext, got: {error}"
+        );
+    }
+
+    /// An allowlist under `mode = "bearer"` is never consulted. Dead config
+    /// that looks like protection is worse than no config.
+    #[cfg(feature = "tls")]
+    #[test]
+    fn an_allowlist_that_nothing_consults_is_rejected_at_build() {
+        use crate::config::{CallerAuthConfig, Config};
+        use crate::prelude::ServiceBuilder;
+
+        let error = ServiceBuilder::new()
+            .with_config(Config::<()> {
+                caller_auth: Some(CallerAuthConfig {
+                    mode: crate::caller_auth::CallerAuthMode::Bearer,
+                    allowlist: vec!["reporter.internal".to_string()],
+                    public_paths: Vec::new(),
+                }),
+                ..Default::default()
+            })
+            .try_build()
+            .err()
+            .expect("an allowlist under bearer mode must fail the build");
+
+        assert!(
+            error.to_string().contains("never consulted"),
+            "the error must explain why the allowlist is dead, got: {error}"
+        );
+    }
+
+    /// A correctly configured mutual-TLS caller policy must build.
+    #[cfg(feature = "tls")]
+    #[test]
+    fn caller_auth_with_a_client_ca_builds() {
+        use crate::config::{CallerAuthConfig, Config};
+        use crate::prelude::ServiceBuilder;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut tls = loadable_tls_section(dir.path());
+        let ca = rcgen::generate_simple_self_signed(vec!["client-ca".to_string()])
+            .expect("self-signed CA generation");
+        let ca_path = dir.path().join("client-ca.pem");
+        std::fs::write(&ca_path, ca.cert.pem()).expect("write CA");
+        tls.client_ca_path = Some(ca_path);
+
+        ServiceBuilder::new()
+            .with_config(Config::<()> {
+                tls: Some(tls),
+                caller_auth: Some(CallerAuthConfig {
+                    mode: crate::caller_auth::CallerAuthMode::Mtls,
+                    allowlist: vec!["reporter.internal".to_string()],
+                    public_paths: Vec::new(),
+                }),
+                ..Default::default()
+            })
+            .try_build()
+            .expect("a coherent caller-auth configuration must build");
+    }
+
+    /// `listener_client_ca` reads a `[tls]`-shaped section the way the
+    /// cross-checks depend on: a disabled section is plaintext, not
+    /// "TLS without client verification".
+    #[cfg(feature = "tls")]
+    #[test]
+    fn listener_client_ca_classifies_each_tls_section_shape() {
+        use crate::caller_auth::ListenerClientCa;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let base = loadable_tls_section(dir.path());
+
+        assert_eq!(
+            super::listener_client_ca(None),
+            ListenerClientCa::Plaintext,
+            "an absent section terminates no TLS"
+        );
+        assert_eq!(
+            super::listener_client_ca(Some(&base)),
+            ListenerClientCa::NotVerified,
+            "TLS without a client CA requests no certificate"
+        );
+
+        let mut disabled = base.clone();
+        disabled.enabled = false;
+        disabled.client_ca_path = Some(dir.path().join("client-ca.pem"));
+        assert_eq!(
+            super::listener_client_ca(Some(&disabled)),
+            ListenerClientCa::Plaintext,
+            "a disabled section serves plaintext whatever else it carries"
+        );
+
+        let mut verifying = base;
+        verifying.client_ca_path = Some(dir.path().join("client-ca.pem"));
+        assert_eq!(
+            super::listener_client_ca(Some(&verifying)),
+            ListenerClientCa::Verified
+        );
     }
 
     /// `reload_interval_secs = 0` cannot mean "never" — omitting the field does

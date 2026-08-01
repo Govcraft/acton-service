@@ -508,6 +508,15 @@ where
                 .iter()
                 .any(|p| path.starts_with(p.as_str()));
 
+        // A caller admitted on a verified, allowlisted client certificate under
+        // `[caller_auth].mode = "mtls-or-bearer"` has already proved who it is,
+        // by a stronger credential than a token. Demanding a token as well
+        // would make that mode impossible to cut over to, which is its entire
+        // purpose. Only `mtls-or-bearer` waives the token; under `mtls` the
+        // certificate is an additional requirement, not a substitute.
+        #[cfg(feature = "tls")]
+        let public = public || crate::caller_auth::bearer_waived(req.extensions());
+
         if !public {
             let validated = extract_token(req.headers())
                 .and_then(|token| self.validator.validate_token(&token));
@@ -689,6 +698,80 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(grpc_status(&resp), Some("16"));
+        }
+
+        /// Under `[caller_auth].mode = "mtls-or-bearer"`, an allowlisted client
+        /// certificate is an alternative to a token, so the token layer must
+        /// stand down for that request — otherwise the mode is impossible to
+        /// cut over to. Under `mtls` the certificate is an *additional*
+        /// requirement and the token is still demanded.
+        #[cfg(feature = "tls")]
+        #[tokio::test]
+        async fn a_certificate_that_waives_the_bearer_requirement_skips_token_validation() {
+            use crate::caller_auth::{CallerAllowlist, CallerAuthLayer, CallerAuthPolicy};
+
+            async fn call_with(
+                policy: CallerAuthPolicy,
+                leaf: Vec<u8>,
+            ) -> http::Response<axum::body::Body> {
+                let app = axum::Router::new()
+                    .route(
+                        "/hello.v1.HelloService/SayHello",
+                        axum::routing::get(|| async { "reached" }),
+                    )
+                    .layer(GrpcTokenAuthLayer::new(TestValidator))
+                    .layer(CallerAuthLayer::grpc(policy));
+
+                let mut req = http::Request::builder()
+                    .uri("/hello.v1.HelloService/SayHello")
+                    .body(axum::body::Body::empty())
+                    .expect("valid request");
+                req.extensions_mut().insert(axum::extract::ConnectInfo(
+                    crate::tls::TlsConnectInfo::for_test(
+                        "203.0.113.11:44301".parse().expect("addr"),
+                        vec![leaf.into()],
+                    ),
+                ));
+
+                tower::ServiceExt::oneshot(app, req)
+                    .await
+                    .expect("router responds")
+            }
+
+            let key = rcgen::KeyPair::generate().expect("key generation");
+            let mut params = rcgen::CertificateParams::default();
+            params.subject_alt_names = vec![rcgen::SanType::DnsName(
+                "reporter.internal".try_into().expect("valid IA5 string"),
+            )];
+            let leaf = params
+                .self_signed(&key)
+                .expect("self-signed leaf")
+                .der()
+                .to_vec();
+
+            let allowlist =
+                CallerAllowlist::from_entries(["reporter.internal"]).expect("valid allowlist");
+
+            let waived = call_with(
+                CallerAuthPolicy::mtls_or_bearer(allowlist.clone()),
+                leaf.clone(),
+            )
+            .await;
+            assert_eq!(
+                waived.status(),
+                http::StatusCode::OK,
+                "an allowlisted certificate must stand in for the missing token"
+            );
+
+            let still_required = call_with(CallerAuthPolicy::mtls(allowlist), leaf).await;
+            assert_eq!(
+                still_required
+                    .headers()
+                    .get("grpc-status")
+                    .and_then(|v| v.to_str().ok()),
+                Some("16"),
+                "under mtls the certificate does not replace the token"
+            );
         }
 
         #[tokio::test]

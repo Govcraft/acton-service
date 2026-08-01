@@ -158,6 +158,9 @@ pub mod tls;
 #[cfg(feature = "tls")]
 pub mod client_tls;
 
+#[cfg(feature = "tls")]
+pub mod caller_auth;
+
 #[cfg(feature = "login-lockout")]
 pub mod lockout;
 
@@ -261,6 +264,15 @@ pub mod prelude {
 
     #[cfg(feature = "cedar-authz")]
     pub use crate::middleware::CedarAuthz;
+
+    #[cfg(feature = "tls")]
+    pub use crate::caller_auth::{
+        CallerAllowlist, CallerAuthError, CallerAuthLayer, CallerAuthMode, CallerAuthPolicy,
+        CallerIdentity, CallerSan, SanKind,
+    };
+
+    #[cfg(feature = "tls")]
+    pub use crate::config::CallerAuthConfig;
 
     #[cfg(all(feature = "cedar-authz", feature = "cache"))]
     pub use crate::middleware::{PolicyCache, RedisPolicyCache};

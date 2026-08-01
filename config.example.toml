@@ -217,6 +217,59 @@ referrer_policy = "strict-origin-when-cross-origin"
 # files. Credentials injected via ServiceBuilder::with_tls_config are static;
 # configuring the triggers above for them warns at startup and does nothing.
 
+# ============================================================================
+# CALLER AUTHORIZATION (Optional)
+# Requires feature: tls
+# ============================================================================
+# client_ca_path above decides whose certificates are ACCEPTED. This section
+# decides which of those callers may PROCEED. Without it, every principal the
+# CA has ever issued to is admitted identically, so one compromised workload
+# reaches every mTLS route of every peer.
+#
+# [caller_auth]
+#
+# What a caller must present:
+#   "bearer"         — tokens only; this section is inert (the default)
+#   "mtls"           — an allowlisted client certificate is REQUIRED, in
+#                      addition to whatever [token] demands
+#   "mtls-or-bearer" — an allowlisted certificate OR a bearer token. Exists so
+#                      a fleet can cut over caller-by-caller: a caller with no
+#                      certificate yet, or not yet allowlisted, keeps working
+#                      on its token. An allowlisted certificate waives the
+#                      token requirement for that request.
+# mode = "mtls"
+#
+# The callers permitted to proceed, matched byte-exactly against the DNS and
+# URI subjectAltName values of the caller's leaf certificate. An entry
+# containing "://" is a URI SAN, anything else a DNS SAN. There is no wildcard,
+# suffix or subdomain matching, and a wildcard SAN in a certificate never
+# matches anything.
+# allowlist = [
+#   "spiffe://cluster.local/ns/prod/sa/ingest",
+#   "reporter.internal",
+# ]
+#
+# Extra path prefixes exempt from caller authorization. /health, /ready,
+# /swagger-ui and /api-docs (and the gRPC health and reflection services) are
+# always exempt: infrastructure probes present no client certificate.
+# public_paths = ["/metrics"]
+#
+# Refused at STARTUP rather than accepted and quietly ignored:
+#   - a certificate mode on a listener with no client_ca_path, or no TLS at all
+#     ([tls] and [grpc.tls] are checked separately, and the error names which)
+#   - an allowlist under mode = "bearer", where nothing would consult it
+#   - an empty allowlist under a certificate mode
+#
+# Refusals are distinguishable: 401 (nothing proven — no certificate, or an
+# unparseable one) vs 403 (identity proven, caller not allowlisted). On gRPC
+# the same split is UNAUTHENTICATED (16) vs PERMISSION_DENIED (7). Each carries
+# a distinct error code: CLIENT_CERT_REQUIRED, CALLER_CREDENTIAL_REQUIRED,
+# CLIENT_CERT_UNPARSABLE, CLIENT_CERT_NO_SAN, CALLER_NOT_ALLOWED.
+#
+# A certificate-authorized caller carries no Claims, so Cedar-protected routes
+# still require a bearer token. This is transport-level admission control, not
+# a replacement for policy authorization.
+
 # ----------------------------------------------------------------------------
 # CLIENT mTLS IDENTITY (Optional) — the certificate this service PRESENTS when
 # it CALLS another mutual-TLS service. The outbound mirror of [tls] above.

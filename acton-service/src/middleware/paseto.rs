@@ -178,6 +178,17 @@ impl PasetoAuth {
             return Ok(next.run(request).await);
         }
 
+        // A caller admitted on a verified, allowlisted client certificate under
+        // `[caller_auth].mode = "mtls-or-bearer"` has already proved who it is,
+        // by a stronger credential than a token. Demanding a token as well
+        // would make that mode impossible to cut over to, which is its entire
+        // purpose. Only `mtls-or-bearer` waives the token; under `mtls` the
+        // certificate is an additional requirement, not a substitute.
+        #[cfg(feature = "tls")]
+        if crate::caller_auth::bearer_waived(request.extensions()) {
+            return Ok(next.run(request).await);
+        }
+
         // Build audit source info before validation (available regardless of outcome).
         // Prefers the RequestContext extension so failures still carry the peer IP
         // and generated request ID; falls back to headers for hand-wired routers.
