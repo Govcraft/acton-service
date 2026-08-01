@@ -283,7 +283,7 @@ Enable `auth-full` to get the entire stack in one flag.
 ### Security, Audit & Compliance
 
 - **Audit logging** (`audit`) - BLAKE3 hash-chained, tamper-evident audit trails for auth, account, and request events, with storage backends for PostgreSQL, Turso, SurrealDB, and ClickHouse ([guide](https://govcraft.github.io/acton-service/docs/audit))
-- **TLS termination** (`tls`) - rustls-based HTTPS with automatic crypto-provider installation, mutual TLS, and credential rotation without a restart (poll-based, SIGHUP, or a custom hook) ([guide](https://govcraft.github.io/acton-service/docs/tls))
+- **TLS termination** (`tls`) - rustls-based HTTPS with automatic crypto-provider installation, mutual TLS, SAN-allowlist caller authorization, and credential rotation without a restart (poll-based, SIGHUP, or a custom hook) ([guide](https://govcraft.github.io/acton-service/docs/tls))
 - **FIPS 140-3 path** - `aws-lc-rs` is the default crypto provider; see [Choosing a Crypto Provider](#choosing-a-crypto-provider)
 - **systemd journald** (`journald`) - Native journal integration for structured logs on Linux hosts
 

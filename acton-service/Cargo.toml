@@ -136,6 +136,12 @@ arc-swap = { version = "1.9.2", optional = true }
 zeroize = { version = "1.9.0", optional = true }
 webpki-roots = { version = "1.0.9", optional = true }
 hyper-util = { version = "0.1.20", features = ["tokio"], optional = true }
+# Leaf-certificate parsing for mTLS caller authorization. Only the DER/SAN
+# decoding is used: rustls has already verified the chain against the
+# configured CA bundle by the time a certificate reaches this crate, so the
+# signature-checking features (`verify`, `verify-aws`) stay off and no second
+# crypto provider is pulled in.
+x509-parser = { version = "0.18.1", optional = true }
 
 [features]
 default = ["http", "observability", "crypto-aws-lc-rs"]
@@ -227,7 +233,7 @@ repository = []
 handlers = ["repository"]
 
 # TLS support (rustls-based HTTPS)
-tls = ["dep:tokio-rustls", "dep:rustls-pki-types", "dep:arc-swap", "dep:zeroize", "dep:webpki-roots"]
+tls = ["dep:tokio-rustls", "dep:rustls-pki-types", "dep:arc-swap", "dep:zeroize", "dep:webpki-roots", "dep:x509-parser"]
 
 # Audit logging with BLAKE3 hash chaining
 audit = ["dep:blake3"]

@@ -1284,6 +1284,20 @@ impl TlsConnectInfo {
     pub fn is_mutually_authenticated(&self) -> bool {
         self.peer_certificates.is_some()
     }
+
+    /// Build connect-info directly, for tests in other modules of this crate
+    /// that need a request to look as if it arrived over mutual TLS.
+    ///
+    /// Not public: outside a test, connect-info comes from a real handshake,
+    /// and a constructor that lets any caller assert an arbitrary peer chain
+    /// would be a way to forge one.
+    #[cfg(test)]
+    pub(crate) fn for_test(remote_addr: SocketAddr, chain: Vec<CertificateDer<'static>>) -> Self {
+        Self {
+            remote_addr,
+            peer_certificates: (!chain.is_empty()).then(|| PeerCertificates(Arc::new(chain))),
+        }
+    }
 }
 
 impl axum::extract::connect_info::Connected<axum::serve::IncomingStream<'_, TlsListener>>

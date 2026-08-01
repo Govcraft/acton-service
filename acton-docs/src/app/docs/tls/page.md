@@ -63,6 +63,116 @@ This is calling **into** this service. To present a client certificate when
 this service calls another mutual-TLS peer, see the `client_tls` module
 described under the [`tls` feature flag](/docs/feature-flags#tls).
 
+## Authorizing the caller behind the certificate
+
+`client_ca_path` decides whose certificates are *accepted*. It does not decide
+which of those callers may *proceed*. A certificate issued by a private fleet
+CA proves only that the CA has, at some point, issued to this principal — so
+with `client_ca_path` alone, every workload the CA has ever signed for is
+admitted identically, and one compromised workload reaches every mutual-TLS
+route of every peer.
+
+The `[caller_auth]` section closes that gap by naming the caller from its
+leaf certificate's `subjectAltName` and checking that name against an
+allowlist:
+
+```toml
+[caller_auth]
+mode = "mtls"
+allowlist = [
+  "spiffe://cluster.local/ns/prod/sa/ingest",
+  "reporter.internal",
+]
+```
+
+### Modes
+
+| Mode | What a caller must present |
+| --- | --- |
+| `bearer` | Tokens only. The section is inert — the default. |
+| `mtls` | An allowlisted client certificate, **in addition to** whatever `[token]` demands. |
+| `mtls-or-bearer` | An allowlisted certificate **or** a bearer token. |
+
+`mtls-or-bearer` exists so a fleet can cut over caller-by-caller instead of on
+a flag day. A caller that has no certificate yet, or has one that is not yet
+allowlisted, keeps working on its token; a caller whose certificate *is*
+allowlisted is admitted on the certificate alone, and the token middleware
+stands down for that request. Under `mtls` the certificate is an additional
+requirement, so a configured token middleware still demands a valid token.
+
+### Matching
+
+Entries are matched **byte-exactly** against the DNS and URI `subjectAltName`
+values of the caller's leaf certificate. An entry containing `://` is treated
+as a URI SAN, anything else as a DNS SAN, and the two never match each other.
+
+There is no wildcard, suffix or subdomain matching: `reporter.internal` does
+not match `REPORTER.INTERNAL`, `a.reporter.internal` or `reporter.internal.`.
+A wildcard SAN inside a certificate matches nothing at all — a wildcard names
+a set of hosts, which is not an identity anything should be authorized as.
+
+### Misconfiguration is a startup failure
+
+Configuration that would look like protection without being it is refused
+before anything binds:
+
+- a certificate mode on a listener with no `client_ca_path`, or no TLS at all
+  (`[tls]` and `[grpc.tls]` are checked separately, and the error names which
+  one to fix)
+- an `allowlist` under `mode = "bearer"`, where nothing would ever consult it
+- an empty `allowlist` under a certificate mode
+- an unknown key in the section — `allow_list` instead of `allowlist` would
+  otherwise leave a service that looks allowlisted and admits everyone
+
+### Telling refusals apart
+
+| Cause | HTTP | gRPC | Code |
+| --- | --- | --- | --- |
+| No client certificate | 401 | `UNAUTHENTICATED` | `CLIENT_CERT_REQUIRED` |
+| Neither certificate nor token | 401 | `UNAUTHENTICATED` | `CALLER_CREDENTIAL_REQUIRED` |
+| Certificate unparseable | 401 | `UNAUTHENTICATED` | `CLIENT_CERT_UNPARSABLE` |
+| Certificate carries no usable SAN | 403 | `PERMISSION_DENIED` | `CLIENT_CERT_NO_SAN` |
+| Caller not on the allowlist | 403 | `PERMISSION_DENIED` | `CALLER_NOT_ALLOWED` |
+
+401 means nothing was proven; 403 means an identity was proven and is not
+authorized. The operator of a misconfigured caller needs to tell those apart
+without access to the server's logs.
+
+### Scoping it to specific routes
+
+The configuration section applies the policy to the whole surface. To guard
+only some routes, apply the layer yourself:
+
+```rust
+use acton_service::caller_auth::{
+    CallerAllowlist, CallerAuthLayer, CallerAuthPolicy, CallerSan,
+};
+
+let allowlist = CallerAllowlist::new([
+    CallerSan::uri("spiffe://cluster.local/ns/prod/sa/ingest")?,
+])?;
+
+let router = Router::new()
+    .route("/admin/audit", get(audit_handler))
+    .route_layer(CallerAuthLayer::http(CallerAuthPolicy::mtls(allowlist)));
+```
+
+Handlers read the established identity with `Extension<CallerIdentity>`. Its
+presence means a verified, allowlisted certificate — the layer never inserts
+one for a request admitted on a bearer token.
+
+{% callout type="warning" title="Caller authorization is not policy authorization" %}
+A certificate-authorized request carries no `Claims`, and Cedar derives its
+principal from claims. Cedar-protected routes therefore still require a bearer
+token even when the caller is allowlisted here. `[caller_auth]` is
+transport-level admission control, not a replacement for
+[Cedar authorization](/docs/cedar-auth).
+
+It also only sees certificates on a listener that terminates TLS itself.
+Behind a TLS-terminating proxy there is no client certificate to read, and a
+certificate mode will refuse every request.
+{% /callout %}
+
 ## gRPC TLS
 
 The separate-port gRPC listener has its own optional `[grpc.tls]` section:
