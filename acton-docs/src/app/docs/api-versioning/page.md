@@ -38,6 +38,7 @@ The framework offers:
 - **Automatic Health Endpoints**: `ServiceBuilder` automatically provides `/health` and `/ready` endpoints
 - **Automatic Deprecation Headers**: RFC 8594 compliant deprecation headers sent automatically
 - **Sunset Date Management**: Clear migration timelines with sunset date enforcement
+- **Root-Level Catch-All**: `with_fallback` / `with_fallback_service` for proxies, gateways, and custom 404s — no feature flags required
 
 ---
 
@@ -105,6 +106,90 @@ Routes:
 - `/ready` → Readiness check (automatic)
 - `/api/v1/users` → V1 handler
 - `/api/v2/users` → V2 handler
+
+---
+
+## Root-Level Catch-All
+
+Some services need to handle requests that match no route they declared. A
+transparent reverse proxy forwards everything it does not itself serve. A
+gateway routes unknown paths upstream. A public API may want a JSON 404 body
+instead of the default empty one.
+
+`with_fallback` and `with_fallback_service` provide that catch-all. Neither
+requires a feature flag.
+
+### A custom 404
+
+```rust
+async fn not_found() -> impl IntoResponse {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({ "error": "no such route" })),
+    )
+}
+
+let routes = VersionedApiBuilder::new()
+    .with_base_path("/api")
+    .add_version(ApiVersion::V1, |router| {
+        router.route("/users", get(list_users))
+    })
+    .with_fallback(not_found)
+    .build_routes();
+```
+
+### A transparent reverse proxy
+
+When the catch-all is an HTTP client forwarding upstream, it is a
+`tower::Service` rather than a handler. Use `with_fallback_service`:
+
+```rust
+use tower::service_fn;
+
+let upstream = service_fn(move |req: Request| async move {
+    forward_to_upstream(req).await  // -> Result<Response, Infallible>
+});
+
+let routes = VersionedApiBuilder::new()
+    .add_version(ApiVersion::V1, |router| {
+        router.route("/paywall", post(charge))
+    })
+    .with_fallback_service(upstream)
+    .build_routes();
+
+ServiceBuilder::new()
+    .with_routes(routes)
+    .build()
+    .serve()
+    .await
+```
+
+A proxy built this way keeps the full middleware stack: request-ID
+propagation, sensitive-header masking, security headers, rate limiting, panic
+recovery, and audit wiring all apply to forwarded requests. A proxy built on
+bare `axum::serve` gets none of them.
+
+### Ordering
+
+The fallback is installed after every other route, so it never shadows one.
+It sees only what matched nothing else:
+
+| Path | Handled by |
+| --- | --- |
+| `/health`, `/ready` | Framework health endpoints |
+| `/api/v1/users` | Your V1 handler |
+| `/`, `/login` | `with_frontend_routes`, if used |
+| everything else | Your fallback |
+
+Calling either method more than once keeps the last one. If you also set a
+fallback inside `with_frontend_routes`, the one passed to `with_fallback`
+wins — the two do not conflict.
+
+{% callout type="note" title="Versioning still applies" %}
+A fallback does not weaken the versioning guarantee. Your own API surface
+still has to go through `add_version`; the catch-all handles what your API
+deliberately does not claim.
+{% /callout %}
 
 ---
 
@@ -692,6 +777,22 @@ let app = Router::new().route("/users", get(handler));
 ServiceBuilder::new().with_routes(app).build();
 //                                  ^^^ ERROR: expected VersionedRoutes, found Router
 ```
+
+### Q: How do I write a reverse proxy or gateway on ServiceBuilder?
+
+Use `with_fallback_service`. Declare whatever routes the service handles
+itself through `add_version`, then forward everything else:
+
+```rust
+let routes = VersionedApiBuilder::new()
+    .add_version(ApiVersion::V1, |router| router.route("/paywall", post(charge)))
+    .with_fallback_service(upstream)  // catches every unmatched path
+    .build_routes();
+```
+
+This keeps the service on `ServiceBuilder`, so forwarded requests still get
+request-ID propagation, security headers, rate limiting, panic recovery, and
+audit wiring. See [Root-Level Catch-All](#root-level-catch-all).
 
 ### Q: How many versions should I maintain?
 

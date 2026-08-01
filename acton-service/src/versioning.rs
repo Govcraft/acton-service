@@ -347,6 +347,18 @@ pub fn extract_version_from_path(path: &str) -> Option<ApiVersion> {
         .and_then(ApiVersion::parse)
 }
 
+/// A deferred `Router::fallback` / `Router::fallback_service` call.
+///
+/// The handler or service is captured at the call site and applied once, in
+/// `build_routes`, after every other route is in place. Boxing it this way is
+/// what lets `with_fallback` and `with_fallback_service` share a single slot
+/// despite having incompatible generic bounds.
+type FallbackSlot<T> = Box<
+    dyn FnOnce(Router<crate::state::AppState<T>>) -> Router<crate::state::AppState<T>>
+        + Send
+        + Sync,
+>;
+
 /// Builder for creating versioned API routers with enforcement
 ///
 /// This builder ensures that all routes are versioned and provides a structured
@@ -391,6 +403,7 @@ where
     base_path: Option<String>,
     #[cfg(feature = "htmx")]
     frontend_routes: Option<Router<crate::state::AppState<T>>>,
+    fallback: Option<FallbackSlot<T>>,
 }
 
 impl Default for VersionedApiBuilder<()> {
@@ -421,6 +434,7 @@ impl VersionedApiBuilder<()> {
             base_path: None,
             #[cfg(feature = "htmx")]
             frontend_routes: None,
+            fallback: None,
         }
     }
 }
@@ -460,6 +474,7 @@ where
             base_path: None,
             #[cfg(feature = "htmx")]
             frontend_routes: None,
+            fallback: None,
         }
     }
 
@@ -610,6 +625,96 @@ where
         self
     }
 
+    /// Handle every request that matches no other route
+    ///
+    /// This is the root-level catch-all. Use it for a transparent reverse
+    /// proxy, a gateway that forwards what it does not itself serve, or simply
+    /// a custom 404 body. Unlike `with_frontend_routes`, it needs no feature
+    /// flags — a proxy has no frontend, and should not have to compile an HTML
+    /// templating stack to reach this slot.
+    ///
+    /// The fallback is installed after health routes, frontend routes, and all
+    /// versioned routes, so it never shadows them. It sees only paths that
+    /// matched nothing else.
+    ///
+    /// Calling this more than once keeps the last handler. If you also set a
+    /// fallback inside `with_frontend_routes` (`htmx` feature), this one wins.
+    ///
+    /// For a [`tower::Service`] rather than a handler — which is what an HTTP
+    /// client forwarding upstream usually is — see
+    /// [`with_fallback_service`](Self::with_fallback_service).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use acton_service::prelude::*;
+    ///
+    /// async fn not_found() -> impl IntoResponse {
+    ///     (StatusCode::NOT_FOUND, Json(json!({ "error": "no such route" })))
+    /// }
+    ///
+    /// let routes = VersionedApiBuilder::new()
+    ///     .with_base_path("/api")
+    ///     .add_version(ApiVersion::V1, |routes| {
+    ///         routes.route("/data", get(api_handler))
+    ///     })
+    ///     .with_fallback(not_found)
+    ///     .build_routes();
+    /// ```
+    pub fn with_fallback<H, Tp>(mut self, handler: H) -> Self
+    where
+        H: axum::handler::Handler<Tp, crate::state::AppState<T>>,
+        Tp: 'static,
+    {
+        self.fallback = Some(Box::new(move |router| router.fallback(handler)));
+        self
+    }
+
+    /// Handle every unmatched request with a [`tower::Service`]
+    ///
+    /// The service form of [`with_fallback`](Self::with_fallback), for when the
+    /// catch-all is something that already speaks `Service<Request>` — an HTTP
+    /// client forwarding to an upstream, a `ServeDir`, another `Router`.
+    ///
+    /// The same ordering rules apply: installed last, shadows nothing, and
+    /// takes precedence over any fallback set inside `with_frontend_routes`.
+    ///
+    /// # Example
+    ///
+    /// A transparent reverse proxy that forwards every unhandled path upstream
+    /// while keeping the framework's request-ID propagation, security headers,
+    /// rate limiting, and panic recovery:
+    ///
+    /// ```rust,ignore
+    /// use acton_service::prelude::*;
+    /// use tower::service_fn;
+    ///
+    /// let upstream = service_fn(move |req: Request| async move {
+    ///     // rewrite the authority, forward, return the upstream response
+    ///     forward_to_upstream(req).await
+    /// });
+    ///
+    /// let routes = VersionedApiBuilder::new()
+    ///     .add_version(ApiVersion::V1, |routes| {
+    ///         routes.route("/paywall", post(charge))
+    ///     })
+    ///     .with_fallback_service(upstream)
+    ///     .build_routes();
+    /// ```
+    pub fn with_fallback_service<S>(mut self, service: S) -> Self
+    where
+        S: tower::Service<Request, Error = std::convert::Infallible>
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+        S::Response: IntoResponse,
+        S::Future: Send + 'static,
+    {
+        self.fallback = Some(Box::new(move |router| router.fallback_service(service)));
+        self
+    }
+
     /// Build versioned routes (opaque VersionedRoutes type)
     ///
     /// This creates a `VersionedRoutes<T>` with all your versioned business routes
@@ -701,6 +806,15 @@ where
             };
 
             router = router.nest(&full_path, versioned);
+        }
+
+        // The root-level catch-all goes on last, once every real route is
+        // registered. Applying it here rather than merging a fallback-carrying
+        // router also sidesteps axum's "cannot merge two routers that both have
+        // a fallback" panic when `with_frontend_routes` set one too — this call
+        // simply replaces it.
+        if let Some(fallback) = self.fallback {
+            router = fallback(router);
         }
 
         crate::service_builder::VersionedRoutes::from_router_with_state(router)
@@ -923,5 +1037,183 @@ mod tests {
             .build_routes();
 
         // If we get here without panicking, the routes were built successfully
+    }
+
+    mod fallback {
+        use super::*;
+        use axum::body::Body;
+        use tower::ServiceExt as _;
+
+        /// Drive one request through a built router and report what came back.
+        ///
+        /// Construction-only assertions cannot tell a fallback that catches
+        /// everything from one that catches nothing, so every test here routes
+        /// a real request.
+        async fn get(
+            routes: crate::service_builder::VersionedRoutes<()>,
+            path: &str,
+        ) -> (StatusCode, String) {
+            let crate::service_builder::VersionedRoutes::WithState(router) = routes else {
+                panic!("build_routes always yields a stateful router");
+            };
+            let app = router.with_state(crate::state::AppState::<()>::default());
+
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .body(Body::empty())
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router is infallible");
+
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("body collects");
+            (status, String::from_utf8_lossy(&bytes).into_owned())
+        }
+
+        fn builder_with_api() -> VersionedApiBuilder<()> {
+            VersionedApiBuilder::new()
+                .with_base_path("/api")
+                .add_version(ApiVersion::V1, |routes| {
+                    routes.route("/data", axum::routing::get(|| async { "API V1" }))
+                })
+        }
+
+        #[tokio::test]
+        async fn unmatched_paths_reach_the_fallback() {
+            let routes = builder_with_api()
+                .with_fallback(|| async { "caught" })
+                .build_routes();
+
+            let (status, body) = get(routes, "/anything/at/all").await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body, "caught");
+        }
+
+        #[tokio::test]
+        async fn without_a_fallback_unmatched_paths_still_404() {
+            let routes = builder_with_api().build_routes();
+
+            let (status, _) = get(routes, "/anything/at/all").await;
+            assert_eq!(status, StatusCode::NOT_FOUND);
+        }
+
+        #[tokio::test]
+        async fn the_fallback_does_not_shadow_versioned_routes() {
+            let routes = builder_with_api()
+                .with_fallback(|| async { "caught" })
+                .build_routes();
+
+            let (status, body) = get(routes, "/api/v1/data").await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body, "API V1");
+        }
+
+        #[tokio::test]
+        async fn the_fallback_does_not_shadow_health_probes() {
+            let routes = builder_with_api()
+                .with_fallback(|| async { "caught" })
+                .build_routes();
+
+            let (status, body) = get(routes, "/health").await;
+            assert_eq!(status, StatusCode::OK);
+            assert_ne!(body, "caught");
+        }
+
+        #[tokio::test]
+        async fn a_fallback_service_catches_unmatched_paths() {
+            // The proxy shape: a tower::Service, not a handler.
+            let upstream = tower::service_fn(|_req: Request| async move {
+                Ok::<_, std::convert::Infallible>(Response::new(Body::from("upstream")))
+            });
+
+            let routes = builder_with_api()
+                .with_fallback_service(upstream)
+                .build_routes();
+
+            let (status, body) = get(routes, "/merchant/checkout").await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body, "upstream");
+        }
+
+        #[tokio::test]
+        async fn a_fallback_service_does_not_shadow_versioned_routes() {
+            let upstream = tower::service_fn(|_req: Request| async move {
+                Ok::<_, std::convert::Infallible>(Response::new(Body::from("upstream")))
+            });
+
+            let routes = builder_with_api()
+                .with_fallback_service(upstream)
+                .build_routes();
+
+            let (status, body) = get(routes, "/api/v1/data").await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body, "API V1");
+        }
+
+        #[tokio::test]
+        async fn the_last_fallback_wins() {
+            let routes = builder_with_api()
+                .with_fallback(|| async { "first" })
+                .with_fallback(|| async { "second" })
+                .build_routes();
+
+            let (_, body) = get(routes, "/unmatched").await;
+            assert_eq!(body, "second");
+        }
+
+        #[tokio::test]
+        async fn a_fallback_works_with_no_versions_registered() {
+            // A pure proxy registers no versioned routes at all.
+            let routes = VersionedApiBuilder::new()
+                .with_fallback(|| async { "proxied" })
+                .build_routes();
+
+            let (status, body) = get(routes, "/upstream/path").await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body, "proxied");
+        }
+
+        #[tokio::test]
+        #[cfg(feature = "htmx")]
+        async fn a_fallback_coexists_with_frontend_routes() {
+            let routes = builder_with_api()
+                .with_frontend_routes(|router| {
+                    router.route("/", axum::routing::get(|| async { "Home" }))
+                })
+                .with_fallback(|| async { "caught" })
+                .build_routes();
+
+            let (_, home) = get(routes, "/").await;
+            assert_eq!(home, "Home");
+
+            let routes = builder_with_api()
+                .with_frontend_routes(|router| {
+                    router.route("/", axum::routing::get(|| async { "Home" }))
+                })
+                .with_fallback(|| async { "caught" })
+                .build_routes();
+
+            let (_, other) = get(routes, "/somewhere-else").await;
+            assert_eq!(other, "caught");
+        }
+
+        #[tokio::test]
+        #[cfg(feature = "htmx")]
+        async fn with_fallback_overrides_a_frontend_fallback_without_panicking() {
+            // Merging two routers that both carry a fallback panics inside
+            // axum. Applying ours after the merge replaces theirs instead.
+            let routes = builder_with_api()
+                .with_frontend_routes(|router| router.fallback(|| async { "frontend" }))
+                .with_fallback(|| async { "explicit" })
+                .build_routes();
+
+            let (_, body) = get(routes, "/unmatched").await;
+            assert_eq!(body, "explicit");
+        }
     }
 }

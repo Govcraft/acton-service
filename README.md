@@ -858,6 +858,11 @@ Main changes:
 2. Use `ServiceBuilder` instead of `axum::serve()`
 3. Configuration loaded automatically (optional)
 
+An `axum` app with a root-level `.fallback(...)` — a reverse proxy, a gateway,
+a custom 404 — keeps it via `VersionedApiBuilder::with_fallback` (handler) or
+`with_fallback_service` (`tower::Service`). The catch-all is installed after
+every declared route, so it shadows none of them.
+
 ### From Actix-Web
 
 Similar handler patterns, different framework:
