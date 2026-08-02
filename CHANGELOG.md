@@ -7,6 +7,121 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.34.0] - 2026-08-02
+
+Closes every open issue on the tracker. The headline is mutual-TLS caller
+authorization (#109): until now `[tls].client_ca_path` decided whose
+certificates were *accepted* and nothing decided which of those callers
+could *proceed*, so every principal a fleet CA had ever issued to could
+reach every mTLS route of every peer. Alongside it, a root-level catch-all
+that no longer requires the `htmx` feature (#110), and fixes for three
+defects that were each invisible in their own way: a latency histogram that
+looked healthy while unable to distinguish a fast request from a slow one
+(#107), operator config mistakes reported as internal framework errors
+(#105), and a gRPC channel that could stall forever on a peer that connected
+and then went quiet (#103).
+
+`Error` is now `#[non_exhaustive]`, which is why this is 0.34.0.
+
+### Added
+
+- **caller_auth**: Transport-level admission control for mutual-TLS callers,
+  gated on `tls`. `CallerSan` names a caller from its leaf certificate's
+  `subjectAltName` (DNS or URI, byte-exact within its kind; no wildcard,
+  suffix or subdomain matching, and a wildcard SAN inside a certificate is
+  dropped rather than matched). `CallerAllowlist` cannot be constructed
+  empty, because an allowlist admitting everyone is how this control fails
+  open. `authorize(policy, leaf_der, bearer_present)` is the whole decision
+  as a pure function naming no transport type, so HTTP and gRPC share it.
+  Configured under `[caller_auth]` with `mode`, `allowlist` and
+  `public_paths`.
+- **caller_auth**: `CallerAuthMode` of `bearer` | `mtls` | `mtls-or-bearer`.
+  The third exists so a fleet can cut over caller-by-caller: a caller with
+  no certificate yet, or one not yet allowlisted, keeps working on its
+  token. Under that mode an allowlisted certificate waives the token
+  requirement for that request; under `mtls` the certificate is an
+  *additional* requirement and a configured token layer still demands a
+  valid token.
+- **caller_auth**: Configuration that would look like protection without
+  being it is refused at startup rather than ignored: a certificate mode on
+  a listener with no `client_ca_path` (`[tls]` and `[grpc.tls]` are checked
+  separately and the error names which one to fix), an `allowlist` under
+  `mode = "bearer"` where nothing would consult it, an empty `allowlist`
+  under a certificate mode, and unknown keys in the section.
+- **routing**: `VersionedApiBuilder::with_fallback` and
+  `with_fallback_service` — a root-level catch-all with no feature gate. The
+  only prior route to one was `with_frontend_routes`, which is
+  `#[cfg(feature = "htmx")]`, so a proxy with no frontend and no templates
+  had to compile `axum-htmx` to attach a catch-all or drop off
+  `ServiceBuilder` entirely and lose the whole middleware stack. Two methods
+  because a transparent proxy forwards to a `tower::Service`, not an axum
+  handler. Applied after health, frontend and versioned routes, so the
+  catch-all shadows nothing.
+- **client-tls**: `ClientIdentityConfig::connect_timeout_secs` and the
+  exported `DEFAULT_CLIENT_CONNECT_TIMEOUT` (30s), mirroring the listener's
+  `handshake_timeout_secs`. One budget spans both the TCP connect and the
+  handshake rather than one each, since a stall can sit in either and two
+  independent bounds would let a peer burn both in sequence. A configured
+  `0` resolves to the default rather than failing every connection.
+- **error**: `Error::Tls(String)`, displayed as
+  `TLS configuration error: {0}`.
+
+### Changed
+
+- **Breaking**: `Error` is now `#[non_exhaustive]`. Adding the `Tls` variant
+  to a 52-variant exhaustive enum is itself breaking, so this is the free
+  window to make every future variant additive.
+- **observability**: Histograms declared with `.with_unit("s")` are now
+  bucketed with seconds-scaled boundaries via a metric view. This enables
+  `opentelemetry_sdk`'s `spec_unstable_metrics_views` feature, the only
+  route to registering a view; the `unstable` marker is the OTel Rust SDK's
+  flag for spec features not yet stabilized, so an SDK upgrade could move
+  this API.
+- **client-tls**: The `grpc_channel` docs no longer tell callers to wrap
+  their first RPC in `tokio::time::timeout`. That was a workaround for the
+  missing bound this release adds.
+- **ci**: Clippy now runs on ten feature combinations rather than two. The
+  `audit-storage` matrix gained a lint step, and a new lint-only
+  `feature-combos` job covers seven combinations no test job compiles
+  (`minimal`, `tls-no-grpc`, `grpc-no-tls`, `tokens`, `frontend`, `graphql`,
+  `audit-nodb`). Lints in cfg-gated code were previously unreachable by CI,
+  and `--all-features` is not a substitute because the crate's
+  mutual-exclusion `compile_error!` guards reject it by design.
+
+### Fixed
+
+- **observability**: Seconds-valued histograms were bucketed against the
+  SDK's default boundaries, `[0, 5, 10, 25, …, 7500, 10000]`, which are
+  chosen for milliseconds. Every observation under five seconds landed in
+  the first bucket. Nothing warned, and the exposition looked well-formed.
+  The new boundaries are the OTel semantic-convention set for
+  `http.server.request.duration` extended downward with two sub-5ms values,
+  not replaced, so existing dashboards and alerts still line up. The view
+  selects on the instrument's *unit* rather than its name, so any histogram
+  following the semantic conventions is bucketed correctly without its
+  author knowing the view exists.
+- **tls**: Boot-time TLS configuration failures were wrapped in
+  `Error::Internal`, whose `Display` is `Internal server error: {0}`. A bad
+  path or an unparseable PEM told an operator to suspect the framework
+  instead of their own `cert_path`. 27 construction sites now yield
+  `Error::Tls`: 13 in `tls.rs`, 14 in `client_tls.rs` for outbound identity
+  material. Runtime and OS faults stay `Internal`. HTTP mapping is
+  unchanged at 500, with the operator detail staying in the log rather than
+  going out on the wire.
+- **client-tls**: `grpc_channel` had no connect or handshake bound. #97
+  switched it to `Channel::new` to bypass tonic's scheme-inspecting
+  connector wrapper, but that wrapper is also where tonic applies
+  `Endpoint::connect_timeout`, so the setting was silently dropped and tonic
+  exposes no getter to read it back. A peer that completed the TCP connect
+  and then stalled the handshake held the attempt open indefinitely.
+- **client-tls**: The `tls` field and `tls_config_with_alpn` were ungated
+  though their only non-test consumer is `#[cfg(feature = "grpc")]`,
+  producing dead-code warnings under `tls`-without-`grpc`.
+- **audit**: `let mut kinds` in `event.rs` where nothing extends it unless
+  `login-lockout` or `accounts` is enabled.
+- **docs**: Two unresolved rustdoc links in `checks.rs` pointing at
+  `crate::service` instead of `crate::service_builder`.
+
 ## [acton-service-v0.33.0] - 2026-07-24
 
 A healthy dependency can now speak. `CheckOutcome::Ready` carries no
