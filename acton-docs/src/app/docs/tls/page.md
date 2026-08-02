@@ -331,6 +331,36 @@ silently ignoring them — a misspelled field like `reload_interval_sec`
 certificate rotation.
 {% /callout %}
 
+## Outbound connect timeout
+
+The handshake timeout above bounds connections this service *accepts*. The
+mirror image, for connections it *makes*, is `connect_timeout_secs` on
+`ClientIdentityConfig`:
+
+```toml
+[client_identity]
+enabled = true
+cert_path = "./certs/client.pem"
+key_path = "./certs/client-key.pem"
+root_ca_path = "./certs/peer-ca.pem"
+connect_timeout_secs = 30
+```
+
+One budget spans both the TCP connect and the TLS handshake, not one each. A
+stall can sit in either phase, and two independent bounds would let a peer
+burn both in sequence.
+
+Omit the field for the built-in default of 30 seconds
+(`client_tls::DEFAULT_CLIENT_CONNECT_TIMEOUT`). Unlike the listener's
+`handshake_timeout_secs`, a configured `0` resolves to the default rather than
+being rejected: `[client_identity]` is deserialized per peer by your code, not
+by the framework `Config`, so there is no startup hook to refuse it, and "no
+override" is the only reading under which the channel still works.
+
+The default is deliberately generous. It exists to stop an indefinite stall,
+not to enforce latency — a per-RPC deadline is still the `Endpoint`'s
+`timeout`.
+
 ## Related
 
 - [Feature Flags](/docs/feature-flags#tls) — what the `tls` feature enables, including outbound mutual TLS

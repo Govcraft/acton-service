@@ -257,6 +257,37 @@ scrape_configs:
 `/metrics` is unauthenticated, like `/health`. It exposes route names, traffic volumes, and latency distributions — no request payloads or secrets — but if that surface matters in your deployment, restrict access at the network layer. The route is excluded from audit logging by default.
 {% /callout %}
 
+### Histogram Bucket Boundaries
+
+Declare a duration histogram with the semantic-convention unit and it is bucketed in seconds automatically:
+
+```rust
+use acton_service::observability::get_meter;
+
+if let Some(meter) = get_meter() {
+    let histogram = meter
+        .f64_histogram("db.client.operation.duration")
+        .with_unit("s")      // <- this is what selects the seconds boundaries
+        .build();
+    histogram.record(elapsed.as_secs_f64(), &[]);
+}
+```
+
+The framework registers a metric view that selects on the instrument's **unit**, not its name, so any histogram following the OpenTelemetry semantic conventions gets the right boundaries without wiring anything up:
+
+```
+0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1,
+0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0
+```
+
+This is the semconv set for `http.server.request.duration`, extended downward with two sub-5ms boundaries rather than replaced, so dashboards and alerts written against the standard values still line up.
+
+{% callout type="warning" title="Declare the unit" %}
+A histogram with no unit, or one declared in milliseconds, keeps the SDK's default boundaries — `[0, 5, 10, 25, …, 7500, 10000]`, which are chosen for milliseconds. Feed those seconds-valued observations and every request under five seconds lands in the first bucket. Nothing warns, and the exposition still looks well-formed, so the histogram appears healthy while being unable to tell a fast request from a slow one.
+{% /callout %}
+
+`MetricsConfig::latency_buckets_ms` is unrelated: it configures the built-in HTTP middleware's own instruments, not histograms you create through `get_meter()`.
+
 ---
 
 ## Structured Logging
