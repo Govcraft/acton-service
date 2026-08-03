@@ -37,6 +37,20 @@ key_path = "./certs/server-key.pem"    # PEM-encoded private key
 whose certificate or key cannot be loaded is a hard failure at startup — the
 service refuses to bind rather than silently falling back to plaintext.
 
+### Negotiated protocols
+
+The listener advertises `h2` and `http/1.1` in ALPN and serves both, so a
+client picks whichever it prefers: `curl` at its defaults and every browser
+take h2, and a client that offers no ALPN at all still works because the
+server sniffs the protocol. Nothing configures this and nothing needs to.
+
+Before 0.34.1 the HTTP listener advertised `h2` without being able to serve
+it, so an ALPN-honouring client had its connection dropped mid-request with
+no server-side log line, and only clients that chose `http/1.1` worked. If
+you are on 0.34.0 or earlier and `curl --http1.1` succeeds against a
+verification step where plain `curl` fails, that is this defect and not your
+certificates. Upgrade; there is no configuration workaround.
+
 ## Mutual TLS (verifying client certificates)
 
 Point `client_ca_path` at a PEM bundle of CA certificates to require

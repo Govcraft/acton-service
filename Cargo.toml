@@ -7,7 +7,7 @@ default-members = ["acton-service", "acton-cli"]
 resolver = "2"
 
 [workspace.package]
-version = "0.34.0"
+version = "0.34.1"
 edition = "2021"
 authors = ["roland@govcraft.ai"]
 license = "MIT"
@@ -18,7 +18,12 @@ tokio = { version = "1.48.0", features = ["net", "rt", "rt-multi-thread", "signa
 tokio-stream = { version = "0.1", features = ["net"] }
 
 # HTTP framework
-axum = { version = "0.8.6", features = ["macros", "ws"] }
+# `http2` is not in axum's default feature set and is not optional here: the TLS
+# listener advertises `h2` in ALPN (see `tls::load_server_config`), so the server
+# `axum::serve` builds must be able to answer a client that takes the offer.
+# Without it every ALPN-honouring client — curl at its defaults, browsers, Go's
+# `net/http` — negotiates h2 and has its connection dropped with nothing logged.
+axum = { version = "0.8.6", features = ["http2", "macros", "ws"] }
 tower = { version = "0.5.2", features = ["util", "timeout", "limit", "buffer", "make"] }
 tower-http = { version = "0.6.6", features = [
     "trace",

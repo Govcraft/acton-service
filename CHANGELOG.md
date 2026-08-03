@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.34.1] - 2026-08-03
+
+A TLS listener compiled without the `grpc` feature dropped every HTTP/2
+client on the floor and logged nothing about it (#120). The listener
+advertises `h2` in ALPN, but the server behind it was built without HTTP/2
+support, so any ALPN-honouring client — curl at its defaults, browsers, Go's
+`net/http` — took the offer, sent the HTTP/2 connection preface, and had its
+connection closed before a span ever opened. Nothing appeared in the server
+log at any level, and the client-side error looks like a TLS fault, so an
+operator following an mTLS runbook reads it as "my certificates are wrong".
+
+### Fixed
+
+- **tls**: Enable axum's `http2` feature so the HTTP listener serves the
+  protocol it advertises. `http2` is not in axum's default set, and it is
+  what turns on `hyper-util/http2` beneath `axum::serve`; without it that
+  auto server is HTTP/1.1-only while `load_server_config` offers
+  `[h2, http/1.1]`. Services compiling `grpc` were never affected — tonic
+  enables the same hyper-util feature transitively — which is what confined
+  the defect to TLS-without-gRPC builds and hid it from the `full` test legs.
+  `reqwest` without its own `http2` feature negotiates `http/1.1` and kept
+  working throughout, which is why no existing test saw it.
+- **http**: A side effect worth knowing about: the plaintext listener now also
+  answers an h2c client that connects with prior knowledge, because the same
+  hyper-util auto server sniffs the preface whether or not TLS is in front of
+  it. Nothing that worked before behaves differently — HTTP/1.1 clients are
+  untouched, and there is no h2c upgrade dance, only prior knowledge.
+
+### Added
+
+- **tests**: `tls_alpn_http2.rs` drives the TLS listener with a hand-rolled
+  h2 client over `tokio-rustls` and requires the connection preface to be
+  answered with a SETTINGS frame, alongside an HTTP/1.1 leg that must keep
+  working. It deliberately adds no HTTP client dependency: anything that
+  speaks h2 turns `hyper-util/http2` on for the build under test and would
+  mask the very regression it exists to catch. CI runs it on the
+  `tls-no-grpc` combination, which is now the one feature leg that runs
+  tests as well as clippy.
+
 ## [acton-service-v0.34.0] - 2026-08-02
 
 Closes every open issue on the tracker. The headline is mutual-TLS caller
