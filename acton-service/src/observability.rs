@@ -27,9 +27,7 @@ use {
 #[cfg(feature = "_metrics")]
 use {
     opentelemetry::metrics::MeterProvider as _,
-    opentelemetry_sdk::metrics::{
-        Aggregation, Instrument, InstrumentKind, SdkMeterProvider, Stream,
-    },
+    opentelemetry_sdk::metrics::{Aggregation, Instrument, InstrumentKind, SdkMeterProvider, Stream},
 };
 
 #[cfg(feature = "otel-metrics")]
@@ -747,7 +745,8 @@ mod tests {
         /// Record `values` into a histogram declared with `unit`, then return
         /// the `le` upper bounds Prometheus reports for it.
         fn scrape_bounds(name: &'static str, unit: &'static str, values: &[f64]) -> Vec<f64> {
-            let (reader, registry) = prometheus_metric_reader().expect("prometheus reader builds");
+            let (reader, registry) =
+                prometheus_metric_reader().expect("prometheus reader builds");
 
             // A local provider, never installed globally: these tests must not
             // race the process-wide provider other tests may have set.
@@ -756,11 +755,7 @@ mod tests {
                 .with_view(seconds_histogram_view)
                 .build();
 
-            let histogram = provider
-                .meter("test")
-                .f64_histogram(name)
-                .with_unit(unit)
-                .build();
+            let histogram = provider.meter("test").f64_histogram(name).with_unit(unit).build();
             for value in values {
                 histogram.record(*value, &[]);
             }

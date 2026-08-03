@@ -290,10 +290,7 @@ mod tests {
         let sa = peer([192, 0, 2, 9], 12345);
 
         let ctx = RequestContext::resolve(&headers, Some(&sa), false);
-        assert_eq!(
-            ctx.ip.map(|ip| ip.to_string()).as_deref(),
-            Some("192.0.2.9")
-        );
+        assert_eq!(ctx.ip.map(|ip| ip.to_string()).as_deref(), Some("192.0.2.9"));
     }
 
     /// Captures the context observed by a downstream handler.

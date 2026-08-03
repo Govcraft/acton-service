@@ -296,9 +296,7 @@ mod tests {
             },
             method: params.get("method").cloned(),
             path: params.get("path").cloned(),
-            status_code: params
-                .get("status")
-                .map(|s| s.parse().expect("status parses")),
+            status_code: params.get("status").map(|s| s.parse().expect("status parses")),
             duration_ms: params
                 .get("duration_ms")
                 .map(|s| s.parse().expect("duration parses")),
@@ -338,13 +336,9 @@ mod tests {
                 subject: Some("operator-1".to_string()),
                 request_id: Some(format!("req_{index}")),
             })
-            .with_http(
-                "POST".to_string(),
-                "/admin/x".to_string(),
-                Some(200),
-                Some(12),
-            );
-            event.metadata = Some(serde_json::json!({"roles": ["auditor"], "decision": "permit"}));
+            .with_http("POST".to_string(), "/admin/x".to_string(), Some(200), Some(12));
+            event.metadata =
+                Some(serde_json::json!({"roles": ["auditor"], "decision": "permit"}));
             let sealed = chain.seal(event);
             lines.push(sender.format_rfc5424(&sealed));
         }
