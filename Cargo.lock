@@ -44,9 +44,9 @@ dependencies = [
 
 [[package]]
 name = "acton-macro"
-version = "8.1.1"
+version = "9.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59e38f7952c657ecc04cffdce225eb5771b9d03588372bcc3067e2a8605a763f"
+checksum = "021cb5de9e92528317235055767a188f0c7e80dd72ef53c18d6bdb3c67bc7fbe"
 dependencies = [
  "quote",
  "syn 2.0.117",
@@ -54,9 +54,9 @@ dependencies = [
 
 [[package]]
 name = "acton-reactive"
-version = "8.1.1"
+version = "9.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85a6ba0a28db7345767ff2a3c0246a69ea8098e56052581e78bcee8858f6a410"
+checksum = "79cd74fcaa1fe56d0b53972661592d8aa9727095748832f5c6ce1d57c8a0600a"
 dependencies = [
  "acton-ern",
  "acton-macro",
@@ -7955,9 +7955,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.52.3"
+version = "1.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fc7f01b389ac15039e4dc9531aa973a135d7a4135281b12d7c1bc79fd57fffe"
+checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
 dependencies = [
  "bytes",
  "libc",

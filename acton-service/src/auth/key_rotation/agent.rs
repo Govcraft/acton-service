@@ -16,6 +16,7 @@
 //! rotation and retirement events are emitted to the audit trail.
 
 use acton_reactive::prelude::*;
+use tokio_util::sync::CancellationToken;
 
 use super::config::KeyRotationConfig;
 use super::manager::KeyManager;
@@ -39,6 +40,8 @@ pub struct KeyRotationAgentState {
     /// Audit logger for emitting rotation events (requires `audit` feature)
     #[cfg(feature = "audit")]
     pub audit_logger: Option<AuditLogger>,
+    /// Stops the periodic timer task when the agent shuts down
+    pub(crate) cancel_token: Option<CancellationToken>,
 }
 
 impl std::fmt::Debug for KeyRotationAgentState {
@@ -92,97 +95,135 @@ impl KeyRotationAgent {
         let mut agent = runtime.new_actor::<KeyRotationAgentState>();
 
         // Populate state
-        agent.model.config = Some(config.clone());
-        agent.model.key_manager = Some(key_manager.clone());
+        let interval_secs = config.check_interval_secs;
+        agent.model.config = Some(config);
+        agent.model.key_manager = Some(key_manager);
+        agent.model.cancel_token = Some(CancellationToken::new());
         #[cfg(feature = "audit")]
         {
-            agent.model.audit_logger = audit_logger.clone();
+            agent.model.audit_logger = audit_logger;
         }
 
         // ------------------------------------------------------------------
         // Handler: CheckRotation (manual trigger, same as timer tick)
         // ------------------------------------------------------------------
+        //
+        // `mutate_on` rather than `act_on`, deliberately. The handler reads the
+        // model but never writes it, so the state-access rule would ordinarily
+        // point at `act_on`. A rotation is a read-modify-write over the key
+        // store, though, and `mutate_on` is what guarantees only one runs at a
+        // time: its future is awaited inline on the message loop, so a second
+        // check waits for the first to finish rather than racing it. `act_on`
+        // would drain both concurrently and two ticks could rotate twice.
         agent.mutate_on::<CheckRotation>(|actor, _envelope| {
             let km = actor.model.key_manager.clone();
             let cfg = actor.model.config.clone();
             #[cfg(feature = "audit")]
             let audit = actor.model.audit_logger.clone();
 
-            tokio::spawn(async move {
-                if let (Some(km), Some(cfg)) = (km, cfg) {
-                    perform_rotation_check(
-                        &km,
-                        &cfg,
-                        false,
-                        #[cfg(feature = "audit")]
-                        audit.as_ref(),
-                    )
-                    .await;
-                }
-            });
-
-            Reply::ready()
+            Reply::pending(async move {
+                // The spawn is a type adapter, not a detachment: `KeyStorage`'s
+                // `#[async_trait]` methods return `Send`-but-not-`Sync` futures
+                // and handlers require `Send + Sync`, so the work is moved onto
+                // a task whose `JoinHandle` is both. Awaiting that handle is
+                // what keeps the rotation inside the actor's lifecycle, so
+                // shutdown drains it instead of racing it.
+                let _ = tokio::spawn(async move {
+                    if let (Some(km), Some(cfg)) = (km, cfg) {
+                        perform_rotation_check(
+                            &km,
+                            &cfg,
+                            false,
+                            #[cfg(feature = "audit")]
+                            audit.as_ref(),
+                        )
+                        .await;
+                    }
+                })
+                .await;
+            })
         });
 
         // ------------------------------------------------------------------
         // Handler: ForceRotation (force regardless of key age)
         // ------------------------------------------------------------------
+        // Same handler choice, and for the same reason, as `CheckRotation`.
         agent.mutate_on::<ForceRotation>(|actor, _envelope| {
             let km = actor.model.key_manager.clone();
             let cfg = actor.model.config.clone();
             #[cfg(feature = "audit")]
             let audit = actor.model.audit_logger.clone();
 
+            Reply::pending(async move {
+                // Spawned and awaited for the same `Sync` reason as `CheckRotation`.
+                let _ = tokio::spawn(async move {
+                    if let (Some(km), Some(cfg)) = (km, cfg) {
+                        perform_rotation_check(
+                            &km,
+                            &cfg,
+                            true,
+                            #[cfg(feature = "audit")]
+                            audit.as_ref(),
+                        )
+                        .await;
+                    }
+                })
+                .await;
+            })
+        });
+
+        // ------------------------------------------------------------------
+        // after_start: drive the periodic check from a cancellable ticker
+        // ------------------------------------------------------------------
+        //
+        // The ticker only sends `CheckRotation`; the work itself happens in the
+        // handler above. That keeps the timer, the manual trigger, and the
+        // forced rotation on one serialized path instead of three that can
+        // overlap, and it means the rotation logic is reachable from a test
+        // without waiting for a timer.
+        agent.after_start(move |agent| {
+            let cancel_token = agent.model.cancel_token.clone();
+            let self_handle = agent.handle().clone();
+
             tokio::spawn(async move {
-                if let (Some(km), Some(cfg)) = (km, cfg) {
-                    perform_rotation_check(
-                        &km,
-                        &cfg,
-                        true,
-                        #[cfg(feature = "audit")]
-                        audit.as_ref(),
-                    )
-                    .await;
+                let period = std::time::Duration::from_secs(interval_secs);
+                let mut ticker = tokio::time::interval(period);
+                // Skip the first immediate tick
+                ticker.tick().await;
+
+                loop {
+                    tokio::select! {
+                        biased;
+
+                        // Cancellation branch, triggered by before_stop. Without
+                        // it this task outlives shutdown holding a KeyManager.
+                        () = async {
+                            if let Some(ref token) = cancel_token {
+                                token.cancelled().await;
+                            } else {
+                                std::future::pending::<()>().await;
+                            }
+                        } => {
+                            tracing::debug!("Key rotation ticker stopped");
+                            break;
+                        }
+
+                        _ = ticker.tick() => {
+                            tracing::debug!("Key rotation agent: periodic check");
+                            self_handle.send(CheckRotation).await;
+                        }
+                    }
                 }
             });
 
             Reply::ready()
         });
 
-        // ------------------------------------------------------------------
-        // after_start: spawn periodic timer task
-        // ------------------------------------------------------------------
-        let start_km = key_manager.clone();
-        let start_config = config.clone();
-        #[cfg(feature = "audit")]
-        let start_audit = audit_logger.clone();
-
-        agent.after_start(move |_agent| {
-            let km = start_km.clone();
-            let cfg = start_config.clone();
-            #[cfg(feature = "audit")]
-            let audit = start_audit.clone();
-
-            tokio::spawn(async move {
-                let period = std::time::Duration::from_secs(cfg.check_interval_secs);
-                let mut interval = tokio::time::interval(period);
-                // Skip the first immediate tick
-                interval.tick().await;
-
-                loop {
-                    interval.tick().await;
-                    tracing::debug!("Key rotation agent: periodic check");
-                    perform_rotation_check(
-                        &km,
-                        &cfg,
-                        false,
-                        #[cfg(feature = "audit")]
-                        audit.as_ref(),
-                    )
-                    .await;
-                }
-            });
-
+        // Stop the ticker before the actor goes away.
+        agent.before_stop(|agent| {
+            if let Some(ref token) = agent.model.cancel_token {
+                token.cancel();
+            }
             Reply::ready()
         });
 

@@ -42,6 +42,8 @@ pub struct AuditAgentState {
     pub(crate) pending: Vec<AuditEvent>,
     /// Channel to the sequential writer task that persists sealed events
     pub(crate) writer: Option<tokio::sync::mpsc::UnboundedSender<AuditEvent>>,
+    /// Stops the periodic retention-cleanup ticker when the agent shuts down
+    pub(crate) cancel_token: Option<tokio_util::sync::CancellationToken>,
 }
 
 // Manual Debug impl since AuditChain and dyn AuditStorage don't impl Debug
@@ -141,6 +143,7 @@ impl AuditAgent {
         agent.model.storage = storage;
         agent.model.syslog = syslog;
         agent.model.failure_tracker = failure_tracker;
+        agent.model.cancel_token = Some(tokio_util::sync::CancellationToken::new());
         agent.model.writer = Some(spawn_writer_task(
             agent.model.storage.clone(),
             agent.model.syslog.clone(),
@@ -192,19 +195,30 @@ impl AuditAgent {
         });
 
         // Handle retention cleanup triggers
+        //
+        // `mutate_on` keeps cleanups serialized: a cycle archives and purges in
+        // batches, and two overlapping cycles would compete over the same rows.
+        // The inline await that `mutate_on` gives its future is what enforces
+        // that, and it also means shutdown drains a cleanup in progress rather
+        // than abandoning it half-done.
         agent.mutate_on::<CleanupTrigger>(|agent, _envelope| {
             let config = agent.model.config.clone();
             let storage = agent.model.storage.clone();
 
-            tokio::spawn(async move {
-                if let (Some(config), Some(storage)) = (config, storage) {
-                    if let Err(e) = run_cleanup(&config, storage.as_ref()).await {
-                        tracing::error!("Audit retention cleanup failed: {}", e);
+            Reply::pending(async move {
+                // Spawned only to cross the `Sync` boundary: `AuditStorage`'s
+                // `#[async_trait]` futures are `Send` but not `Sync`, and
+                // handler futures must be both. The `JoinHandle` is `Sync`, and
+                // awaiting it keeps the work inside the actor's lifecycle.
+                let _ = tokio::spawn(async move {
+                    if let (Some(config), Some(storage)) = (config, storage) {
+                        if let Err(e) = run_cleanup(&config, storage.as_ref()).await {
+                            tracing::error!("Audit retention cleanup failed: {}", e);
+                        }
                     }
-                }
-            });
-
-            Reply::ready()
+                })
+                .await;
+            })
         });
 
         // Load chain state from storage on startup.
@@ -267,6 +281,15 @@ impl AuditAgent {
             Reply::ready()
         });
 
+        // Stop the retention ticker before the actor goes away.
+        agent.before_stop(|agent| {
+            if let Some(ref token) = agent.model.cancel_token {
+                token.cancel();
+            }
+            Reply::ready()
+        });
+
+        let cleanup_token = agent.model.cancel_token.clone();
         let handle = agent.start().await;
 
         // Start periodic cleanup if retention is configured
@@ -275,13 +298,31 @@ impl AuditAgent {
             let interval_hours = cleanup_interval_hours;
             tokio::spawn(async move {
                 let period = std::time::Duration::from_secs(interval_hours as u64 * 3600);
-                let mut interval = tokio::time::interval(period);
+                let mut ticker = tokio::time::interval(period);
                 // Skip the first immediate tick
-                interval.tick().await;
+                ticker.tick().await;
                 loop {
-                    interval.tick().await;
-                    tracing::debug!("Triggering audit retention cleanup");
-                    cleanup_handle.send(CleanupTrigger).await;
+                    tokio::select! {
+                        biased;
+
+                        // Without this branch the ticker outlives shutdown,
+                        // holding a handle to a stopped actor forever.
+                        () = async {
+                            if let Some(ref token) = cleanup_token {
+                                token.cancelled().await;
+                            } else {
+                                std::future::pending::<()>().await;
+                            }
+                        } => {
+                            tracing::debug!("Audit retention ticker stopped");
+                            break;
+                        }
+
+                        _ = ticker.tick() => {
+                            tracing::debug!("Triggering audit retention cleanup");
+                            cleanup_handle.send(CleanupTrigger).await;
+                        }
+                    }
                 }
             });
         }

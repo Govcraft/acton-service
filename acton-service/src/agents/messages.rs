@@ -6,6 +6,8 @@
 //! All messages derive `Clone` and `Debug` to satisfy the `ActonMessage` trait
 //! requirements via blanket implementation.
 
+use acton_reactive::prelude::Request;
+
 /// Health status of a pool
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum HealthStatus {
@@ -165,4 +167,20 @@ pub struct TaskStatusResponse {
     pub task_id: String,
     /// Current status of the task
     pub status: super::background_worker::TaskStatus,
+}
+
+/// Lets callers read a single task's status with
+/// [`ask`](acton_reactive::prelude::ActorHandleInterface::ask):
+///
+/// ```rust,ignore
+/// let response = worker.handle().ask(GetTaskStatus { task_id: "job".into() }).await?;
+/// ```
+impl Request for GetTaskStatus {
+    type Response = TaskStatusResponse;
+}
+
+/// Lets callers read every tracked task's status with
+/// [`ask`](acton_reactive::prelude::ActorHandleInterface::ask).
+impl Request for GetAllTaskStatuses {
+    type Response = Vec<TaskStatusResponse>;
 }

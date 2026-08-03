@@ -5,6 +5,7 @@
 
 use super::handler::ConnectionId;
 use super::rooms::{RoomId, RoomMember};
+use acton_reactive::prelude::Request;
 use axum::extract::ws::Message;
 
 /// Request to join a room
@@ -128,6 +129,19 @@ pub struct RoomInfoResponse {
     pub member_count: usize,
     /// Whether the room exists
     pub exists: bool,
+}
+
+/// Lets callers outside the actor system read room state with
+/// [`ask`](acton_reactive::prelude::ActorHandleInterface::ask):
+///
+/// ```rust,ignore
+/// let info = room_manager.ask(GetRoomInfo::new("lobby")).await?;
+/// ```
+///
+/// Without this the room manager's `GetRoomInfo` handler can only reply into
+/// another actor's inbox, which leaves HTTP handlers no way to read the answer.
+impl Request for GetRoomInfo {
+    type Response = RoomInfoResponse;
 }
 
 #[cfg(test)]
