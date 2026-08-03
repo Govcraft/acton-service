@@ -6,6 +6,8 @@
 //! All messages derive `Clone` and `Debug` to satisfy the `ActonMessage` trait
 //! requirements via blanket implementation.
 
+use acton_reactive::prelude::Request;
+
 /// Health status of a pool
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum HealthStatus {
@@ -38,6 +40,33 @@ pub struct ComponentHealth {
     pub status: HealthStatus,
     /// Status message
     pub message: String,
+}
+
+/// Ask a pool agent for its current connection health
+///
+/// Answers with whatever the agent knows right now, which for a pool that is
+/// still dialling is [`HealthStatus::Connecting`]. Use
+/// [`WaitForPoolReady`] to wait for the outcome instead of sampling it.
+#[derive(Clone, Debug, Default)]
+pub struct GetPoolHealth;
+
+impl Request for GetPoolHealth {
+    type Response = ComponentHealth;
+}
+
+/// Ask a pool agent to answer once its first connection attempt has settled
+///
+/// Pool agents dial on a spawned task and message themselves with the result,
+/// so that result is not in the mailbox yet when `spawn` returns — a plain
+/// [`GetPoolHealth`] ask right after startup races it and reports
+/// [`HealthStatus::Connecting`]. This request is parked by the agent until the
+/// attempt succeeds or fails, then answered with the resulting health. That
+/// makes "wait until the pool is up" a barrier rather than a guessed duration.
+#[derive(Clone, Debug, Default)]
+pub struct WaitForPoolReady;
+
+impl Request for WaitForPoolReady {
+    type Response = ComponentHealth;
 }
 
 // =============================================================================
@@ -140,10 +169,40 @@ pub(crate) struct ClickHouseClientConnectionFailed {
 // Background Worker Agent messages
 // =============================================================================
 
+/// Internal message: a task has been accepted and should be tracked
+///
+/// Sent before the task is spawned so the agent can never receive a
+/// [`TaskCompleted`] for an ID it has not registered.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RegisterTask {
+    /// The task ID being registered
+    pub task_id: String,
+    /// Token that cancels this task specifically
+    pub cancellation_token: tokio_util::sync::CancellationToken,
+}
+
+/// Internal message: a task reached a terminal state
+///
+/// Sent by the spawned task itself, so status has exactly one writer.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct TaskCompleted {
+    /// The task ID that finished
+    pub task_id: String,
+    /// The status it finished in
+    pub status: super::background_worker::TaskStatus,
+}
+
 /// Message to cancel a running background task
 #[derive(Clone, Debug, Default)]
 pub struct CancelTask {
     /// The task ID to cancel
+    pub task_id: String,
+}
+
+/// Message asking to be told when a task reaches a terminal state
+#[derive(Clone, Debug, Default)]
+pub struct WaitForTask {
+    /// The task ID to wait on
     pub task_id: String,
 }
 
@@ -158,6 +217,10 @@ pub struct GetTaskStatus {
 #[derive(Clone, Debug, Default)]
 pub struct GetAllTaskStatuses;
 
+/// Message asking the worker to drop records for tasks that have finished
+#[derive(Clone, Debug, Default)]
+pub struct CleanupFinishedTasks;
+
 /// Response containing task status information
 #[derive(Clone, Debug, Default)]
 pub struct TaskStatusResponse {
@@ -165,4 +228,34 @@ pub struct TaskStatusResponse {
     pub task_id: String,
     /// Current status of the task
     pub status: super::background_worker::TaskStatus,
+}
+
+/// Lets callers read a single task's status with
+/// [`ask`](acton_reactive::prelude::ActorHandleInterface::ask). `None` means no
+/// such task is tracked, which is distinct from a task sitting in
+/// [`TaskStatus::Pending`](super::background_worker::TaskStatus::Pending).
+///
+/// ```rust,ignore
+/// let response = worker.handle().ask(GetTaskStatus { task_id: "job".into() }).await?;
+/// ```
+impl Request for GetTaskStatus {
+    type Response = Option<TaskStatusResponse>;
+}
+
+/// Lets callers read every tracked task's status with
+/// [`ask`](acton_reactive::prelude::ActorHandleInterface::ask).
+impl Request for GetAllTaskStatuses {
+    type Response = Vec<TaskStatusResponse>;
+}
+
+/// Resolves once the named task reaches a terminal state, or immediately with
+/// `None` if no such task is tracked. The agent parks the reply envelope until
+/// the task reports in, so callers wait rather than poll.
+impl Request for WaitForTask {
+    type Response = Option<TaskStatusResponse>;
+}
+
+/// Answers with the number of finished task records dropped.
+impl Request for CleanupFinishedTasks {
+    type Response = usize;
 }

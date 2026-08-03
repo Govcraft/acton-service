@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.35.0] - 2026-08-03
+
+Upgrades to acton-reactive 9.0 and closes the gaps that version exposed in how
+this crate used the framework. Two of them were live defects: supervised actor
+extensions were never actually restarted, and three public query messages could
+not be answered at all.
+
+Breaking, and unavoidably so: acton-reactive types appear in this crate's public
+API and are re-exported through its prelude, so its 8.1 → 9.0 major bump is a
+breaking change for downstream code regardless of anything else here.
+
+### Fixed
+
+- **extensions**: `ActorExtension::restart_policy` now takes effect. The
+  spawner called the legacy `supervise()`, which neither read the declared
+  policy nor registers a blueprint — acton-reactive reports such a child's
+  termination but can never recreate it. The documented "automatic restart on
+  failure" therefore never happened. Extensions are now registered through
+  `supervise_with`, handing `A::configure` over as the restart blueprint.
+- **agents**: `CheckRotation`, `ForceRotation` and the audit `CleanupTrigger`
+  handlers spawned detached work with `tokio::spawn` and did not await it, so
+  the work escaped shutdown and supervision and two cycles could overlap. They
+  now return `Reply::pending`; the spawn that remains only crosses the
+  `Send`-but-not-`Sync` boundary that `#[async_trait]` storage futures impose,
+  and its `JoinHandle` is awaited.
+- **agents**: The key-rotation and audit-retention tickers ran forever holding
+  cloned state, surviving shutdown. Both now stop on a `CancellationToken`
+  cancelled from `before_stop`, matching what the pool agents already did.
+
+### Added
+
+- **websocket / agents**: `GetRoomInfo`, `GetTaskStatus` and
+  `GetAllTaskStatuses` implement `Request`, so `ask` resolves them. All three
+  were public and handled via `reply_envelope()`, but before 9.0 a caller
+  outside the actor system had no way to receive the reply, which made them
+  unusable.
+- **agents**: Pool agents answer `GetPoolHealth` (sample the current state) and
+  `WaitForPoolReady` (park until the first connection attempt settles). This
+  makes `ComponentHealth` and `HealthStatus` — previously exported and used
+  nowhere — functional, and pool agents now retain the failure reason instead
+  of only logging it.
+- **agents**: `BackgroundWorker::wait_for_task` waits for a task to finish
+  rather than polling for it.
+- **state**: `AppState::supervised_actor` exposes an extension's
+  `SupervisedChild` for inspecting supervision state or waiting out a restart.
+
+### Changed
+
+- **background-worker**: The task registry moved into the actor. It previously
+  lived outside as an `Arc<DashMap<String, TaskInfo>>` whose entries wrapped
+  status and join handles in `Arc<Mutex<..>>`, written by spawned tasks and
+  read by handlers that never touched their own model. Spawned work now reports
+  its outcome as a message, so status has exactly one writer, and shutdown
+  drains through a `TaskTracker`.
+- **tests**: Actor tests synchronise on barriers rather than sleeps —
+  `ask` for mailbox order, `FlushBroadcasts` for broker fan-out,
+  `WaitForPoolReady` for pool startup, and watch channels where the signal
+  originates downstream of a mailbox. Several tests that asserted only "no
+  panic" now assert the state they name.
+
+### Breaking
+
+- `AppState::actor` returns `Option<ActorHandle>` rather than
+  `Option<&ActorHandle>`, because a restart replaces the actor and a cached
+  handle would silently address a dead one. Resolve it per use.
+- `BackgroundWorker` queries are async and fallible: `get_task_status` becomes
+  `task_status` returning `Result<Option<TaskStatus>, AskError>`, and
+  `task_count`, `running_task_count`, `has_task` and `cleanup_finished_tasks`
+  likewise return `Result`. `cancel` now returns the task's final status.
+- `GetTaskStatus` answers with `Option<TaskStatusResponse>`, so an unknown task
+  is no longer indistinguishable from a pending one.
+- Minimum `acton-reactive` is 9.0.
+
 ## [acton-service-v0.34.1] - 2026-08-03
 
 A TLS listener compiled without the `grpc` feature dropped every HTTP/2

@@ -425,11 +425,18 @@ where
         self.broker = Some(broker);
     }
 
-    /// Get the [`ActorHandle`] for a registered actor extension.
+    /// Get an [`ActorHandle`] for a registered actor extension.
     ///
     /// Actor extensions are custom actors registered via
     /// [`ServiceBuilder::with_actor`](crate::service_builder::ServiceBuilder::with_actor).
-    /// They run under a framework-managed supervisor with configurable restart policies.
+    /// They run under a framework-managed supervisor that restarts them
+    /// according to their
+    /// [`restart_policy`](crate::extensions::ActorExtension::restart_policy).
+    ///
+    /// Returns `None` if no actor of type `A` was registered, and also during
+    /// the window in which a supervised actor is being restarted. A restart
+    /// creates a new actor, so the handle is resolved on each call rather than
+    /// cached — treat it as short-lived and re-resolve per request.
     ///
     /// # Example
     ///
@@ -439,8 +446,17 @@ where
     ///     cache.send(CacheSet { key: "k".into(), value: "v".into() }).await;
     /// }
     /// ```
-    pub fn actor<A: crate::extensions::ActorExtension>(&self) -> Option<&ActorHandle> {
+    pub fn actor<A: crate::extensions::ActorExtension>(&self) -> Option<ActorHandle> {
         self.actor_extensions.get::<A>()
+    }
+
+    /// Get the [`SupervisedChild`](acton_reactive::prelude::SupervisedChild) for
+    /// a registered actor extension, to inspect supervision state or wait out a
+    /// restart.
+    pub fn supervised_actor<A: crate::extensions::ActorExtension>(
+        &self,
+    ) -> Option<&acton_reactive::prelude::SupervisedChild> {
+        self.actor_extensions.supervised::<A>()
     }
 
     /// Set the actor extensions (internal use by ServiceBuilder)

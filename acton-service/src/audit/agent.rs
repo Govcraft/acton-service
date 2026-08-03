@@ -42,6 +42,8 @@ pub struct AuditAgentState {
     pub(crate) pending: Vec<AuditEvent>,
     /// Channel to the sequential writer task that persists sealed events
     pub(crate) writer: Option<tokio::sync::mpsc::UnboundedSender<AuditEvent>>,
+    /// Stops the periodic retention-cleanup ticker when the agent shuts down
+    pub(crate) cancel_token: Option<tokio_util::sync::CancellationToken>,
 }
 
 // Manual Debug impl since AuditChain and dyn AuditStorage don't impl Debug
@@ -141,6 +143,7 @@ impl AuditAgent {
         agent.model.storage = storage;
         agent.model.syslog = syslog;
         agent.model.failure_tracker = failure_tracker;
+        agent.model.cancel_token = Some(tokio_util::sync::CancellationToken::new());
         agent.model.writer = Some(spawn_writer_task(
             agent.model.storage.clone(),
             agent.model.syslog.clone(),
@@ -192,19 +195,30 @@ impl AuditAgent {
         });
 
         // Handle retention cleanup triggers
+        //
+        // `mutate_on` keeps cleanups serialized: a cycle archives and purges in
+        // batches, and two overlapping cycles would compete over the same rows.
+        // The inline await that `mutate_on` gives its future is what enforces
+        // that, and it also means shutdown drains a cleanup in progress rather
+        // than abandoning it half-done.
         agent.mutate_on::<CleanupTrigger>(|agent, _envelope| {
             let config = agent.model.config.clone();
             let storage = agent.model.storage.clone();
 
-            tokio::spawn(async move {
-                if let (Some(config), Some(storage)) = (config, storage) {
-                    if let Err(e) = run_cleanup(&config, storage.as_ref()).await {
-                        tracing::error!("Audit retention cleanup failed: {}", e);
+            Reply::pending(async move {
+                // Spawned only to cross the `Sync` boundary: `AuditStorage`'s
+                // `#[async_trait]` futures are `Send` but not `Sync`, and
+                // handler futures must be both. The `JoinHandle` is `Sync`, and
+                // awaiting it keeps the work inside the actor's lifecycle.
+                let _ = tokio::spawn(async move {
+                    if let (Some(config), Some(storage)) = (config, storage) {
+                        if let Err(e) = run_cleanup(&config, storage.as_ref()).await {
+                            tracing::error!("Audit retention cleanup failed: {}", e);
+                        }
                     }
-                }
-            });
-
-            Reply::ready()
+                })
+                .await;
+            })
         });
 
         // Load chain state from storage on startup.
@@ -267,6 +281,15 @@ impl AuditAgent {
             Reply::ready()
         });
 
+        // Stop the retention ticker before the actor goes away.
+        agent.before_stop(|agent| {
+            if let Some(ref token) = agent.model.cancel_token {
+                token.cancel();
+            }
+            Reply::ready()
+        });
+
+        let cleanup_token = agent.model.cancel_token.clone();
         let handle = agent.start().await;
 
         // Start periodic cleanup if retention is configured
@@ -275,13 +298,31 @@ impl AuditAgent {
             let interval_hours = cleanup_interval_hours;
             tokio::spawn(async move {
                 let period = std::time::Duration::from_secs(interval_hours as u64 * 3600);
-                let mut interval = tokio::time::interval(period);
+                let mut ticker = tokio::time::interval(period);
                 // Skip the first immediate tick
-                interval.tick().await;
+                ticker.tick().await;
                 loop {
-                    interval.tick().await;
-                    tracing::debug!("Triggering audit retention cleanup");
-                    cleanup_handle.send(CleanupTrigger).await;
+                    tokio::select! {
+                        biased;
+
+                        // Without this branch the ticker outlives shutdown,
+                        // holding a handle to a stopped actor forever.
+                        () = async {
+                            if let Some(ref token) = cleanup_token {
+                                token.cancelled().await;
+                            } else {
+                                std::future::pending::<()>().await;
+                            }
+                        } => {
+                            tracing::debug!("Audit retention ticker stopped");
+                            break;
+                        }
+
+                        _ = ticker.tick() => {
+                            tracing::debug!("Triggering audit retention cleanup");
+                            cleanup_handle.send(CleanupTrigger).await;
+                        }
+                    }
                 }
             });
         }
@@ -499,9 +540,15 @@ mod tests {
 
     /// Storage that records appended events, and reports readiness only after a
     /// delay so events can be emitted while the chain is still initializing.
+    ///
+    /// Publishes its append count on a `watch` channel. Persistence runs on the
+    /// writer task, downstream of the agent's mailbox, so no `ask` on the agent
+    /// can prove an event reached storage — the storage itself has to say so.
+    /// That is what lets these tests wait on a condition instead of a duration.
     struct SlowCapturingStorage {
         events: Mutex<Vec<AuditEvent>>,
         ready_after: tokio::time::Instant,
+        appended: tokio::sync::watch::Sender<usize>,
     }
 
     impl SlowCapturingStorage {
@@ -509,6 +556,7 @@ mod tests {
             Self {
                 events: Mutex::new(Vec::new()),
                 ready_after: tokio::time::Instant::now() + delay,
+                appended: tokio::sync::watch::Sender::new(0),
             }
         }
 
@@ -520,12 +568,34 @@ mod tests {
                 .map(|e| e.kind.clone())
                 .collect()
         }
+
+        fn sequences(&self) -> Vec<u64> {
+            self.events
+                .lock()
+                .expect("events lock")
+                .iter()
+                .map(|e| e.sequence)
+                .collect()
+        }
+
+        /// Resolves once at least `count` events have been persisted.
+        async fn wait_for_appends(&self, count: usize) {
+            let mut rx = self.appended.subscribe();
+            rx.wait_for(|appended| *appended >= count)
+                .await
+                .expect("sender is owned by this storage and outlives the wait");
+        }
     }
 
     #[async_trait]
     impl AuditStorage for SlowCapturingStorage {
         async fn append(&self, event: &AuditEvent) -> Result<(), Error> {
-            self.events.lock().expect("events lock").push(event.clone());
+            let appended = {
+                let mut events = self.events.lock().expect("events lock");
+                events.push(event.clone());
+                events.len()
+            };
+            self.appended.send_replace(appended);
             Ok(())
         }
 
@@ -595,12 +665,7 @@ mod tests {
         }
 
         // Wait for the drain to complete.
-        for _ in 0..100 {
-            if storage.events.lock().expect("events lock").len() >= expected.len() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+        storage.wait_for_appends(expected.len()).await;
 
         let kinds = storage.kinds();
         let names: Vec<String> = kinds
@@ -613,14 +678,10 @@ mod tests {
         assert_eq!(names, expected, "all early events persisted in order");
 
         // Sequence numbers must be contiguous from the chain start.
-        let sequences: Vec<u64> = storage
-            .events
-            .lock()
-            .expect("events lock")
-            .iter()
-            .map(|e| e.sequence)
-            .collect();
-        assert_eq!(sequences, (1..=expected.len() as u64).collect::<Vec<_>>());
+        assert_eq!(
+            storage.sequences(),
+            (1..=expected.len() as u64).collect::<Vec<_>>()
+        );
     }
 
     /// Events emitted after chain init are sealed after buffered ones.
@@ -640,16 +701,13 @@ mod tests {
 
         handle.send(custom_event("early")).await;
 
-        // Well after chain initialization has completed.
-        tokio::time::sleep(Duration::from_millis(900)).await;
+        // The early event reaching storage is proof the chain initialized and
+        // the buffer drained — a stronger and faster signal than waiting out a
+        // duration chosen to be "surely long enough".
+        storage.wait_for_appends(1).await;
         handle.send(custom_event("late")).await;
 
-        for _ in 0..100 {
-            if storage.events.lock().expect("events lock").len() >= 2 {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+        storage.wait_for_appends(2).await;
 
         let names: Vec<String> = storage
             .kinds()
@@ -663,15 +721,37 @@ mod tests {
     }
 
     /// Alert hook that counts storage-unreachable alerts.
+    ///
+    /// Publishes the count so a test can wait for the alert rather than sleep;
+    /// hooks are dispatched off the caller's task, so returning from
+    /// `buffer_pending_event` says nothing about the hook having run.
     struct CountingHook {
         alerts: AtomicU64,
+        fired: tokio::sync::watch::Sender<u64>,
+    }
+
+    impl CountingHook {
+        fn new() -> Self {
+            Self {
+                alerts: AtomicU64::new(0),
+                fired: tokio::sync::watch::Sender::new(0),
+            }
+        }
+
+        async fn wait_for_alerts(&self, count: u64) {
+            let mut rx = self.fired.subscribe();
+            rx.wait_for(|fired| *fired >= count)
+                .await
+                .expect("sender is owned by this hook and outlives the wait");
+        }
     }
 
     #[async_trait]
     impl AuditAlertHook for CountingHook {
         async fn on_alert(&self, event: AuditAlertEvent) {
             if matches!(event, AuditAlertEvent::StorageUnreachable { .. }) {
-                self.alerts.fetch_add(1, Ordering::SeqCst);
+                let seen = self.alerts.fetch_add(1, Ordering::SeqCst) + 1;
+                self.fired.send_replace(seen);
             }
         }
     }
@@ -679,9 +759,7 @@ mod tests {
     /// Overflow drops the newest event and reports it to the failure tracker.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn pending_overflow_reports_to_failure_tracker() {
-        let hook = Arc::new(CountingHook {
-            alerts: AtomicU64::new(0),
-        });
+        let hook = Arc::new(CountingHook::new());
         let tracker = Arc::new(FailureTracker::new(
             vec![hook.clone()],
             0, // alert immediately
@@ -709,7 +787,7 @@ mod tests {
             AuditEventKind::Custom("e0".to_string())
         );
 
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        hook.wait_for_alerts(1).await;
         assert_eq!(hook.alerts.load(Ordering::SeqCst), 1);
     }
 }

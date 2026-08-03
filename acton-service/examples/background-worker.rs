@@ -52,13 +52,20 @@ async fn check_status(
         .background_worker()
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
 
-    let status = worker.get_task_status(&task_id).await;
+    // The status lives in the worker actor, so reading it is an `ask`. `None`
+    // means the worker has no record of that task at all.
+    let status = worker
+        .task_status(&task_id)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+
     let status_str = match &status {
-        TaskStatus::Pending => "pending",
-        TaskStatus::Running => "running",
-        TaskStatus::Completed => "completed",
-        TaskStatus::Failed(_) => "failed",
-        TaskStatus::Cancelled => "cancelled",
+        None => "unknown",
+        Some(TaskStatus::Pending) => "pending",
+        Some(TaskStatus::Running) => "running",
+        Some(TaskStatus::Completed) => "completed",
+        Some(TaskStatus::Failed(_)) => "failed",
+        Some(TaskStatus::Cancelled) => "cancelled",
     };
 
     Ok(Json(
@@ -103,7 +110,7 @@ async fn main() -> anyhow::Result<()> {
             })
             .await;
 
-        tracing::info!("Submitted {} startup tasks", worker.task_count());
+        tracing::info!("Submitted {} startup tasks", worker.task_count().await?);
     }
 
     // Start serving — startup tasks continue running in the background

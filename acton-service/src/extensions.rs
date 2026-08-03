@@ -53,11 +53,13 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use acton_reactive::prelude::{ActorHandle, ActorRuntime, Idle, ManagedActor, RestartPolicy};
+use acton_reactive::prelude::{
+    ActorConfig, ActorHandle, ActorRuntime, Idle, ManagedActor, RestartPolicy, SupervisedChild,
+};
 
 /// Future type returned by [`ActorExtensionSpawner::spawn`].
 type SpawnFuture<'a> =
-    Pin<Box<dyn Future<Output = anyhow::Result<(TypeId, ActorHandle)>> + Send + 'a>>;
+    Pin<Box<dyn Future<Output = anyhow::Result<(TypeId, SupervisedChild)>> + Send + 'a>>;
 
 /// Trait for defining actor-backed extensions.
 ///
@@ -73,15 +75,33 @@ type SpawnFuture<'a> =
 /// - `after_start` / `before_stop` — lifecycle hooks
 /// - `handle.subscribe::<M>()` — broker subscriptions (in `after_start`)
 ///
+/// `configure` doubles as the actor's restart blueprint: it is re-run for every
+/// incarnation. That is why broker subscriptions belong in an `after_start`
+/// registered here rather than being awaited once at startup — a subscription
+/// taken outside `configure` is lost the first time the actor restarts.
+///
+/// Note that `after_start`'s future is drained alongside the message loop, not
+/// ahead of it, so "the actor has started" does not imply "the actor has
+/// subscribed". Code that broadcasts immediately after
+/// [`ServiceBuilder::build()`](crate::service_builder::ServiceBuilder::build)
+/// can race a subscription that has not yet reached the broker.
+///
 /// ## Restart Policy
 ///
 /// Override [`restart_policy`](ActorExtension::restart_policy) to control supervision behavior:
 ///
-/// - [`Permanent`](RestartPolicy::Permanent) (default) — always restart on failure
+/// - [`Permanent`](RestartPolicy::Permanent) (default) — restart on any termination, clean stops included
 /// - [`Transient`](RestartPolicy::Transient) — restart only on abnormal termination
 /// - [`Temporary`](RestartPolicy::Temporary) — never restart
+///
+/// Because a restart replaces the actor, hold the handle from
+/// [`AppState::actor`](crate::state::AppState::actor) only for as long as you
+/// need it and re-resolve per request rather than caching it.
 pub trait ActorExtension: Default + Debug + Send + 'static {
     /// Configure message handlers, lifecycle hooks, and broker subscriptions.
+    ///
+    /// Re-run on every restart, so everything the actor needs to function must
+    /// be registered here.
     fn configure(actor: &mut ManagedActor<Idle, Self>);
 
     /// Restart policy under supervision. Defaults to [`RestartPolicy::Permanent`].
@@ -97,11 +117,15 @@ pub trait ActorExtension: Default + Debug + Send + 'static {
 pub(crate) trait ActorExtensionSpawner: Send {
     /// Spawn this actor extension under the given supervisor.
     ///
-    /// Returns the `TypeId` of the concrete extension type and the spawned `ActorHandle`.
+    /// Returns the `TypeId` of the concrete extension type and the
+    /// [`SupervisedChild`] tracking it. `index` disambiguates the child's
+    /// identifier so two extensions whose type names sanitize to the same
+    /// string cannot collide.
     fn spawn<'a>(
         &'a self,
         supervisor: &'a ActorHandle,
-        runtime: &'a mut ActorRuntime,
+        runtime: &'a ActorRuntime,
+        index: usize,
     ) -> SpawnFuture<'a>;
 }
 
@@ -112,18 +136,58 @@ impl<A: ActorExtension> ActorExtensionSpawner for ActorExtensionEntry<A> {
     fn spawn<'a>(
         &'a self,
         supervisor: &'a ActorHandle,
-        runtime: &'a mut ActorRuntime,
+        runtime: &'a ActorRuntime,
+        index: usize,
     ) -> SpawnFuture<'a> {
         Box::pin(async move {
-            let mut actor = runtime.new_actor::<A>();
-            A::configure(&mut actor);
-            let handle = supervisor.supervise(actor).await?;
+            // `supervise_with` rather than `supervise`: a child adopted through
+            // the legacy call is registered without a blueprint, so the runtime
+            // reports its termination but can never recreate it. That made
+            // `restart_policy` below decorative. Handing over `A::configure` as
+            // the blueprint is what lets the restart engine rebuild the actor,
+            // which is the whole point of declaring a policy.
+            let config = ActorConfig::for_supervised_child(
+                extension_child_name::<A>(index),
+                supervisor.clone(),
+                Some(runtime.broker()),
+            )?
+            .with_restart_policy(A::restart_policy());
+
+            let child = supervisor
+                .supervise_with::<A>(runtime, config, A::configure)
+                .await?;
+
             tracing::info!(
                 actor_type = std::any::type_name::<A>(),
+                restart_policy = ?A::restart_policy(),
                 "Actor extension spawned and supervised"
             );
-            Ok((TypeId::of::<A>(), handle))
+            Ok((TypeId::of::<A>(), child))
         })
+    }
+}
+
+/// Build a valid ERN segment naming an extension's supervised child.
+///
+/// ERN parts allow only alphanumerics, hyphens, underscores and dots, and cap
+/// at 63 characters, so a raw `type_name` (which carries `::` and generic
+/// brackets) cannot be used directly. The trailing `index` keeps the result
+/// unique even when two distinct types reduce to the same readable stem.
+fn extension_child_name<A: 'static>(index: usize) -> String {
+    let raw = std::any::type_name::<A>();
+    let stem: String = raw
+        .rsplit("::")
+        .next()
+        .unwrap_or(raw)
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
+        .take(48)
+        .collect();
+
+    if stem.is_empty() {
+        format!("extension-{index}")
+    } else {
+        format!("{stem}-{index}")
     }
 }
 
@@ -136,14 +200,27 @@ impl<A: ActorExtension> ActorExtensionSpawner for ActorExtensionEntry<A> {
 /// the inner map is never allocated.
 #[derive(Clone, Default)]
 pub struct ActorExtensions {
-    inner: Option<Arc<HashMap<TypeId, ActorHandle>>>,
+    inner: Option<Arc<HashMap<TypeId, SupervisedChild>>>,
 }
 
 impl ActorExtensions {
-    /// Get the [`ActorHandle`] for a registered actor extension.
+    /// Get an [`ActorHandle`] for a registered actor extension.
     ///
-    /// Returns `None` if no actor of type `A` was registered.
-    pub fn get<A: ActorExtension>(&self) -> Option<&ActorHandle> {
+    /// Returns `None` if no actor of type `A` was registered, and also while a
+    /// supervised actor is between incarnations — a restart replaces the actor,
+    /// and a handle to the previous one would silently address a corpse. The
+    /// handle is resolved per call for that reason; hold the result only for as
+    /// long as you need it, and re-resolve rather than caching it.
+    pub fn get<A: ActorExtension>(&self) -> Option<ActorHandle> {
+        self.inner.as_ref()?.get(&TypeId::of::<A>())?.current()
+    }
+
+    /// Get the [`SupervisedChild`] tracking a registered actor extension.
+    ///
+    /// Exposes restart generation and supervision state, and lets a caller wait
+    /// for the actor to come back after a restart via
+    /// [`wait_running`](acton_reactive::prelude::SupervisedChild::wait_running).
+    pub fn supervised<A: ActorExtension>(&self) -> Option<&SupervisedChild> {
         self.inner.as_ref()?.get(&TypeId::of::<A>())
     }
 
@@ -153,8 +230,8 @@ impl ActorExtensions {
     }
 }
 
-impl From<HashMap<TypeId, ActorHandle>> for ActorExtensions {
-    fn from(map: HashMap<TypeId, ActorHandle>) -> Self {
+impl From<HashMap<TypeId, SupervisedChild>> for ActorExtensions {
+    fn from(map: HashMap<TypeId, SupervisedChild>) -> Self {
         if map.is_empty() {
             Self { inner: None }
         } else {
@@ -246,6 +323,14 @@ mod tests {
         count: u32,
     }
 
+    /// Makes `GetCount` usable with `ask`, which is what lets these tests
+    /// synchronise on the actor having actually processed its mailbox instead
+    /// of sleeping and hoping. Mailboxes are FIFO, so a resolved `ask` proves
+    /// every message sent before it has been handled.
+    impl Request for GetCount {
+        type Response = CountResponse;
+    }
+
     #[derive(Clone, Debug)]
     struct Reset;
 
@@ -280,7 +365,7 @@ mod tests {
     // ── Integration tests ──────────────────────────────────────────────
 
     #[tokio::test]
-    async fn spawn_actor_extension_and_send_message() {
+    async fn spawn_actor_extension_processes_messages_in_order() {
         let mut runtime = ActonApp::launch_async().await;
 
         // Spawn supervisor
@@ -288,20 +373,22 @@ mod tests {
         let supervisor_handle = supervisor.start().await;
 
         // Spawn counter actor under supervision
-        let mut actor = runtime.new_actor::<CounterActor>();
-        CounterActor::configure(&mut actor);
-        let handle = supervisor_handle.supervise(actor).await.unwrap();
+        let entry = ActorExtensionEntry::<CounterActor>(PhantomData);
+        let (_tid, child) = entry.spawn(&supervisor_handle, &runtime, 0).await.unwrap();
+        let handle = child.current().expect("child should be running");
 
         // Send fire-and-forget increment messages
         handle.send(Increment { amount: 5 }).await;
         handle.send(Increment { amount: 3 }).await;
 
-        // Allow messages to process
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // The ask is the barrier: it cannot resolve until both increments
+        // ahead of it in the mailbox have been applied.
+        let count = handle.ask(GetCount).await.unwrap().count;
+        assert_eq!(count, 8, "both increments should have been applied");
 
-        // Verify actor is alive by sending another message (no panic = success)
         handle.send(Increment { amount: 1 }).await;
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let count = handle.ask(GetCount).await.unwrap().count;
+        assert_eq!(count, 9, "actor should still be processing after the query");
 
         runtime.shutdown_all().await.unwrap();
     }
@@ -314,7 +401,7 @@ mod tests {
         let supervisor_handle = supervisor.start().await;
 
         let entry = ActorExtensionEntry::<CounterActor>(PhantomData);
-        let (type_id, _handle) = entry.spawn(&supervisor_handle, &mut runtime).await.unwrap();
+        let (type_id, _child) = entry.spawn(&supervisor_handle, &runtime, 0).await.unwrap();
 
         assert_eq!(
             type_id,
@@ -326,6 +413,100 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn spawner_applies_the_declared_restart_policy() {
+        #[derive(Debug, Default)]
+        struct TemporaryActor;
+        impl ActorExtension for TemporaryActor {
+            fn configure(_actor: &mut ManagedActor<Idle, Self>) {}
+            fn restart_policy() -> RestartPolicy {
+                RestartPolicy::Temporary
+            }
+        }
+
+        let mut runtime = ActonApp::launch_async().await;
+        let supervisor = runtime.new_actor::<ExtensionsSupervisorState>();
+        let supervisor_handle = supervisor.start().await;
+
+        let entry = ActorExtensionEntry::<TemporaryActor>(PhantomData);
+        let (_tid, child) = entry.spawn(&supervisor_handle, &runtime, 0).await.unwrap();
+
+        // Registration under a blueprint is what makes the policy reachable at
+        // all; the legacy `supervise` path registered no spawner, so the
+        // supervisor could never act on a policy. Seeing the child tracked
+        // here is what distinguishes the two.
+        assert_eq!(
+            *child.supervisor(),
+            supervisor_handle.id(),
+            "child should be registered under the extensions supervisor"
+        );
+        assert!(
+            child.current().is_some(),
+            "a freshly supervised child should resolve to a live incarnation"
+        );
+
+        runtime.shutdown_all().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn permanent_extension_is_restarted_after_termination() {
+        // This is the test that distinguishes `supervise_with` from the legacy
+        // `supervise`. Under `supervise` the child is registered without a
+        // blueprint, so the supervisor has nothing to rebuild it from and this
+        // wait would time out at a terminal state no matter what policy the
+        // extension declared.
+        let mut runtime = ActonApp::launch_async().await;
+        let supervisor = runtime.new_actor::<ExtensionsSupervisorState>();
+        let supervisor_handle = supervisor.start().await;
+
+        // CounterActor takes the default policy, Permanent, which restarts on
+        // any termination — a clean stop included.
+        assert_eq!(CounterActor::restart_policy(), RestartPolicy::Permanent);
+
+        let entry = ActorExtensionEntry::<CounterActor>(PhantomData);
+        let (_tid, mut child) = entry.spawn(&supervisor_handle, &runtime, 0).await.unwrap();
+
+        let first = child.current().expect("child should start running");
+        first.send(Increment { amount: 7 }).await;
+        assert_eq!(first.ask(GetCount).await.unwrap().count, 7);
+
+        first.stop().await.unwrap();
+
+        let second = child
+            .wait_generation(RestartGeneration::FIRST.next())
+            .await
+            .expect("a Permanent child must come back after termination");
+
+        assert_eq!(
+            second.ask(GetCount).await.unwrap().count,
+            0,
+            "the restarted incarnation should start from Default state"
+        );
+
+        runtime.shutdown_all().await.unwrap();
+    }
+
+    #[test]
+    fn extension_child_name_is_a_valid_ern_part() {
+        #[derive(Debug, Default)]
+        struct SomeActor;
+
+        let name = extension_child_name::<SomeActor>(3);
+        assert!(
+            name.starts_with("SomeActor"),
+            "name should keep the readable type stem, got {name}"
+        );
+        assert!(
+            name.ends_with("-3"),
+            "name should carry the index, got {name}"
+        );
+        assert!(
+            !name.contains(':') && !name.contains('/'),
+            "ERN parts reject ':' and '/', got {name}"
+        );
+        assert!(name.len() <= 63, "ERN parts cap at 63 chars, got {name}");
+    }
+
+    #[tokio::test]
     async fn actor_extensions_container_stores_and_retrieves_handle() {
         let mut runtime = ActonApp::launch_async().await;
 
@@ -333,10 +514,10 @@ mod tests {
         let supervisor_handle = supervisor.start().await;
 
         let entry = ActorExtensionEntry::<CounterActor>(PhantomData);
-        let (type_id, handle) = entry.spawn(&supervisor_handle, &mut runtime).await.unwrap();
+        let (type_id, child) = entry.spawn(&supervisor_handle, &runtime, 0).await.unwrap();
 
         let mut map = HashMap::new();
-        map.insert(type_id, handle);
+        map.insert(type_id, child);
 
         let extensions = ActorExtensions::from(map);
         assert!(!extensions.is_empty());
@@ -364,10 +545,10 @@ mod tests {
         let supervisor_handle = supervisor.start().await;
 
         let entry = ActorExtensionEntry::<CounterActor>(PhantomData);
-        let (type_id, handle) = entry.spawn(&supervisor_handle, &mut runtime).await.unwrap();
+        let (type_id, child) = entry.spawn(&supervisor_handle, &runtime, 0).await.unwrap();
 
         let mut map = HashMap::new();
-        map.insert(type_id, handle);
+        map.insert(type_id, child);
 
         let extensions = ActorExtensions::from(map);
         let cloned = extensions.clone();
@@ -410,12 +591,12 @@ mod tests {
         let counter_entry = ActorExtensionEntry::<CounterActor>(PhantomData);
         let alpha_entry = ActorExtensionEntry::<AlphaActor>(PhantomData);
 
-        let (counter_tid, counter_handle) = counter_entry
-            .spawn(&supervisor_handle, &mut runtime)
+        let (counter_tid, counter_child) = counter_entry
+            .spawn(&supervisor_handle, &runtime, 0)
             .await
             .unwrap();
-        let (alpha_tid, alpha_handle) = alpha_entry
-            .spawn(&supervisor_handle, &mut runtime)
+        let (alpha_tid, alpha_child) = alpha_entry
+            .spawn(&supervisor_handle, &runtime, 1)
             .await
             .unwrap();
 
@@ -425,8 +606,8 @@ mod tests {
         );
 
         let mut map = HashMap::new();
-        map.insert(counter_tid, counter_handle);
-        map.insert(alpha_tid, alpha_handle);
+        map.insert(counter_tid, counter_child);
+        map.insert(alpha_tid, alpha_child);
         let extensions = ActorExtensions::from(map);
 
         // Both actors are accessible
@@ -437,7 +618,11 @@ mod tests {
         counter.send(Increment { amount: 42 }).await;
         alpha.send(SetValue("hello".into())).await;
 
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            counter.ask(GetCount).await.unwrap().count,
+            42,
+            "the counter actor should have applied its own message"
+        );
 
         runtime.shutdown_all().await.unwrap();
     }
@@ -462,11 +647,14 @@ mod tests {
 
         // Send a message to verify the actor is alive and processing
         handle.send(Increment { amount: 10 }).await;
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(handle.ask(GetCount).await.unwrap().count, 10);
 
-        // Send another — no panic means the actor survived
         handle.send(Increment { amount: 5 }).await;
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert_eq!(
+            handle.ask(GetCount).await.unwrap().count,
+            15,
+            "actor registered through with_actor should keep accumulating"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -518,13 +706,14 @@ mod tests {
         );
 
         // Both actors process messages independently
-        state
-            .actor::<CounterActor>()
-            .unwrap()
-            .send(Increment { amount: 1 })
-            .await;
+        let counter = state.actor::<CounterActor>().unwrap();
+        counter.send(Increment { amount: 1 }).await;
         state.actor::<PingActor>().unwrap().send(Ping).await;
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            counter.ask(GetCount).await.unwrap().count,
+            1,
+            "the counter should see only its own message"
+        );
     }
 
     // Multi-threaded: `build()` spawns the audit agent (enabled by default),
@@ -558,61 +747,110 @@ mod tests {
                 actor.mutate_on_sync::<SetInt>(|actor, envelope| {
                     actor.model.value = envelope.message().0;
                 });
+
+                actor.act_on::<GetInt>(|actor, envelope| {
+                    let value = actor.model.value;
+                    let reply = envelope.reply_envelope();
+                    Reply::pending(async move {
+                        reply.send(IntValue(value)).await;
+                    })
+                });
             }
         }
 
         #[derive(Clone, Debug)]
         struct SetInt(i32);
 
+        #[derive(Clone, Debug)]
+        struct GetInt;
+
+        #[derive(Clone, Debug)]
+        struct IntValue(i32);
+
+        impl Request for GetInt {
+            type Response = IntValue;
+        }
+
         let mut runtime = ActonApp::launch_async().await;
         let supervisor = runtime.new_actor::<ExtensionsSupervisorState>();
         let supervisor_handle = supervisor.start().await;
 
         let entry = ActorExtensionEntry::<SyncActor>(PhantomData);
-        let (_tid, handle) = entry.spawn(&supervisor_handle, &mut runtime).await.unwrap();
+        let (_tid, child) = entry.spawn(&supervisor_handle, &runtime, 0).await.unwrap();
+        let handle = child.current().expect("child should be running");
 
-        // Sync handler should process without issues
+        // Sync handlers are applied in mailbox order, so the later write wins.
         handle.send(SetInt(42)).await;
         handle.send(SetInt(100)).await;
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            handle.ask(GetInt).await.unwrap().0,
+            100,
+            "sync handler should have applied both writes in order"
+        );
 
         runtime.shutdown_all().await.unwrap();
     }
 
     #[tokio::test]
     async fn actor_extension_broker_subscription() {
-        use std::sync::atomic::{AtomicU32, Ordering};
+        use tokio::sync::Notify;
 
         /// Broadcast message type
         #[derive(Clone, Debug)]
         struct GlobalNotification {
+            #[allow(dead_code)]
             payload: String,
         }
 
-        static RECEIVED_COUNT: AtomicU32 = AtomicU32::new(0);
+        #[derive(Clone, Debug)]
+        struct GetNotified;
+
+        #[derive(Clone, Debug)]
+        struct NotifiedCount(u32);
+
+        impl Request for GetNotified {
+            type Response = NotifiedCount;
+        }
+
+        /// Signals that `after_start` finished handing the subscription to the
+        /// broker. `after_start`'s future is drained alongside the message
+        /// loop rather than before it, so "the actor started" does not imply
+        /// "the actor subscribed" — without this the broadcast below could be
+        /// published into a broker that has not yet heard of this subscriber.
+        static SUBSCRIBED: Notify = Notify::const_new();
 
         #[derive(Debug, Default)]
-        struct ListenerActor;
+        struct ListenerActor {
+            seen: u32,
+        }
 
         impl ActorExtension for ListenerActor {
             fn configure(actor: &mut ManagedActor<Idle, Self>) {
-                // Handle the broadcast message
-                actor.mutate_on::<GlobalNotification>(|_actor, _envelope| {
-                    RECEIVED_COUNT.fetch_add(1, Ordering::SeqCst);
+                actor.mutate_on::<GlobalNotification>(|actor, _envelope| {
+                    actor.model.seen += 1;
                     Reply::ready()
                 });
 
-                // Subscribe to broker broadcasts on startup
+                actor.act_on::<GetNotified>(|actor, envelope| {
+                    let seen = actor.model.seen;
+                    let reply = envelope.reply_envelope();
+                    Reply::pending(async move {
+                        reply.send(NotifiedCount(seen)).await;
+                    })
+                });
+
+                // Subscribing here rather than outside the blueprint is what
+                // makes the subscription survive a restart: `configure` is
+                // re-run for each incarnation, so `after_start` fires again.
                 actor.after_start(|actor| {
                     let handle = actor.handle().clone();
                     Reply::pending(async move {
                         handle.subscribe::<GlobalNotification>().await;
+                        SUBSCRIBED.notify_one();
                     })
                 });
             }
         }
-
-        RECEIVED_COUNT.store(0, Ordering::SeqCst);
 
         let mut runtime = ActonApp::launch_async().await;
         let broker = runtime.broker();
@@ -621,12 +859,15 @@ mod tests {
         let supervisor_handle = supervisor.start().await;
 
         let entry = ActorExtensionEntry::<ListenerActor>(PhantomData);
-        let (_tid, _handle) = entry.spawn(&supervisor_handle, &mut runtime).await.unwrap();
+        let (_tid, child) = entry.spawn(&supervisor_handle, &runtime, 0).await.unwrap();
+        let handle = child.current().expect("listener should be running");
 
-        // Allow after_start subscription to complete
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // Barrier 1: the subscription request has reached the broker's inbox.
+        SUBSCRIBED.notified().await;
+        // Barrier 2: the broker has processed it. Its inbox is FIFO, so a
+        // resolved flush proves everything queued earlier was handled.
+        broker.ask(FlushBroadcasts).await.unwrap();
 
-        // Broadcast via the broker
         broker
             .broadcast(GlobalNotification {
                 payload: "test-1".into(),
@@ -638,10 +879,12 @@ mod tests {
             })
             .await;
 
-        // Allow messages to propagate
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // Barrier 3: both broadcasts have been delivered to every subscriber's
+        // inbox. Barrier 4 is the ask itself, which cannot resolve until the
+        // listener has drained those two messages ahead of it.
+        broker.ask(FlushBroadcasts).await.unwrap();
 
-        let count = RECEIVED_COUNT.load(Ordering::SeqCst);
+        let count = handle.ask(GetNotified).await.unwrap().0;
         assert_eq!(
             count, 2,
             "listener actor should have received 2 broker broadcasts, got {count}"
@@ -653,9 +896,13 @@ mod tests {
     #[tokio::test]
     async fn actor_extension_lifecycle_hooks() {
         use std::sync::atomic::{AtomicBool, Ordering};
+        use tokio::sync::Notify;
 
         static STARTED: AtomicBool = AtomicBool::new(false);
         static STOPPED: AtomicBool = AtomicBool::new(false);
+        /// `after_start` runs alongside the message loop, so nothing about the
+        /// spawn call implies it has fired yet. This is the signal that it has.
+        static START_FIRED: Notify = Notify::const_new();
 
         #[derive(Debug, Default)]
         struct LifecycleActor;
@@ -664,6 +911,7 @@ mod tests {
             fn configure(actor: &mut ManagedActor<Idle, Self>) {
                 actor.after_start(|_actor| {
                     STARTED.store(true, Ordering::SeqCst);
+                    START_FIRED.notify_one();
                     Reply::ready()
                 });
 
@@ -674,26 +922,23 @@ mod tests {
             }
         }
 
-        STARTED.store(false, Ordering::SeqCst);
-        STOPPED.store(false, Ordering::SeqCst);
-
         let mut runtime = ActonApp::launch_async().await;
         let supervisor = runtime.new_actor::<ExtensionsSupervisorState>();
         let supervisor_handle = supervisor.start().await;
 
         let entry = ActorExtensionEntry::<LifecycleActor>(PhantomData);
-        let (_tid, handle) = entry.spawn(&supervisor_handle, &mut runtime).await.unwrap();
+        let (_tid, child) = entry.spawn(&supervisor_handle, &runtime, 0).await.unwrap();
+        let handle = child.current().expect("child should be running");
 
-        // Allow after_start to fire
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        START_FIRED.notified().await;
         assert!(
             STARTED.load(Ordering::SeqCst),
             "after_start should have fired"
         );
 
-        // Stop the actor
+        // `stop` returns once the actor's task has finished, which is after
+        // `before_stop` has run — so no barrier is needed beyond the await.
         handle.stop().await.unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         assert!(
             STOPPED.load(Ordering::SeqCst),
             "before_stop should have fired"

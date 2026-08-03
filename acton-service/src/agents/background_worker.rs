@@ -12,9 +12,20 @@
 //!
 //! # Architecture
 //!
-//! The `BackgroundWorker` uses a shared `DashMap` for concurrent task state tracking.
-//! Tasks are spawned directly via the service API and tracked via the shared map.
-//! The agent handles lifecycle coordination and cleanup during shutdown.
+//! The agent owns the task registry outright: it lives in
+//! [`BackgroundWorkerState`] as a plain `HashMap`, reached only from handlers,
+//! which the runtime already serializes. Nothing here is behind a lock, because
+//! nothing else writes it.
+//!
+//! Spawned work reports its outcome back as a [`TaskCompleted`] message rather
+//! than writing a shared status cell. Registration is sent before the task is
+//! spawned, and mailboxes are FIFO, so the agent can never see a completion for
+//! a task it has not yet registered.
+//!
+//! The one shared handle is a [`TaskTracker`], which exists so `before_stop` can
+//! await in-flight work. That is a task registry, not decision state: the agent
+//! never branches on it, and draining cannot be done through the mailbox because
+//! the message loop is not running while `before_stop` is.
 //!
 //! # Example
 //!
@@ -26,34 +37,37 @@
 //! let worker = BackgroundWorker::spawn(&mut runtime, &config).await?;
 //!
 //! // Submit a background task
-//! worker.submit("my-task", async move {
+//! worker.submit("my-task", || async move {
 //!     // Do background work
 //!     tokio::time::sleep(Duration::from_secs(10)).await;
 //!     Ok(())
 //! }).await;
 //!
 //! // Check task status
-//! let status = worker.get_task_status("my-task").await;
+//! let status = worker.task_status("my-task").await?;
 //!
-//! // Cancel a specific task
-//! worker.cancel("my-task").await;
+//! // Cancel a specific task and wait for it to stop
+//! worker.cancel("my-task").await?;
 //!
 //! // Graceful shutdown cancels all remaining tasks
 //! runtime.shutdown_all().await?;
 //! ```
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
 use acton_reactive::prelude::{Reply, *};
-use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, Semaphore};
-use tokio::task::JoinHandle;
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
-use super::messages::{CancelTask, GetAllTaskStatuses, GetTaskStatus, TaskStatusResponse};
+use super::messages::{
+    CancelTask, CleanupFinishedTasks, GetAllTaskStatuses, GetTaskStatus, RegisterTask,
+    TaskCompleted, TaskStatusResponse, WaitForTask,
+};
 
 fn default_task_shutdown_timeout_secs() -> u64 {
     5
@@ -103,41 +117,56 @@ pub enum TaskStatus {
     Cancelled,
 }
 
-/// Internal tracking information for a task
+impl TaskStatus {
+    /// Whether the task has reached a state it will not leave.
+    #[must_use]
+    pub const fn is_terminal(&self) -> bool {
+        matches!(self, Self::Completed | Self::Failed(_) | Self::Cancelled)
+    }
+}
+
+/// One tracked task, owned exclusively by the agent.
+///
+/// Plain fields rather than `Arc<Mutex<..>>`: the agent's message loop is the
+/// mutual exclusion, so a lock here would guard against a writer that does not
+/// exist.
 #[derive(Debug)]
-pub(crate) struct TaskInfo {
-    /// Unique task identifier
-    task_id: String,
-    /// Handle to the spawned task
-    join_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
-    /// Token for cancelling this specific task
+struct TaskRecord {
+    /// Cancels this task specifically
     cancellation_token: CancellationToken,
-    /// Current status
-    status: Arc<Mutex<TaskStatus>>,
+    /// Current status, updated only by the `TaskCompleted` handler
+    status: TaskStatus,
 }
 
 /// State for the background worker agent
 #[derive(Debug, Default)]
 pub struct BackgroundWorkerState {
-    /// Root cancellation token for creating child tokens
-    pub(crate) root_token: Option<CancellationToken>,
+    /// Every task the agent knows about, keyed by task ID
+    tasks: HashMap<String, TaskRecord>,
+    /// Callers blocked in `WaitForTask`, keyed by the task they are waiting on
+    waiters: HashMap<String, Vec<OutboundEnvelope>>,
+    /// Root cancellation token; cancelling it cancels every task's child token
+    root_token: Option<CancellationToken>,
+    /// Tracks spawned tasks so shutdown can await them
+    tracker: Option<TaskTracker>,
+    /// How long shutdown waits for in-flight tasks
+    shutdown_timeout: Duration,
 }
 
 /// Service wrapper for the background worker agent
 ///
-/// Provides a clean API for submitting and managing background tasks.
-/// Tasks are spawned directly and tracked in a shared DashMap for
-/// efficient concurrent access.
+/// Provides a clean API for submitting and managing background tasks. Every
+/// query goes through the agent, which is the only owner of task state.
 #[derive(Clone)]
 pub struct BackgroundWorker {
     /// Handle for sending messages to the agent
     agent_handle: ActorHandle,
-    /// Shared task map for direct access
-    tasks: Arc<DashMap<String, TaskInfo>>,
     /// Root cancellation token for creating child tokens
     root_token: CancellationToken,
     /// Optional semaphore for concurrency limiting
     semaphore: Option<Arc<Semaphore>>,
+    /// Tracks spawned tasks so shutdown can await them
+    tracker: TaskTracker,
     /// Timeout for individual task shutdown
     shutdown_timeout: Duration,
 }
@@ -152,8 +181,8 @@ impl BackgroundWorker {
         runtime: &mut ActorRuntime,
         config: &BackgroundWorkerConfig,
     ) -> anyhow::Result<Self> {
-        let tasks: Arc<DashMap<String, TaskInfo>> = Arc::new(DashMap::new());
         let root_token = CancellationToken::new();
+        let tracker = TaskTracker::new();
         let shutdown_timeout = Duration::from_secs(config.task_shutdown_timeout_secs);
 
         let semaphore = if config.max_concurrent_tasks > 0 {
@@ -162,92 +191,159 @@ impl BackgroundWorker {
             None
         };
 
-        let tasks_for_shutdown = tasks.clone();
-        let root_token_for_agent = root_token.clone();
-        let shutdown_timeout_for_cancel = shutdown_timeout;
-        let shutdown_timeout_for_stop = shutdown_timeout;
-
         let mut agent = runtime.new_actor::<BackgroundWorkerState>();
 
-        // Store root token in agent state
         agent.model.root_token = Some(root_token.clone());
+        agent.model.tracker = Some(tracker.clone());
+        agent.model.shutdown_timeout = shutdown_timeout;
 
-        // Handle task cancellation requests
-        let tasks_for_cancel = tasks.clone();
-        agent.mutate_on::<CancelTask>(move |_agent, envelope| {
-            let msg = envelope.message().clone();
-            let tasks = tasks_for_cancel.clone();
-            let timeout = shutdown_timeout_for_cancel;
+        // A task becomes visible to the agent here, before it is spawned, so a
+        // completion can never arrive for an unknown ID.
+        agent.mutate_on::<RegisterTask>(|agent, envelope| {
+            let msg = envelope.message();
+            agent.model.tasks.insert(
+                msg.task_id.clone(),
+                TaskRecord {
+                    cancellation_token: msg.cancellation_token.clone(),
+                    status: TaskStatus::Running,
+                },
+            );
+            tracing::info!(task_id = %msg.task_id, "Background task submitted");
+            Reply::ready()
+        });
+
+        // The spawned task reports its own outcome; the agent is the only
+        // writer of status.
+        agent.mutate_on::<TaskCompleted>(|agent, envelope| {
+            let msg = envelope.message();
+            if let Some(record) = agent.model.tasks.get_mut(&msg.task_id) {
+                record.status = msg.status.clone();
+            }
+
+            tracing::debug!(
+                task_id = %msg.task_id,
+                status = ?msg.status,
+                "Background task reached a terminal state"
+            );
+
+            // Release anyone blocked on this task finishing.
+            let waiters = agent.model.waiters.remove(&msg.task_id).unwrap_or_default();
+            let response = TaskStatusResponse {
+                task_id: msg.task_id.clone(),
+                status: msg.status.clone(),
+            };
 
             Reply::pending(async move {
-                if let Some(task_info) = tasks.get(&msg.task_id) {
-                    task_info.cancellation_token.cancel();
-                    tracing::info!(task_id = %msg.task_id, "Task cancellation requested");
-
-                    // Wait for the task to complete with configured timeout
-                    let mut handle_lock = task_info.join_handle.lock().await;
-                    if let Some(handle) = handle_lock.take() {
-                        let _ = tokio::time::timeout(timeout, handle).await;
-                    }
-                } else {
-                    tracing::warn!(task_id = %msg.task_id, "Task not found for cancellation");
+                for waiter in waiters {
+                    waiter.send(Some(response.clone())).await;
                 }
             })
         });
 
-        // Handle status queries (read-only)
-        let tasks_for_status = tasks.clone();
-        agent.act_on::<GetTaskStatus>(move |_agent, envelope| {
-            let msg = envelope.message().clone();
-            let tasks = tasks_for_status.clone();
+        // Cancellation is a request, not a wait: the task notices its token and
+        // reports back through `TaskCompleted`. Callers who want to wait use
+        // `WaitForTask`, which is what `BackgroundWorker::cancel` does.
+        agent.mutate_on::<CancelTask>(|agent, envelope| {
+            let task_id = &envelope.message().task_id;
+            if let Some(record) = agent.model.tasks.get(task_id) {
+                record.cancellation_token.cancel();
+                tracing::info!(task_id = %task_id, "Task cancellation requested");
+            } else {
+                tracing::warn!(task_id = %task_id, "Task not found for cancellation");
+            }
+            Reply::ready()
+        });
+
+        // Answers now if the task is already finished or unknown, otherwise
+        // parks the reply envelope until `TaskCompleted` arrives. Holding the
+        // envelope is what lets a caller await completion without polling.
+        agent.mutate_on::<WaitForTask>(|agent, envelope| {
+            let task_id = envelope.message().task_id.clone();
             let reply = envelope.reply_envelope();
 
-            Box::pin(async move {
-                let status = if let Some(task_info) = tasks.get(&msg.task_id) {
-                    task_info.status.lock().await.clone()
-                } else {
-                    TaskStatus::Pending // Task not found
-                };
+            let settled = match agent.model.tasks.get(&task_id) {
+                None => Some(None),
+                Some(record) if record.status.is_terminal() => Some(Some(TaskStatusResponse {
+                    task_id: task_id.clone(),
+                    status: record.status.clone(),
+                })),
+                Some(_) => None,
+            };
 
-                reply
-                    .send(TaskStatusResponse {
-                        task_id: msg.task_id,
-                        status,
-                    })
-                    .await;
+            match settled {
+                Some(response) => Reply::pending(async move {
+                    reply.send(response).await;
+                }),
+                None => {
+                    agent.model.waiters.entry(task_id).or_default().push(reply);
+                    Reply::ready()
+                }
+            }
+        });
+
+        agent.act_on::<GetTaskStatus>(|agent, envelope| {
+            let task_id = envelope.message().task_id.clone();
+            let reply = envelope.reply_envelope();
+
+            let response = agent
+                .model
+                .tasks
+                .get(&task_id)
+                .map(|record| TaskStatusResponse {
+                    task_id,
+                    status: record.status.clone(),
+                });
+
+            Reply::pending(async move {
+                reply.send(response).await;
             })
         });
 
-        // Handle bulk status queries
-        let tasks_for_all_status = tasks.clone();
-        agent.act_on::<GetAllTaskStatuses>(move |_agent, envelope| {
-            let tasks = tasks_for_all_status.clone();
+        agent.act_on::<GetAllTaskStatuses>(|agent, envelope| {
             let reply = envelope.reply_envelope();
+            let statuses: Vec<TaskStatusResponse> = agent
+                .model
+                .tasks
+                .iter()
+                .map(|(task_id, record)| TaskStatusResponse {
+                    task_id: task_id.clone(),
+                    status: record.status.clone(),
+                })
+                .collect();
 
-            Box::pin(async move {
-                let mut statuses = Vec::new();
-
-                for entry in tasks.iter() {
-                    let status = entry.status.lock().await.clone();
-                    statuses.push(TaskStatusResponse {
-                        task_id: entry.task_id.clone(),
-                        status,
-                    });
-                }
-
+            Reply::pending(async move {
                 reply.send(statuses).await;
             })
         });
 
-        // Graceful shutdown - cancel all tasks
-        agent.before_stop(move |_agent| {
-            let tasks = tasks_for_shutdown.clone();
-            let root_token = root_token_for_agent.clone();
-            let timeout = shutdown_timeout_for_stop;
+        // Drop finished tasks so the registry does not grow without bound.
+        agent.mutate_on::<CleanupFinishedTasks>(|agent, envelope| {
+            let before = agent.model.tasks.len();
+            agent
+                .model
+                .tasks
+                .retain(|_, record| !record.status.is_terminal());
+            let removed = before - agent.model.tasks.len();
 
-            Box::pin(async move {
-                let task_count = tasks.len();
-                if task_count == 0 {
+            let reply = envelope.reply_envelope();
+            Reply::pending(async move {
+                reply.send(removed).await;
+            })
+        });
+
+        // Graceful shutdown - cancel all tasks, then wait for them
+        agent.before_stop(|agent| {
+            let root_token = agent.model.root_token.clone();
+            let tracker = agent.model.tracker.clone();
+            let timeout = agent.model.shutdown_timeout;
+            let task_count = agent.model.tasks.len();
+
+            Reply::pending(async move {
+                let Some(tracker) = tracker else {
+                    return;
+                };
+
+                if task_count == 0 && tracker.is_empty() {
                     tracing::info!("BackgroundWorker stopping with no active tasks");
                     return;
                 }
@@ -257,68 +353,53 @@ impl BackgroundWorker {
                     "BackgroundWorker stopping, cancelling all tasks..."
                 );
 
-                // Cancel root token (all child tokens will be cancelled)
-                root_token.cancel();
-
-                // Wait for all tasks to complete with configured timeout
-                for entry in tasks.iter() {
-                    let mut handle_lock = entry.join_handle.lock().await;
-                    if let Some(handle) = handle_lock.take() {
-                        match tokio::time::timeout(timeout, handle).await {
-                            Ok(Ok(())) => {
-                                tracing::debug!(task_id = %entry.task_id, "Task shutdown complete");
-                            }
-                            Ok(Err(e)) => {
-                                tracing::warn!(
-                                    task_id = %entry.task_id,
-                                    error = %e,
-                                    "Task panicked during shutdown"
-                                );
-                            }
-                            Err(_) => {
-                                tracing::warn!(
-                                    task_id = %entry.task_id,
-                                    "Task shutdown timed out"
-                                );
-                            }
-                        }
-                    }
+                if let Some(token) = root_token {
+                    token.cancel();
                 }
 
-                tracing::info!("All background tasks stopped");
+                // Closing refuses new registrations so `wait` can terminate.
+                tracker.close();
+                if tokio::time::timeout(timeout, tracker.wait()).await.is_err() {
+                    tracing::warn!(
+                        remaining = tracker.len(),
+                        "Background tasks did not stop within the shutdown timeout"
+                    );
+                } else {
+                    tracing::info!("All background tasks stopped");
+                }
             })
         });
 
-        // Log startup
         agent.after_start(|_agent| {
-            Box::pin(async move {
-                tracing::info!("BackgroundWorker agent started");
-            })
+            tracing::info!("BackgroundWorker agent started");
+            Reply::ready()
         });
 
         let handle = agent.start().await;
 
         let worker = Self {
             agent_handle: handle,
-            tasks,
             root_token,
             semaphore,
+            tracker,
             shutdown_timeout,
         };
 
         // Spawn periodic cleanup task if configured
         if config.cleanup_interval_secs > 0 {
-            let cleanup_worker = worker.clone();
+            let cleanup_handle = worker.agent_handle.clone();
             let cleanup_token = worker.root_token.child_token();
             let interval = Duration::from_secs(config.cleanup_interval_secs);
             tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(interval);
+                ticker.tick().await;
                 loop {
                     tokio::select! {
                         biased;
                         () = cleanup_token.cancelled() => break,
-                        () = tokio::time::sleep(interval) => {
-                            cleanup_worker.cleanup_finished_tasks().await;
-                            tracing::debug!("Periodic background task cleanup completed");
+                        _ = ticker.tick() => {
+                            cleanup_handle.send(CleanupFinishedTasks).await;
+                            tracing::debug!("Periodic background task cleanup requested");
                         }
                     }
                 }
@@ -330,19 +411,19 @@ impl BackgroundWorker {
 
     /// Submit a new background task
     ///
-    /// The task will be spawned and tracked by the worker.
-    /// If a concurrency limit is configured, this method will await until
-    /// a slot is available, providing backpressure to callers.
+    /// The task is spawned and tracked by the agent. If a concurrency limit is
+    /// configured, this method awaits a free slot, providing backpressure to
+    /// callers.
     ///
     /// # Arguments
     ///
     /// * `task_id` - Unique identifier for the task
-    /// * `work` - Async closure that performs the work
+    /// * `work` - Closure producing the future that performs the work
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// worker.submit("cleanup-job", async move {
+    /// worker.submit("cleanup-job", || async {
     ///     do_cleanup().await?;
     ///     Ok(())
     /// }).await;
@@ -367,123 +448,158 @@ impl BackgroundWorker {
             None
         };
 
-        // Create child cancellation token for this task
         let cancel_token = self.root_token.child_token();
-        let cancel_token_clone = cancel_token.clone();
 
-        // Create status tracking
-        let status = Arc::new(Mutex::new(TaskStatus::Running));
-        let status_for_task = status.clone();
-
-        let task_id_clone = task_id.clone();
-
-        // Spawn the background task
-        let handle = tokio::spawn(async move {
-            // Hold the permit for the task's lifetime
-            let _permit = permit;
-            let task_id = task_id_clone;
-            tokio::select! {
-                biased;
-
-                () = cancel_token_clone.cancelled() => {
-                    tracing::debug!(task_id = %task_id, "Task cancelled");
-                    let mut s = status_for_task.lock().await;
-                    *s = TaskStatus::Cancelled;
-                }
-                result = work() => {
-                    match result {
-                        Ok(()) => {
-                            tracing::debug!(task_id = %task_id, "Task completed successfully");
-                            let mut s = status_for_task.lock().await;
-                            *s = TaskStatus::Completed;
-                        }
-                        Err(e) => {
-                            tracing::warn!(task_id = %task_id, error = %e, "Task failed");
-                            let mut s = status_for_task.lock().await;
-                            *s = TaskStatus::Failed(e.to_string());
-                        }
-                    }
-                }
-            }
-        });
-
-        // Store task info
-        let task_info = TaskInfo {
-            task_id: task_id.clone(),
-            join_handle: Arc::new(Mutex::new(Some(handle))),
-            cancellation_token: cancel_token,
-            status,
-        };
-
-        self.tasks.insert(task_id.clone(), task_info);
-        tracing::info!(task_id = %task_id, "Background task submitted");
-    }
-
-    /// Cancel a specific task by ID
-    ///
-    /// The task's cancellation token will be triggered, and the worker
-    /// will wait up to the configured shutdown timeout for it to complete.
-    pub async fn cancel(&self, task_id: impl Into<String>) {
+        // Registered before the task exists. Mailboxes are FIFO, so the agent
+        // processes this ahead of the completion the task will send.
         self.agent_handle
-            .send(CancelTask {
-                task_id: task_id.into(),
+            .send(RegisterTask {
+                task_id: task_id.clone(),
+                cancellation_token: cancel_token.clone(),
             })
             .await;
+
+        let agent_handle = self.agent_handle.clone();
+        self.tracker.spawn(async move {
+            let _permit = permit;
+
+            let status = tokio::select! {
+                biased;
+
+                () = cancel_token.cancelled() => {
+                    tracing::debug!(task_id = %task_id, "Task cancelled");
+                    TaskStatus::Cancelled
+                }
+                result = work() => match result {
+                    Ok(()) => {
+                        tracing::debug!(task_id = %task_id, "Task completed successfully");
+                        TaskStatus::Completed
+                    }
+                    Err(e) => {
+                        tracing::warn!(task_id = %task_id, error = %e, "Task failed");
+                        TaskStatus::Failed(e.to_string())
+                    }
+                },
+            };
+
+            agent_handle.send(TaskCompleted { task_id, status }).await;
+        });
     }
 
-    /// Get the status of a specific task
+    /// Cancel a task and wait for it to stop
     ///
-    /// Returns the current status directly from the shared task map.
-    pub async fn get_task_status(&self, task_id: &str) -> TaskStatus {
-        if let Some(task_info) = self.tasks.get(task_id) {
-            task_info.status.lock().await.clone()
-        } else {
-            TaskStatus::Pending
-        }
+    /// Returns the task's final status, or `None` if no such task is tracked.
+    /// Waiting is bounded by the configured shutdown timeout.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AskError`] if the agent cannot be reached or does not answer
+    /// within the timeout.
+    pub async fn cancel(&self, task_id: impl Into<String>) -> Result<Option<TaskStatus>, AskError> {
+        let task_id = task_id.into();
+        self.agent_handle
+            .send(CancelTask {
+                task_id: task_id.clone(),
+            })
+            .await;
+
+        let response = self
+            .agent_handle
+            .ask_with_timeout(WaitForTask { task_id }, self.shutdown_timeout)
+            .await?;
+
+        Ok(response.map(|r| r.status))
+    }
+
+    /// Wait for a task to reach a terminal state, returning its final status
+    ///
+    /// Returns `None` if no such task is tracked. Answers immediately for a
+    /// task that has already finished.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AskError`] if the agent cannot be reached or does not answer.
+    pub async fn wait_for_task(
+        &self,
+        task_id: impl Into<String>,
+    ) -> Result<Option<TaskStatus>, AskError> {
+        let response = self
+            .agent_handle
+            .ask(WaitForTask {
+                task_id: task_id.into(),
+            })
+            .await?;
+        Ok(response.map(|r| r.status))
+    }
+
+    /// Get the status of a specific task, or `None` if it is not tracked
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AskError`] if the agent cannot be reached or does not answer.
+    pub async fn task_status(
+        &self,
+        task_id: impl Into<String>,
+    ) -> Result<Option<TaskStatus>, AskError> {
+        let response = self
+            .agent_handle
+            .ask(GetTaskStatus {
+                task_id: task_id.into(),
+            })
+            .await?;
+        Ok(response.map(|r| r.status))
+    }
+
+    /// Get the status of every tracked task
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AskError`] if the agent cannot be reached or does not answer.
+    pub async fn all_task_statuses(&self) -> Result<Vec<TaskStatusResponse>, AskError> {
+        self.agent_handle.ask(GetAllTaskStatuses).await
     }
 
     /// Get the count of tracked tasks
-    #[must_use]
-    pub fn task_count(&self) -> usize {
-        self.tasks.len()
-    }
-
-    /// Get the count of running tasks
-    pub async fn running_task_count(&self) -> usize {
-        let mut count = 0;
-        for entry in self.tasks.iter() {
-            if *entry.status.lock().await == TaskStatus::Running {
-                count += 1;
-            }
-        }
-        count
-    }
-
-    /// Check if a task exists
-    #[must_use]
-    pub fn has_task(&self, task_id: &str) -> bool {
-        self.tasks.contains_key(task_id)
-    }
-
-    /// Remove completed/failed/cancelled tasks from tracking
     ///
-    /// This is useful to prevent the task map from growing indefinitely.
-    pub async fn cleanup_finished_tasks(&self) {
-        let mut to_remove = Vec::new();
+    /// # Errors
+    ///
+    /// Returns [`AskError`] if the agent cannot be reached or does not answer.
+    pub async fn task_count(&self) -> Result<usize, AskError> {
+        Ok(self.all_task_statuses().await?.len())
+    }
 
-        for entry in self.tasks.iter() {
-            let status = entry.status.lock().await.clone();
-            match status {
-                TaskStatus::Completed | TaskStatus::Failed(_) | TaskStatus::Cancelled => {
-                    to_remove.push(entry.task_id.clone());
-                }
-                _ => {}
-            }
-        }
+    /// Get the count of tasks that have not yet reached a terminal state
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AskError`] if the agent cannot be reached or does not answer.
+    pub async fn running_task_count(&self) -> Result<usize, AskError> {
+        Ok(self
+            .all_task_statuses()
+            .await?
+            .into_iter()
+            .filter(|r| r.status == TaskStatus::Running)
+            .count())
+    }
 
-        for task_id in to_remove {
-            self.tasks.remove(&task_id);
-        }
+    /// Check if a task is tracked
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AskError`] if the agent cannot be reached or does not answer.
+    pub async fn has_task(&self, task_id: impl Into<String>) -> Result<bool, AskError> {
+        Ok(self.task_status(task_id).await?.is_some())
+    }
+
+    /// Remove completed, failed and cancelled tasks from tracking
+    ///
+    /// Returns how many records were dropped.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AskError`] if the agent cannot be reached or does not answer.
+    pub async fn cleanup_finished_tasks(&self) -> Result<usize, AskError> {
+        self.agent_handle.ask(CleanupFinishedTasks).await
     }
 
     /// Get the agent handle for direct message sending
@@ -531,108 +647,230 @@ mod tests {
         assert_eq!(config.cleanup_interval_secs, 0);
     }
 
-    #[tokio::test]
-    async fn test_semaphore_concurrency_limiting() {
+    #[test]
+    fn terminal_statuses_are_classified() {
+        assert!(TaskStatus::Completed.is_terminal());
+        assert!(TaskStatus::Cancelled.is_terminal());
+        assert!(TaskStatus::Failed("boom".into()).is_terminal());
+        assert!(!TaskStatus::Running.is_terminal());
+        assert!(!TaskStatus::Pending.is_terminal());
+    }
+
+    async fn worker_with(config: BackgroundWorkerConfig) -> (ActorRuntime, BackgroundWorker) {
         let mut runtime = ActonApp::launch_async().await;
-        let config = BackgroundWorkerConfig {
-            enabled: true,
-            max_concurrent_tasks: 2,
-            task_shutdown_timeout_secs: 5,
-            cleanup_interval_secs: 0,
-        };
         let worker = BackgroundWorker::spawn(&mut runtime, &config)
             .await
             .unwrap();
+        (runtime, worker)
+    }
 
-        let (tx, rx) = tokio::sync::watch::channel(false);
-        let running_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let max_observed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    #[tokio::test]
+    async fn completed_task_reports_its_own_outcome() {
+        let (mut runtime, worker) = worker_with(BackgroundWorkerConfig::default()).await;
 
-        // Submit 4 tasks with max_concurrent_tasks = 2.
-        // submit() blocks on the semaphore (backpressure), so we must
-        // spawn submits concurrently — otherwise task 3 blocks forever
-        // waiting for a permit held by tasks 1/2.
-        for i in 0..4 {
-            let rx = rx.clone();
-            let running = running_count.clone();
-            let max_obs = max_observed.clone();
-            let w = worker.clone();
-            tokio::spawn(async move {
-                w.submit(format!("task-{i}"), move || {
-                    let rx = rx;
-                    let running = running;
-                    let max_obs = max_obs;
-                    async move {
-                        let current = running.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                        max_obs.fetch_max(current, std::sync::atomic::Ordering::SeqCst);
+        worker.submit("job", || async { Ok(()) }).await;
 
-                        // Wait for signal to complete
-                        let mut rx = rx;
-                        let _ = rx.wait_for(|v| *v).await;
-
-                        running.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-                        Ok(())
-                    }
-                })
-                .await;
-            });
-        }
-
-        // Give tasks time to start (first 2 acquire permits, next 2 wait)
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        let max = max_observed.load(std::sync::atomic::Ordering::SeqCst);
-        assert!(max <= 2, "Max concurrent tasks was {max}, expected <= 2");
-
-        // Signal tasks to complete
-        tx.send(true).unwrap();
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        // wait_for_task is the barrier: the agent answers it only once the
+        // spawned task has reported completion.
+        let status = worker.wait_for_task("job").await.unwrap();
+        assert_eq!(status, Some(TaskStatus::Completed));
 
         runtime.shutdown_all().await.unwrap();
     }
 
     #[tokio::test]
-    async fn test_cleanup_finished_tasks() {
-        let mut runtime = ActonApp::launch_async().await;
-        let config = BackgroundWorkerConfig::default();
-        let worker = BackgroundWorker::spawn(&mut runtime, &config)
-            .await
-            .unwrap();
+    async fn failing_task_records_its_error() {
+        let (mut runtime, worker) = worker_with(BackgroundWorkerConfig::default()).await;
 
-        // Submit tasks that complete immediately
+        worker
+            .submit("doomed", || async { Err(anyhow::anyhow!("kaboom")) })
+            .await;
+
+        let status = worker.wait_for_task("doomed").await.unwrap();
+        assert_eq!(status, Some(TaskStatus::Failed("kaboom".into())));
+
+        runtime.shutdown_all().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unknown_task_is_reported_as_absent() {
+        let (mut runtime, worker) = worker_with(BackgroundWorkerConfig::default()).await;
+
+        assert_eq!(worker.task_status("nope").await.unwrap(), None);
+        assert!(!worker.has_task("nope").await.unwrap());
+
+        runtime.shutdown_all().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancel_stops_a_running_task_and_waits_for_it() {
+        let (mut runtime, worker) = worker_with(BackgroundWorkerConfig::default()).await;
+
+        // A task that never finishes on its own, so only cancellation can end it.
+        worker
+            .submit("forever", || async {
+                std::future::pending::<()>().await;
+                Ok(())
+            })
+            .await;
+
+        let status = worker.cancel("forever").await.unwrap();
+        assert_eq!(
+            status,
+            Some(TaskStatus::Cancelled),
+            "cancel should not return until the task has actually stopped"
+        );
+
+        runtime.shutdown_all().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelling_an_unknown_task_reports_absence() {
+        let (mut runtime, worker) = worker_with(BackgroundWorkerConfig::default()).await;
+
+        assert_eq!(worker.cancel("ghost").await.unwrap(), None);
+
+        runtime.shutdown_all().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cleanup_drops_only_finished_tasks() {
+        let (mut runtime, worker) = worker_with(BackgroundWorkerConfig::default()).await;
+
         for i in 0..3 {
             worker
-                .submit(format!("task-{i}"), || async { Ok(()) })
+                .submit(format!("done-{i}"), || async { Ok(()) })
                 .await;
         }
+        worker
+            .submit("still-running", || async {
+                std::future::pending::<()>().await;
+                Ok(())
+            })
+            .await;
 
-        // Wait for tasks to complete
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        for i in 0..3 {
+            worker.wait_for_task(format!("done-{i}")).await.unwrap();
+        }
 
-        assert_eq!(worker.task_count(), 3);
+        assert_eq!(worker.task_count().await.unwrap(), 4);
+        assert_eq!(worker.cleanup_finished_tasks().await.unwrap(), 3);
+        assert_eq!(worker.task_count().await.unwrap(), 1);
+        assert!(
+            worker.has_task("still-running").await.unwrap(),
+            "a running task must survive cleanup"
+        );
 
-        worker.cleanup_finished_tasks().await;
+        runtime.shutdown_all().await.unwrap();
+    }
 
-        assert_eq!(worker.task_count(), 0);
+    #[tokio::test]
+    async fn semaphore_caps_concurrent_tasks() {
+        let (mut runtime, worker) = worker_with(BackgroundWorkerConfig {
+            enabled: true,
+            max_concurrent_tasks: 2,
+            task_shutdown_timeout_secs: 5,
+            cleanup_interval_secs: 0,
+        })
+        .await;
+
+        let (release_tx, release_rx) = tokio::sync::watch::channel(false);
+        let running = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let max_observed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let started = Arc::new(tokio::sync::Semaphore::new(0));
+
+        // submit() blocks on the permit, so the submits must run concurrently
+        // or the third would wait forever on a permit held by the first two.
+        for i in 0..4 {
+            let rx = release_rx.clone();
+            let running = running.clone();
+            let max_observed = max_observed.clone();
+            let started = started.clone();
+            let worker = worker.clone();
+            tokio::spawn(async move {
+                worker
+                    .submit(format!("task-{i}"), move || async move {
+                        let current = running.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                        max_observed.fetch_max(current, std::sync::atomic::Ordering::SeqCst);
+                        started.add_permits(1);
+
+                        let mut rx = rx;
+                        let _ = rx.wait_for(|v| *v).await;
+
+                        running.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                        Ok(())
+                    })
+                    .await;
+            });
+        }
+
+        // Wait until the cap's worth of tasks are actually inside their bodies.
+        // This is the barrier that makes the assertion meaningful rather than
+        // merely early: two are running and the rest cannot start.
+        let _ = started.acquire_many(2).await.unwrap();
+        assert_eq!(
+            max_observed.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "at most max_concurrent_tasks should run at once"
+        );
+
+        release_tx.send(true).unwrap();
+        for i in 0..4 {
+            worker.wait_for_task(format!("task-{i}")).await.unwrap();
+        }
+        assert_eq!(
+            max_observed.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "the cap should hold for the whole run, not just at the start"
+        );
 
         runtime.shutdown_all().await.unwrap();
     }
 
     #[tokio::test]
     async fn test_configurable_shutdown_timeout() {
-        let mut runtime = ActonApp::launch_async().await;
-        let config = BackgroundWorkerConfig {
+        let (mut runtime, worker) = worker_with(BackgroundWorkerConfig {
             enabled: true,
             max_concurrent_tasks: 0,
             task_shutdown_timeout_secs: 10,
             cleanup_interval_secs: 0,
-        };
-        let worker = BackgroundWorker::spawn(&mut runtime, &config)
-            .await
-            .unwrap();
+        })
+        .await;
 
         assert_eq!(worker.shutdown_timeout(), Duration::from_secs(10));
 
         runtime.shutdown_all().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn shutdown_cancels_tasks_that_are_still_running() {
+        let (mut runtime, worker) = worker_with(BackgroundWorkerConfig {
+            enabled: true,
+            max_concurrent_tasks: 0,
+            task_shutdown_timeout_secs: 5,
+            cleanup_interval_secs: 0,
+        })
+        .await;
+
+        let observed_cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = observed_cancel.clone();
+
+        worker
+            .submit("long-runner", move || async move {
+                std::future::pending::<()>().await;
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            })
+            .await;
+
+        // shutdown_all runs before_stop, which cancels the root token and then
+        // waits on the tracker. If cancellation did not reach the task this
+        // would block until the 5s timeout instead of returning promptly.
+        runtime.shutdown_all().await.unwrap();
+
+        assert!(
+            !observed_cancel.load(std::sync::atomic::Ordering::SeqCst),
+            "the task body should have been cancelled, not run to completion"
+        );
     }
 }

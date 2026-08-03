@@ -27,10 +27,15 @@ mod pool;
 pub use background_worker::{BackgroundWorker, BackgroundWorkerConfig, TaskStatus};
 
 // Health status types - users may want to check aggregated health
-pub use messages::{AggregatedHealthResponse, ComponentHealth, HealthStatus};
+pub use messages::{
+    AggregatedHealthResponse, ComponentHealth, GetPoolHealth, HealthStatus, WaitForPoolReady,
+};
 
-// Task status response for BackgroundWorker users
-pub use messages::TaskStatusResponse;
+// Task status response and query messages for BackgroundWorker users
+pub use messages::{
+    CancelTask, CleanupFinishedTasks, GetAllTaskStatuses, GetTaskStatus, TaskStatusResponse,
+    WaitForTask,
+};
 
 // ============================================================================
 // Internal exports - pool agents and shared storage for ServiceBuilder

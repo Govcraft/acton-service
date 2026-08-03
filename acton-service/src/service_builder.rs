@@ -1164,10 +1164,10 @@ where
 
                         // Spawn each user actor under supervision
                         let mut handles = std::collections::HashMap::new();
-                        for ext in &pending_extensions {
-                            match ext.spawn(&supervisor_handle, runtime).await {
-                                Ok((type_id, handle)) => {
-                                    handles.insert(type_id, handle);
+                        for (index, ext) in pending_extensions.iter().enumerate() {
+                            match ext.spawn(&supervisor_handle, runtime, index).await {
+                                Ok((type_id, child)) => {
+                                    handles.insert(type_id, child);
                                 }
                                 Err(e) => {
                                     tracing::error!("Failed to spawn actor extension: {}", e);

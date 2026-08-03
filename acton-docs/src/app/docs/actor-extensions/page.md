@@ -86,6 +86,14 @@ async fn set_cache(
 }
 ```
 
+{% callout type="warning" title="Resolve the handle per use" %}
+`state.actor::<A>()` returns an owned `Option<ActorHandle>`, resolved fresh on
+each call. A restart replaces the actor, so a handle cached in a struct field or
+a `OnceCell` will eventually address an actor that no longer exists. It also
+returns `None` during the window in which a supervised actor is being restarted
+— treat that as "try again", not "not registered".
+{% /callout %}
+
 ---
 
 ## The ActorExtension Trait
@@ -182,9 +190,28 @@ impl ActorExtension for MyCache {
 
 | Policy | Behavior |
 |--------|----------|
-| `Permanent` (default) | Always restart, except during service shutdown |
+| `Permanent` (default) | Restart on any termination, clean stops included, except during service shutdown |
 | `Transient` | Restart only on panic or unexpected termination |
 | `Temporary` | Never restart |
+
+{% callout type="note" title="Restarts re-run `configure`" %}
+`configure` is the actor's restart blueprint, not just its initial setup — the
+framework re-runs it for every incarnation. Anything the actor needs in order to
+function must be registered there, broker subscriptions included. A subscription
+taken outside `configure` is lost the first time the actor restarts.
+
+Restarted actors come back with `Default` state. Supervision keeps the actor
+available; it does not preserve what the actor was holding.
+{% /callout %}
+
+Use `state.supervised_actor::<A>()` to inspect supervision state directly, or to
+wait out a restart rather than polling for the handle to reappear:
+
+```rust
+if let Some(child) = state.supervised_actor::<MyCache>() {
+    tracing::info!(status = ?child.status(), "cache supervision state");
+}
+```
 
 The supervision hierarchy:
 
