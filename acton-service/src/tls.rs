@@ -1217,6 +1217,17 @@ pub fn load_server_config(tls_config: &TlsConfig) -> Result<Arc<ServerConfig>> {
     // both (hyper auto-detects the protocol), rustls picks the best mutual
     // protocol so h2 wins for a gRPC client, and a client that offers no ALPN is
     // unaffected because protocol sniffing still applies.
+    //
+    // The HTTP listener serves h2 only because the workspace enables axum's
+    // `http2` feature, which is not in its default set and which is what turns
+    // on `hyper-util/http2` underneath `axum::serve`. Advertising a protocol
+    // the listener cannot speak is silent: rustls completes the handshake, the
+    // client sends the HTTP/2 preface, and the connection dies before any span
+    // opens (#120). Dropping that feature therefore means dropping `h2` from
+    // this list. `tests/tls_alpn_http2.rs` holds the two together, but only in
+    // a build where nothing else supplies h2 — compiling `grpc` pulls the same
+    // hyper-util feature in through tonic, which is why the CI leg that runs
+    // those tests is `tls-no-grpc`.
     let mut config = config;
     config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 

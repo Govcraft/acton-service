@@ -232,10 +232,13 @@ jobs:
   # guards (database/turso/surrealdb, crypto-aws-lc-rs/crypto-ring) reject it by
   # design, so narrow combinations are the only way to reach cfg-gated code.
   #
-  # These run clippy without nextest. The `full` legs above already own test
-  # coverage; what is missing is a compiler that ever *looks* at code behind a
-  # narrower gate. Adding legs here is cheap -- extend the list whenever a new
-  # feature introduces its own cfg-gated paths.
+  # These run clippy only, unless a leg sets `test: true`. The `full` legs
+  # above already own test coverage; what is usually missing is a compiler that
+  # ever *looks* at code behind a narrower gate. A leg opts into nextest when
+  # the narrower feature set changes runtime behaviour and not just what
+  # compiles, which the `full` legs would then never exercise. Adding legs here
+  # is cheap -- extend the list whenever a new feature introduces its own
+  # cfg-gated paths.
   feature-combos:
     name: lint ${{ matrix.combo }}
     needs: changes
@@ -249,9 +252,13 @@ jobs:
           - combo: minimal
             features: "http,crypto-aws-lc-rs"
           # TLS without gRPC. This combination is what let two dead-code
-          # warnings survive in client_tls.rs until #76.
+          # warnings survive in client_tls.rs until #76, and it is the only one
+          # that can catch #120: with gRPC compiled in, tonic pulls
+          # hyper-util/http2 and the HTTP listener serves h2 whether or not the
+          # workspace asked for it. So this leg runs the tests too.
           - combo: tls-no-grpc
             features: "http,tls,crypto-aws-lc-rs"
+            test: true
           # The mirror image: gRPC transport with no TLS material.
           - combo: grpc-no-tls
             features: "http,grpc,crypto-aws-lc-rs"
@@ -277,10 +284,20 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: combo-${{ matrix.combo }}
+      - uses: taiki-e/install-action@nextest
+        if: matrix.test
       - name: Clippy
         run: |
           cargo clippy -p acton-service --all-targets \
             --no-default-features --features "${{ matrix.features }}" -- -D warnings
+      # Only for legs that opt in with `test: true`. A combination earns this
+      # when its behaviour differs from the `full` legs rather than merely
+      # compiling differently -- otherwise clippy is enough and cheaper.
+      - name: Nextest
+        if: matrix.test
+        run: |
+          cargo nextest run -p acton-service \
+            --no-default-features --features "${{ matrix.features }}"
 
   # Builds the documentation site so that broken Markdoc fails the pull request
   # rather than reaching the deploy job after the merge has already landed on
