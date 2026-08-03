@@ -27,7 +27,9 @@ mod pool;
 pub use background_worker::{BackgroundWorker, BackgroundWorkerConfig, TaskStatus};
 
 // Health status types - users may want to check aggregated health
-pub use messages::{AggregatedHealthResponse, ComponentHealth, HealthStatus};
+pub use messages::{
+    AggregatedHealthResponse, ComponentHealth, GetPoolHealth, HealthStatus, WaitForPoolReady,
+};
 
 // Task status response and query messages for BackgroundWorker users
 pub use messages::{

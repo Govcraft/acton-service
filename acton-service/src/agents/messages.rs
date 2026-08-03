@@ -42,6 +42,33 @@ pub struct ComponentHealth {
     pub message: String,
 }
 
+/// Ask a pool agent for its current connection health
+///
+/// Answers with whatever the agent knows right now, which for a pool that is
+/// still dialling is [`HealthStatus::Connecting`]. Use
+/// [`WaitForPoolReady`] to wait for the outcome instead of sampling it.
+#[derive(Clone, Debug, Default)]
+pub struct GetPoolHealth;
+
+impl Request for GetPoolHealth {
+    type Response = ComponentHealth;
+}
+
+/// Ask a pool agent to answer once its first connection attempt has settled
+///
+/// Pool agents dial on a spawned task and message themselves with the result,
+/// so that result is not in the mailbox yet when `spawn` returns — a plain
+/// [`GetPoolHealth`] ask right after startup races it and reports
+/// [`HealthStatus::Connecting`]. This request is parked by the agent until the
+/// attempt succeeds or fails, then answered with the resulting health. That
+/// makes "wait until the pool is up" a barrier rather than a guessed duration.
+#[derive(Clone, Debug, Default)]
+pub struct WaitForPoolReady;
+
+impl Request for WaitForPoolReady {
+    type Response = ComponentHealth;
+}
+
 // =============================================================================
 // Internal messages for pool connection state management
 // These are sent by spawned connection tasks back to the agent

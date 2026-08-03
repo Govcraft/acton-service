@@ -303,7 +303,6 @@ impl<P: OAuthProvider> OAuthProvider for AuditedOAuthProvider<P> {
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
 
     use acton_reactive::prelude::*;
     use async_trait::async_trait;
@@ -315,15 +314,58 @@ mod tests {
     use crate::audit::storage::AuditStorage;
 
     /// AuditStorage that records every appended event for assertions.
-    #[derive(Default)]
+    ///
+    /// Publishes its append count so tests can wait for persistence to happen.
+    /// Events travel agent -> writer task -> storage, and the writer task sits
+    /// downstream of the agent's mailbox, so no `ask` on the agent proves an
+    /// event landed here. Storage is the only thing that knows.
     struct CapturingAuditStorage {
         events: Mutex<Vec<AuditEvent>>,
+        appended: tokio::sync::watch::Sender<usize>,
+    }
+
+    impl Default for CapturingAuditStorage {
+        fn default() -> Self {
+            Self {
+                events: Mutex::new(Vec::new()),
+                appended: tokio::sync::watch::Sender::new(0),
+            }
+        }
+    }
+
+    impl CapturingAuditStorage {
+        /// Resolves once an event of `kind` has been persisted.
+        async fn wait_for_kind(&self, kind: &AuditEventKind) -> AuditEvent {
+            let mut rx = self.appended.subscribe();
+            loop {
+                if let Some(event) = self.find(kind) {
+                    return event;
+                }
+                rx.changed()
+                    .await
+                    .expect("sender is owned by this storage and outlives the wait");
+            }
+        }
+
+        fn find(&self, kind: &AuditEventKind) -> Option<AuditEvent> {
+            self.events
+                .lock()
+                .expect("events lock")
+                .iter()
+                .find(|e| &e.kind == kind)
+                .cloned()
+        }
     }
 
     #[async_trait]
     impl AuditStorage for CapturingAuditStorage {
         async fn append(&self, event: &AuditEvent) -> Result<(), Error> {
-            self.events.lock().expect("events lock").push(event.clone());
+            let appended = {
+                let mut events = self.events.lock().expect("events lock");
+                events.push(event.clone());
+                events.len()
+            };
+            self.appended.send_replace(appended);
             Ok(())
         }
 
@@ -373,25 +415,48 @@ mod tests {
         (runtime, storage, logger)
     }
 
-    /// Fire-and-forget emission: poll until the expected kind shows up.
+    /// Fire-and-forget emission: wait until the expected kind is persisted.
     async fn wait_for_event(
         storage: &CapturingAuditStorage,
         kind: &AuditEventKind,
     ) -> Option<AuditEvent> {
-        for _ in 0..50 {
-            if let Some(event) = storage
-                .events
-                .lock()
-                .expect("events lock")
-                .iter()
-                .find(|e| &e.kind == kind)
-                .cloned()
-            {
-                return Some(event);
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        None
+        Some(storage.wait_for_kind(kind).await)
+    }
+
+    /// Prove that nothing was emitted, without guessing how long to wait.
+    ///
+    /// A sleep can only ever say "nothing had arrived yet". Emitting a sentinel
+    /// through the same logger and waiting for *it* is conclusive: the agent's
+    /// mailbox and the writer channel are both FIFO, so anything the decorator
+    /// emitted before the sentinel is already persisted by the time it lands.
+    async fn assert_nothing_emitted_before_sentinel(
+        storage: &CapturingAuditStorage,
+        logger: &AuditLogger,
+    ) {
+        let sentinel = AuditEventKind::Custom("sentinel".to_string());
+        logger
+            .log(AuditEvent::new(
+                sentinel.clone(),
+                crate::audit::event::AuditSeverity::Informational,
+                "test-svc".to_string(),
+            ))
+            .await;
+
+        storage.wait_for_kind(&sentinel).await;
+
+        let others: Vec<AuditEventKind> = storage
+            .events
+            .lock()
+            .expect("events lock")
+            .iter()
+            .map(|e| e.kind.clone())
+            .filter(|k| k != &sentinel)
+            .collect();
+
+        assert!(
+            others.is_empty(),
+            "expected no audit events besides the sentinel, got {others:?}"
+        );
     }
 
     #[derive(Default)]
@@ -584,7 +649,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn failed_rotate_emits_nothing() {
         let (_runtime, storage, logger) = capturing_logger().await;
-        let wrapped = AuditedRefreshStorage::new(FailingRefreshStorage, logger);
+        let wrapped = AuditedRefreshStorage::new(FailingRefreshStorage, logger.clone());
 
         let result = wrapped
             .rotate(
@@ -598,12 +663,8 @@ mod tests {
             .await;
         assert!(result.is_err(), "inner failure must propagate");
 
-        // Give the fire-and-forget path a moment to (incorrectly) deliver.
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        assert!(
-            storage.events.lock().expect("events lock").is_empty(),
-            "failed rotation must not be audited as a refresh"
-        );
+        // A failed rotation must not be audited as a refresh.
+        assert_nothing_emitted_before_sentinel(&storage, &logger).await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

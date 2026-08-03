@@ -495,7 +495,10 @@ mod tests {
             name.starts_with("SomeActor"),
             "name should keep the readable type stem, got {name}"
         );
-        assert!(name.ends_with("-3"), "name should carry the index, got {name}");
+        assert!(
+            name.ends_with("-3"),
+            "name should carry the index, got {name}"
+        );
         assert!(
             !name.contains(':') && !name.contains('/'),
             "ERN parts reject ':' and '/', got {name}"

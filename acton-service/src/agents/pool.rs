@@ -18,6 +18,73 @@
 //! 1. Spawn the non-Sync connection work with `tokio::spawn`
 //! 2. Send a message to self when the connection completes
 //! 3. Handle that message in a `mutate_on` handler to update agent state
+//!
+//! ## Asking about connection state
+//!
+//! Every pool agent answers two requests:
+//!
+//! - [`GetPoolHealth`](super::messages::GetPoolHealth) samples the current
+//!   state, which is `Connecting` while the first attempt is still in flight.
+//! - [`WaitForPoolReady`](super::messages::WaitForPoolReady) parks until that
+//!   attempt settles, then answers with the result.
+//!
+//! The distinction matters because of the spawn pattern above: the connection
+//! result is produced on a spawned task, so it is not yet in the mailbox when
+//! `spawn` returns. A sampling ask right after startup therefore races the
+//! connection and reports `Connecting`; only `WaitForPoolReady` is a barrier.
+
+// ============================================================================
+// Shared health reporting
+// ============================================================================
+
+#[cfg(any(
+    feature = "database",
+    feature = "cache",
+    feature = "events",
+    feature = "turso",
+    feature = "surrealdb",
+    feature = "clickhouse"
+))]
+use super::messages::{GetPoolHealth, WaitForPoolReady};
+
+/// Build the answer to a [`GetPoolHealth`](super::messages::GetPoolHealth) ask.
+///
+/// Kept as a free function so all six pool agents describe themselves the same
+/// way, and so the mapping from agent state to health is testable without
+/// standing up an actor.
+#[cfg(any(
+    feature = "database",
+    feature = "cache",
+    feature = "events",
+    feature = "turso",
+    feature = "surrealdb",
+    feature = "clickhouse"
+))]
+fn pool_health(
+    name: &str,
+    connected: bool,
+    connecting: bool,
+    last_error: Option<&str>,
+) -> super::messages::ComponentHealth {
+    use super::messages::{ComponentHealth, HealthStatus};
+
+    let (status, message) = if connected {
+        (HealthStatus::Healthy, "connected".to_string())
+    } else if connecting {
+        (HealthStatus::Connecting, "connecting".to_string())
+    } else {
+        (
+            HealthStatus::Unhealthy,
+            last_error.unwrap_or("not connected").to_string(),
+        )
+    };
+
+    ComponentHealth {
+        name: name.to_string(),
+        status,
+        message,
+    }
+}
 
 // ============================================================================
 // Database Pool Agent
@@ -50,6 +117,10 @@ pub struct DatabasePoolState {
     pub connecting: bool,
     /// Shared storage that AppState reads from directly
     pub shared_pool: Option<SharedDbPool>,
+    /// Reason the last connection attempt failed, reported via `GetPoolHealth`
+    pub last_error: Option<String>,
+    /// Callers parked in `WaitForPoolReady` until the first attempt settles
+    pub(crate) ready_waiters: Vec<OutboundEnvelope>,
     /// Cancellation token for graceful shutdown during connection retries
     pub cancel_token: Option<CancellationToken>,
 }
@@ -100,6 +171,11 @@ impl DatabasePoolAgent {
             let pool = envelope.message().pool.clone();
             agent.model.pool = Some(pool.clone());
             agent.model.connecting = false;
+            agent.model.last_error = None;
+            // Everyone parked in WaitForPoolReady is released here, in
+            // the same handler that records the success.
+            let health = pool_health("database", true, false, None);
+            let waiters = std::mem::take(&mut agent.model.ready_waiters);
 
             // Update shared storage if configured
             let shared_pool = agent.model.shared_pool.clone();
@@ -112,6 +188,10 @@ impl DatabasePoolAgent {
                 } else {
                     tracing::info!("Database pool connected (no shared state)");
                 }
+
+                for waiter in waiters {
+                    waiter.send(health.clone()).await;
+                }
             })
         });
 
@@ -120,8 +200,55 @@ impl DatabasePoolAgent {
             let error_msg = envelope.message().error.clone();
             agent.model.connecting = false;
             tracing::error!("Database pool connection failed: {}", error_msg);
+            // Kept rather than only logged, so `GetPoolHealth` can say
+            // why the pool is down instead of merely that it is.
+            agent.model.last_error = Some(error_msg);
 
-            Reply::ready()
+            let health = pool_health("database", false, false, agent.model.last_error.as_deref());
+            let waiters = std::mem::take(&mut agent.model.ready_waiters);
+
+            Reply::pending(async move {
+                for waiter in waiters {
+                    waiter.send(health.clone()).await;
+                }
+            })
+        });
+
+        // Park a caller until the first connection attempt settles. `mutate_on`
+        // because parking writes the model, and because the answer must not
+        // overtake the Connected/Failed message that produces it.
+        agent.mutate_on::<WaitForPoolReady>(|agent, envelope| {
+            let reply = envelope.reply_envelope();
+
+            if agent.model.connecting {
+                agent.model.ready_waiters.push(reply);
+                return Reply::ready();
+            }
+
+            let health = pool_health(
+                "database",
+                agent.model.pool.is_some(),
+                false,
+                agent.model.last_error.as_deref(),
+            );
+            Reply::pending(async move {
+                reply.send(health).await;
+            })
+        });
+
+        // Answer health asks. Read-only, so `act_on`.
+        agent.act_on::<GetPoolHealth>(|agent, envelope| {
+            let reply = envelope.reply_envelope();
+            let health = pool_health(
+                "database",
+                agent.model.pool.is_some(),
+                agent.model.connecting,
+                agent.model.last_error.as_deref(),
+            );
+
+            Reply::pending(async move {
+                reply.send(health).await;
+            })
         });
 
         // Initialize connection on startup using spawn pattern
@@ -239,6 +366,10 @@ pub struct RedisPoolState {
     pub connecting: bool,
     /// Shared storage that AppState reads from directly
     pub shared_pool: Option<SharedRedisPool>,
+    /// Reason the last connection attempt failed, reported via `GetPoolHealth`
+    pub last_error: Option<String>,
+    /// Callers parked in `WaitForPoolReady` until the first attempt settles
+    pub(crate) ready_waiters: Vec<OutboundEnvelope>,
 }
 
 /// Agent-based Redis connection pool manager
@@ -274,6 +405,11 @@ impl RedisPoolAgent {
             let pool = envelope.message().pool.clone();
             agent.model.pool = Some(pool.clone());
             agent.model.connecting = false;
+            agent.model.last_error = None;
+            // Everyone parked in WaitForPoolReady is released here, in
+            // the same handler that records the success.
+            let health = pool_health("cache", true, false, None);
+            let waiters = std::mem::take(&mut agent.model.ready_waiters);
 
             // Update shared storage if configured
             let shared_pool = agent.model.shared_pool.clone();
@@ -286,6 +422,10 @@ impl RedisPoolAgent {
                 } else {
                     tracing::info!("Redis pool connected (no shared state)");
                 }
+
+                for waiter in waiters {
+                    waiter.send(health.clone()).await;
+                }
             })
         });
 
@@ -294,8 +434,55 @@ impl RedisPoolAgent {
             let error_msg = envelope.message().error.clone();
             agent.model.connecting = false;
             tracing::error!("Redis pool connection failed: {}", error_msg);
+            // Kept rather than only logged, so `GetPoolHealth` can say
+            // why the pool is down instead of merely that it is.
+            agent.model.last_error = Some(error_msg);
 
-            Reply::ready()
+            let health = pool_health("cache", false, false, agent.model.last_error.as_deref());
+            let waiters = std::mem::take(&mut agent.model.ready_waiters);
+
+            Reply::pending(async move {
+                for waiter in waiters {
+                    waiter.send(health.clone()).await;
+                }
+            })
+        });
+
+        // Park a caller until the first connection attempt settles. `mutate_on`
+        // because parking writes the model, and because the answer must not
+        // overtake the Connected/Failed message that produces it.
+        agent.mutate_on::<WaitForPoolReady>(|agent, envelope| {
+            let reply = envelope.reply_envelope();
+
+            if agent.model.connecting {
+                agent.model.ready_waiters.push(reply);
+                return Reply::ready();
+            }
+
+            let health = pool_health(
+                "cache",
+                agent.model.pool.is_some(),
+                false,
+                agent.model.last_error.as_deref(),
+            );
+            Reply::pending(async move {
+                reply.send(health).await;
+            })
+        });
+
+        // Answer health asks. Read-only, so `act_on`.
+        agent.act_on::<GetPoolHealth>(|agent, envelope| {
+            let reply = envelope.reply_envelope();
+            let health = pool_health(
+                "cache",
+                agent.model.pool.is_some(),
+                agent.model.connecting,
+                agent.model.last_error.as_deref(),
+            );
+
+            Reply::pending(async move {
+                reply.send(health).await;
+            })
         });
 
         // Initialize connection on startup
@@ -374,6 +561,10 @@ pub struct NatsPoolState {
     pub connecting: bool,
     /// Shared storage that AppState reads from directly
     pub shared_client: Option<SharedNatsClient>,
+    /// Reason the last connection attempt failed, reported via `GetPoolHealth`
+    pub last_error: Option<String>,
+    /// Callers parked in `WaitForPoolReady` until the first attempt settles
+    pub(crate) ready_waiters: Vec<OutboundEnvelope>,
 }
 
 /// Agent-based NATS client manager
@@ -408,6 +599,11 @@ impl NatsPoolAgent {
             let client = envelope.message().client.clone();
             agent.model.client = Some(client.clone());
             agent.model.connecting = false;
+            agent.model.last_error = None;
+            // Everyone parked in WaitForPoolReady is released here, in
+            // the same handler that records the success.
+            let health = pool_health("events", true, false, None);
+            let waiters = std::mem::take(&mut agent.model.ready_waiters);
 
             // Update shared storage if configured
             let shared_client = agent.model.shared_client.clone();
@@ -420,6 +616,10 @@ impl NatsPoolAgent {
                 } else {
                     tracing::info!("NATS client connected (no shared state)");
                 }
+
+                for waiter in waiters {
+                    waiter.send(health.clone()).await;
+                }
             })
         });
 
@@ -428,8 +628,55 @@ impl NatsPoolAgent {
             let error_msg = envelope.message().error.clone();
             agent.model.connecting = false;
             tracing::error!("NATS client connection failed: {}", error_msg);
+            // Kept rather than only logged, so `GetPoolHealth` can say
+            // why the pool is down instead of merely that it is.
+            agent.model.last_error = Some(error_msg);
 
-            Reply::ready()
+            let health = pool_health("events", false, false, agent.model.last_error.as_deref());
+            let waiters = std::mem::take(&mut agent.model.ready_waiters);
+
+            Reply::pending(async move {
+                for waiter in waiters {
+                    waiter.send(health.clone()).await;
+                }
+            })
+        });
+
+        // Park a caller until the first connection attempt settles. `mutate_on`
+        // because parking writes the model, and because the answer must not
+        // overtake the Connected/Failed message that produces it.
+        agent.mutate_on::<WaitForPoolReady>(|agent, envelope| {
+            let reply = envelope.reply_envelope();
+
+            if agent.model.connecting {
+                agent.model.ready_waiters.push(reply);
+                return Reply::ready();
+            }
+
+            let health = pool_health(
+                "events",
+                agent.model.client.is_some(),
+                false,
+                agent.model.last_error.as_deref(),
+            );
+            Reply::pending(async move {
+                reply.send(health).await;
+            })
+        });
+
+        // Answer health asks. Read-only, so `act_on`.
+        agent.act_on::<GetPoolHealth>(|agent, envelope| {
+            let reply = envelope.reply_envelope();
+            let health = pool_health(
+                "events",
+                agent.model.client.is_some(),
+                agent.model.connecting,
+                agent.model.last_error.as_deref(),
+            );
+
+            Reply::pending(async move {
+                reply.send(health).await;
+            })
         });
 
         // Initialize connection on startup
@@ -530,6 +777,10 @@ pub struct TursoDbState {
     pub connecting: bool,
     /// Shared storage that AppState reads from directly
     pub shared_db: Option<SharedTursoDb>,
+    /// Reason the last connection attempt failed, reported via `GetPoolHealth`
+    pub last_error: Option<String>,
+    /// Callers parked in `WaitForPoolReady` until the first attempt settles
+    pub(crate) ready_waiters: Vec<OutboundEnvelope>,
     /// Cancellation token for graceful shutdown during connection retries
     pub cancel_token: Option<CancellationToken>,
 }
@@ -578,6 +829,11 @@ impl TursoDbAgent {
             let db = envelope.message().db.clone();
             agent.model.db = Some(db.clone());
             agent.model.connecting = false;
+            agent.model.last_error = None;
+            // Everyone parked in WaitForPoolReady is released here, in
+            // the same handler that records the success.
+            let health = pool_health("turso", true, false, None);
+            let waiters = std::mem::take(&mut agent.model.ready_waiters);
 
             // Update shared storage if configured
             let shared_db = agent.model.shared_db.clone();
@@ -590,6 +846,10 @@ impl TursoDbAgent {
                 } else {
                     tracing::info!("Turso database connected (no shared state)");
                 }
+
+                for waiter in waiters {
+                    waiter.send(health.clone()).await;
+                }
             })
         });
 
@@ -598,8 +858,55 @@ impl TursoDbAgent {
             let error_msg = envelope.message().error.clone();
             agent.model.connecting = false;
             tracing::error!("Turso database connection failed: {}", error_msg);
+            // Kept rather than only logged, so `GetPoolHealth` can say
+            // why the pool is down instead of merely that it is.
+            agent.model.last_error = Some(error_msg);
 
-            Reply::ready()
+            let health = pool_health("turso", false, false, agent.model.last_error.as_deref());
+            let waiters = std::mem::take(&mut agent.model.ready_waiters);
+
+            Reply::pending(async move {
+                for waiter in waiters {
+                    waiter.send(health.clone()).await;
+                }
+            })
+        });
+
+        // Park a caller until the first connection attempt settles. `mutate_on`
+        // because parking writes the model, and because the answer must not
+        // overtake the Connected/Failed message that produces it.
+        agent.mutate_on::<WaitForPoolReady>(|agent, envelope| {
+            let reply = envelope.reply_envelope();
+
+            if agent.model.connecting {
+                agent.model.ready_waiters.push(reply);
+                return Reply::ready();
+            }
+
+            let health = pool_health(
+                "turso",
+                agent.model.db.is_some(),
+                false,
+                agent.model.last_error.as_deref(),
+            );
+            Reply::pending(async move {
+                reply.send(health).await;
+            })
+        });
+
+        // Answer health asks. Read-only, so `act_on`.
+        agent.act_on::<GetPoolHealth>(|agent, envelope| {
+            let reply = envelope.reply_envelope();
+            let health = pool_health(
+                "turso",
+                agent.model.db.is_some(),
+                agent.model.connecting,
+                agent.model.last_error.as_deref(),
+            );
+
+            Reply::pending(async move {
+                reply.send(health).await;
+            })
         });
 
         // Initialize connection on startup using spawn pattern
@@ -737,6 +1044,10 @@ pub struct SurrealDbState {
     pub connecting: bool,
     /// Shared storage that AppState reads from directly
     pub shared_client: Option<SharedSurrealDb>,
+    /// Reason the last connection attempt failed, reported via `GetPoolHealth`
+    pub last_error: Option<String>,
+    /// Callers parked in `WaitForPoolReady` until the first attempt settles
+    pub(crate) ready_waiters: Vec<OutboundEnvelope>,
     /// Cancellation token for graceful shutdown during connection retries
     pub cancel_token: Option<CancellationToken>,
 }
@@ -785,6 +1096,11 @@ impl SurrealDbAgent {
             let client = envelope.message().client.clone();
             agent.model.client = Some(client.clone());
             agent.model.connecting = false;
+            agent.model.last_error = None;
+            // Everyone parked in WaitForPoolReady is released here, in
+            // the same handler that records the success.
+            let health = pool_health("surrealdb", true, false, None);
+            let waiters = std::mem::take(&mut agent.model.ready_waiters);
 
             // Update shared storage if configured
             let shared_client = agent.model.shared_client.clone();
@@ -797,6 +1113,10 @@ impl SurrealDbAgent {
                 } else {
                     tracing::info!("SurrealDB client connected (no shared state)");
                 }
+
+                for waiter in waiters {
+                    waiter.send(health.clone()).await;
+                }
             })
         });
 
@@ -805,8 +1125,55 @@ impl SurrealDbAgent {
             let error_msg = envelope.message().error.clone();
             agent.model.connecting = false;
             tracing::error!("SurrealDB client connection failed: {}", error_msg);
+            // Kept rather than only logged, so `GetPoolHealth` can say
+            // why the pool is down instead of merely that it is.
+            agent.model.last_error = Some(error_msg);
 
-            Reply::ready()
+            let health = pool_health("surrealdb", false, false, agent.model.last_error.as_deref());
+            let waiters = std::mem::take(&mut agent.model.ready_waiters);
+
+            Reply::pending(async move {
+                for waiter in waiters {
+                    waiter.send(health.clone()).await;
+                }
+            })
+        });
+
+        // Park a caller until the first connection attempt settles. `mutate_on`
+        // because parking writes the model, and because the answer must not
+        // overtake the Connected/Failed message that produces it.
+        agent.mutate_on::<WaitForPoolReady>(|agent, envelope| {
+            let reply = envelope.reply_envelope();
+
+            if agent.model.connecting {
+                agent.model.ready_waiters.push(reply);
+                return Reply::ready();
+            }
+
+            let health = pool_health(
+                "surrealdb",
+                agent.model.client.is_some(),
+                false,
+                agent.model.last_error.as_deref(),
+            );
+            Reply::pending(async move {
+                reply.send(health).await;
+            })
+        });
+
+        // Answer health asks. Read-only, so `act_on`.
+        agent.act_on::<GetPoolHealth>(|agent, envelope| {
+            let reply = envelope.reply_envelope();
+            let health = pool_health(
+                "surrealdb",
+                agent.model.client.is_some(),
+                agent.model.connecting,
+                agent.model.last_error.as_deref(),
+            );
+
+            Reply::pending(async move {
+                reply.send(health).await;
+            })
         });
 
         // Initialize connection on startup using spawn pattern
@@ -938,6 +1305,10 @@ pub struct ClickHouseClientState {
     pub connecting: bool,
     /// Shared storage that AppState reads from directly
     pub shared_client: Option<SharedClickHouseClient>,
+    /// Reason the last connection attempt failed, reported via `GetPoolHealth`
+    pub last_error: Option<String>,
+    /// Callers parked in `WaitForPoolReady` until the first attempt settles
+    pub(crate) ready_waiters: Vec<OutboundEnvelope>,
 }
 
 #[cfg(feature = "clickhouse")]
@@ -985,6 +1356,11 @@ impl ClickHousePoolAgent {
             let client = envelope.message().client.clone();
             agent.model.client = Some(client.clone());
             agent.model.connecting = false;
+            agent.model.last_error = None;
+            // Everyone parked in WaitForPoolReady is released here, in
+            // the same handler that records the success.
+            let health = pool_health("clickhouse", true, false, None);
+            let waiters = std::mem::take(&mut agent.model.ready_waiters);
 
             // Update shared storage if configured
             let shared_client = agent.model.shared_client.clone();
@@ -996,6 +1372,10 @@ impl ClickHousePoolAgent {
                 } else {
                     tracing::info!("ClickHouse client connected (no shared state)");
                 }
+
+                for waiter in waiters {
+                    waiter.send(health.clone()).await;
+                }
             })
         });
 
@@ -1004,8 +1384,60 @@ impl ClickHousePoolAgent {
             let error_msg = envelope.message().error.clone();
             agent.model.connecting = false;
             tracing::error!("ClickHouse client connection failed: {}", error_msg);
+            // Kept rather than only logged, so `GetPoolHealth` can say
+            // why the pool is down instead of merely that it is.
+            agent.model.last_error = Some(error_msg);
 
-            Reply::ready()
+            let health = pool_health(
+                "clickhouse",
+                false,
+                false,
+                agent.model.last_error.as_deref(),
+            );
+            let waiters = std::mem::take(&mut agent.model.ready_waiters);
+
+            Reply::pending(async move {
+                for waiter in waiters {
+                    waiter.send(health.clone()).await;
+                }
+            })
+        });
+
+        // Park a caller until the first connection attempt settles. `mutate_on`
+        // because parking writes the model, and because the answer must not
+        // overtake the Connected/Failed message that produces it.
+        agent.mutate_on::<WaitForPoolReady>(|agent, envelope| {
+            let reply = envelope.reply_envelope();
+
+            if agent.model.connecting {
+                agent.model.ready_waiters.push(reply);
+                return Reply::ready();
+            }
+
+            let health = pool_health(
+                "clickhouse",
+                agent.model.client.is_some(),
+                false,
+                agent.model.last_error.as_deref(),
+            );
+            Reply::pending(async move {
+                reply.send(health).await;
+            })
+        });
+
+        // Answer health asks. Read-only, so `act_on`.
+        agent.act_on::<GetPoolHealth>(|agent, envelope| {
+            let reply = envelope.reply_envelope();
+            let health = pool_health(
+                "clickhouse",
+                agent.model.client.is_some(),
+                agent.model.connecting,
+                agent.model.last_error.as_deref(),
+            );
+
+            Reply::pending(async move {
+                reply.send(health).await;
+            })
         });
 
         // Initialize connection on startup
@@ -1074,6 +1506,7 @@ mod tests {
     #[cfg(feature = "turso")]
     mod turso_agent_tests {
         use super::*;
+        use crate::agents::messages::HealthStatus;
         use crate::config::{TursoConfig, TursoMode};
         use std::path::PathBuf;
 
@@ -1124,8 +1557,12 @@ mod tests {
                 .await
                 .expect("Failed to spawn TursoDbAgent");
 
-            // Wait a bit for the connection to be established
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            // WaitForPoolReady is the barrier. A plain GetPoolHealth ask here
+            // would race the connection: the agent dials on a spawned task, so
+            // the result is not in the mailbox yet when spawn() returns, and
+            // the ask would answer Connecting.
+            let health = handle.ask(WaitForPoolReady).await.expect("readiness ask");
+            assert_eq!(health.status, HealthStatus::Healthy, "{}", health.message);
 
             // Verify the database is available in shared storage
             let db_guard = shared_db.read().await;
@@ -1181,8 +1618,8 @@ mod tests {
                 .await
                 .expect("Failed to spawn TursoDbAgent");
 
-            // Wait for connection
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            let health = handle.ask(WaitForPoolReady).await.expect("readiness ask");
+            assert_eq!(health.status, HealthStatus::Healthy, "{}", health.message);
 
             // Verify connected
             assert!(shared_db.read().await.is_some());
@@ -1241,8 +1678,10 @@ mod tests {
                 .await
                 .expect("Failed to spawn TursoDbAgent");
 
-            // Wait for connection
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            // Still healthy without shared storage; the agent owns the state
+            // either way, and the shared handle is only a read-side convenience.
+            let health = handle.ask(WaitForPoolReady).await.expect("readiness ask");
+            assert_eq!(health.status, HealthStatus::Healthy, "{}", health.message);
 
             // Agent should still work, just won't update shared storage
             let _ = handle.stop().await;
@@ -1278,8 +1717,14 @@ mod tests {
                 .await
                 .expect("Failed to spawn TursoDbAgent");
 
-            // Wait for connection attempt to complete
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            // Waiting on the failure verdict rather than on the clock, and
+            // asserting the agent reports *why* it is down.
+            let health = handle.ask(WaitForPoolReady).await.expect("readiness ask");
+            assert_eq!(health.status, HealthStatus::Unhealthy);
+            assert!(
+                !health.message.is_empty(),
+                "an unhealthy pool should report a reason"
+            );
 
             // Shared storage should remain None due to missing URL
             assert!(
@@ -1340,8 +1785,15 @@ mod tests {
                 .await
                 .expect("Failed to spawn second agent");
 
-            // Wait for connections
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            for (n, h) in [(1, &handle1), (2, &handle2)] {
+                let health = h.ask(WaitForPoolReady).await.expect("readiness ask");
+                assert_eq!(
+                    health.status,
+                    HealthStatus::Healthy,
+                    "agent {n}: {}",
+                    health.message
+                );
+            }
 
             // Both should be connected
             assert!(

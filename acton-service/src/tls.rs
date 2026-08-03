@@ -1204,9 +1204,7 @@ pub fn load_server_config(tls_config: &TlsConfig) -> Result<Arc<ServerConfig>> {
         }
     }
     .with_single_cert(cert_chain, key)
-    .map_err(|e| {
-        crate::error::Error::Tls(format!("Failed to build TLS server config: {}", e))
-    })?;
+    .map_err(|e| crate::error::Error::Tls(format!("Failed to build TLS server config: {}", e)))?;
 
     // Advertise ALPN so the listener answers a client's protocol offer during
     // the handshake. Without this rustls selects nothing, and a strict gRPC
@@ -1532,7 +1530,10 @@ mod tests {
                 crate::error::Error::Tls("cert_path '/etc/secret.pem' unreadable".to_string())
                     .into_response();
 
-            assert_eq!(response.status(), axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            );
         }
     }
 

@@ -422,15 +422,19 @@ mod tests {
 
     /// Builds an event carrying every field the v1 hash ignored.
     fn make_rich_event() -> AuditEvent {
-        let mut event = make_event(AuditEventKind::HttpRequest).with_source(
-            crate::audit::event::AuditSource {
+        let mut event =
+            make_event(AuditEventKind::HttpRequest).with_source(crate::audit::event::AuditSource {
                 ip: Some("198.51.100.42".to_string()),
                 user_agent: Some("curl/8.0".to_string()),
                 subject: Some("operator-1".to_string()),
                 request_id: Some("req_abc".to_string()),
-            },
+            });
+        event = event.with_http(
+            "POST".to_string(),
+            "/admin/x".to_string(),
+            Some(200),
+            Some(12),
         );
-        event = event.with_http("POST".to_string(), "/admin/x".to_string(), Some(200), Some(12));
         event.metadata = Some(serde_json::json!({"roles": ["auditor"], "action": "readX"}));
         event
     }

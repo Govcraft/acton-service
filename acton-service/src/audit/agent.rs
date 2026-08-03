@@ -540,9 +540,15 @@ mod tests {
 
     /// Storage that records appended events, and reports readiness only after a
     /// delay so events can be emitted while the chain is still initializing.
+    ///
+    /// Publishes its append count on a `watch` channel. Persistence runs on the
+    /// writer task, downstream of the agent's mailbox, so no `ask` on the agent
+    /// can prove an event reached storage — the storage itself has to say so.
+    /// That is what lets these tests wait on a condition instead of a duration.
     struct SlowCapturingStorage {
         events: Mutex<Vec<AuditEvent>>,
         ready_after: tokio::time::Instant,
+        appended: tokio::sync::watch::Sender<usize>,
     }
 
     impl SlowCapturingStorage {
@@ -550,6 +556,7 @@ mod tests {
             Self {
                 events: Mutex::new(Vec::new()),
                 ready_after: tokio::time::Instant::now() + delay,
+                appended: tokio::sync::watch::Sender::new(0),
             }
         }
 
@@ -561,12 +568,34 @@ mod tests {
                 .map(|e| e.kind.clone())
                 .collect()
         }
+
+        fn sequences(&self) -> Vec<u64> {
+            self.events
+                .lock()
+                .expect("events lock")
+                .iter()
+                .map(|e| e.sequence)
+                .collect()
+        }
+
+        /// Resolves once at least `count` events have been persisted.
+        async fn wait_for_appends(&self, count: usize) {
+            let mut rx = self.appended.subscribe();
+            rx.wait_for(|appended| *appended >= count)
+                .await
+                .expect("sender is owned by this storage and outlives the wait");
+        }
     }
 
     #[async_trait]
     impl AuditStorage for SlowCapturingStorage {
         async fn append(&self, event: &AuditEvent) -> Result<(), Error> {
-            self.events.lock().expect("events lock").push(event.clone());
+            let appended = {
+                let mut events = self.events.lock().expect("events lock");
+                events.push(event.clone());
+                events.len()
+            };
+            self.appended.send_replace(appended);
             Ok(())
         }
 
@@ -636,12 +665,7 @@ mod tests {
         }
 
         // Wait for the drain to complete.
-        for _ in 0..100 {
-            if storage.events.lock().expect("events lock").len() >= expected.len() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+        storage.wait_for_appends(expected.len()).await;
 
         let kinds = storage.kinds();
         let names: Vec<String> = kinds
@@ -654,14 +678,10 @@ mod tests {
         assert_eq!(names, expected, "all early events persisted in order");
 
         // Sequence numbers must be contiguous from the chain start.
-        let sequences: Vec<u64> = storage
-            .events
-            .lock()
-            .expect("events lock")
-            .iter()
-            .map(|e| e.sequence)
-            .collect();
-        assert_eq!(sequences, (1..=expected.len() as u64).collect::<Vec<_>>());
+        assert_eq!(
+            storage.sequences(),
+            (1..=expected.len() as u64).collect::<Vec<_>>()
+        );
     }
 
     /// Events emitted after chain init are sealed after buffered ones.
@@ -681,16 +701,13 @@ mod tests {
 
         handle.send(custom_event("early")).await;
 
-        // Well after chain initialization has completed.
-        tokio::time::sleep(Duration::from_millis(900)).await;
+        // The early event reaching storage is proof the chain initialized and
+        // the buffer drained — a stronger and faster signal than waiting out a
+        // duration chosen to be "surely long enough".
+        storage.wait_for_appends(1).await;
         handle.send(custom_event("late")).await;
 
-        for _ in 0..100 {
-            if storage.events.lock().expect("events lock").len() >= 2 {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+        storage.wait_for_appends(2).await;
 
         let names: Vec<String> = storage
             .kinds()
@@ -704,15 +721,37 @@ mod tests {
     }
 
     /// Alert hook that counts storage-unreachable alerts.
+    ///
+    /// Publishes the count so a test can wait for the alert rather than sleep;
+    /// hooks are dispatched off the caller's task, so returning from
+    /// `buffer_pending_event` says nothing about the hook having run.
     struct CountingHook {
         alerts: AtomicU64,
+        fired: tokio::sync::watch::Sender<u64>,
+    }
+
+    impl CountingHook {
+        fn new() -> Self {
+            Self {
+                alerts: AtomicU64::new(0),
+                fired: tokio::sync::watch::Sender::new(0),
+            }
+        }
+
+        async fn wait_for_alerts(&self, count: u64) {
+            let mut rx = self.fired.subscribe();
+            rx.wait_for(|fired| *fired >= count)
+                .await
+                .expect("sender is owned by this hook and outlives the wait");
+        }
     }
 
     #[async_trait]
     impl AuditAlertHook for CountingHook {
         async fn on_alert(&self, event: AuditAlertEvent) {
             if matches!(event, AuditAlertEvent::StorageUnreachable { .. }) {
-                self.alerts.fetch_add(1, Ordering::SeqCst);
+                let seen = self.alerts.fetch_add(1, Ordering::SeqCst) + 1;
+                self.fired.send_replace(seen);
             }
         }
     }
@@ -720,9 +759,7 @@ mod tests {
     /// Overflow drops the newest event and reports it to the failure tracker.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn pending_overflow_reports_to_failure_tracker() {
-        let hook = Arc::new(CountingHook {
-            alerts: AtomicU64::new(0),
-        });
+        let hook = Arc::new(CountingHook::new());
         let tracker = Arc::new(FailureTracker::new(
             vec![hook.clone()],
             0, // alert immediately
@@ -750,7 +787,7 @@ mod tests {
             AuditEventKind::Custom("e0".to_string())
         );
 
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        hook.wait_for_alerts(1).await;
         assert_eq!(hook.alerts.load(Ordering::SeqCst), 1);
     }
 }

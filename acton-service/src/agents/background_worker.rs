@@ -319,7 +319,10 @@ impl BackgroundWorker {
         // Drop finished tasks so the registry does not grow without bound.
         agent.mutate_on::<CleanupFinishedTasks>(|agent, envelope| {
             let before = agent.model.tasks.len();
-            agent.model.tasks.retain(|_, record| !record.status.is_terminal());
+            agent
+                .model
+                .tasks
+                .retain(|_, record| !record.status.is_terminal());
             let removed = before - agent.model.tasks.len();
 
             let reply = envelope.reply_envelope();
@@ -492,10 +495,7 @@ impl BackgroundWorker {
     ///
     /// Returns [`AskError`] if the agent cannot be reached or does not answer
     /// within the timeout.
-    pub async fn cancel(
-        &self,
-        task_id: impl Into<String>,
-    ) -> Result<Option<TaskStatus>, AskError> {
+    pub async fn cancel(&self, task_id: impl Into<String>) -> Result<Option<TaskStatus>, AskError> {
         let task_id = task_id.into();
         self.agent_handle
             .send(CancelTask {
@@ -537,7 +537,10 @@ impl BackgroundWorker {
     /// # Errors
     ///
     /// Returns [`AskError`] if the agent cannot be reached or does not answer.
-    pub async fn task_status(&self, task_id: impl Into<String>) -> Result<Option<TaskStatus>, AskError> {
+    pub async fn task_status(
+        &self,
+        task_id: impl Into<String>,
+    ) -> Result<Option<TaskStatus>, AskError> {
         let response = self
             .agent_handle
             .ask(GetTaskStatus {
@@ -655,7 +658,9 @@ mod tests {
 
     async fn worker_with(config: BackgroundWorkerConfig) -> (ActorRuntime, BackgroundWorker) {
         let mut runtime = ActonApp::launch_async().await;
-        let worker = BackgroundWorker::spawn(&mut runtime, &config).await.unwrap();
+        let worker = BackgroundWorker::spawn(&mut runtime, &config)
+            .await
+            .unwrap();
         (runtime, worker)
     }
 
@@ -733,7 +738,9 @@ mod tests {
         let (mut runtime, worker) = worker_with(BackgroundWorkerConfig::default()).await;
 
         for i in 0..3 {
-            worker.submit(format!("done-{i}"), || async { Ok(()) }).await;
+            worker
+                .submit(format!("done-{i}"), || async { Ok(()) })
+                .await;
         }
         worker
             .submit("still-running", || async {
@@ -783,8 +790,7 @@ mod tests {
             tokio::spawn(async move {
                 worker
                     .submit(format!("task-{i}"), move || async move {
-                        let current =
-                            running.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                        let current = running.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                         max_observed.fetch_max(current, std::sync::atomic::Ordering::SeqCst);
                         started.add_permits(1);
 
