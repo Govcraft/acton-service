@@ -7,10 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.35.0] - 2026-08-03
+
 Upgrades to acton-reactive 9.0 and closes the gaps that version exposed in how
 this crate used the framework. Two of them were live defects: supervised actor
 extensions were never actually restarted, and three public query messages could
 not be answered at all.
+
+Breaking, and unavoidably so: acton-reactive types appear in this crate's public
+API and are re-exported through its prelude, so its 8.1 → 9.0 major bump is a
+breaking change for downstream code regardless of anything else here.
 
 ### Fixed
 

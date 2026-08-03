@@ -269,28 +269,45 @@ Set `max_concurrent_tasks = 0` (the default) for unlimited concurrency. All subm
 
 ## Monitoring Tasks
 
+Task state lives inside the worker actor, so every query is a message round
+trip: the methods are `async` and return `Result<_, AskError>`, which is `Err`
+only if the actor cannot be reached or does not answer.
+
 ### Check Individual Task Status
 
-```rust
-let status = worker.get_task_status("my-task").await;
+`task_status` returns `None` when the worker has no record of that ID at all,
+which is distinct from a task sitting in `TaskStatus::Pending`.
 
-match status {
-    TaskStatus::Running => println!("Still working..."),
-    TaskStatus::Completed => println!("Done!"),
-    TaskStatus::Failed(error) => println!("Failed: {}", error),
-    TaskStatus::Cancelled => println!("Was cancelled"),
-    TaskStatus::Pending => println!("Not started yet"),
+```rust
+match worker.task_status("my-task").await? {
+    Some(TaskStatus::Running) => println!("Still working..."),
+    Some(TaskStatus::Completed) => println!("Done!"),
+    Some(TaskStatus::Failed(error)) => println!("Failed: {}", error),
+    Some(TaskStatus::Cancelled) => println!("Was cancelled"),
+    Some(TaskStatus::Pending) => println!("Not started yet"),
+    None => println!("No such task"),
 }
+```
+
+### Wait for a Task to Finish
+
+Rather than polling `task_status` in a loop, ask the worker to answer once the
+task reaches a terminal state. The worker parks the request until the task
+reports in.
+
+```rust
+let status = worker.wait_for_task("my-task").await?;
+println!("Finished as {:?}", status);
 ```
 
 ### Check Task Counts
 
 ```rust
 // Total tracked tasks (all states)
-let total = worker.task_count();
+let total = worker.task_count().await?;
 
 // Currently running tasks
-let running = worker.running_task_count().await;
+let running = worker.running_task_count().await?;
 
 println!("Tasks: {} total, {} running", total, running);
 ```
@@ -298,7 +315,7 @@ println!("Tasks: {} total, {} running", total, running);
 ### Check Task Existence
 
 ```rust
-if worker.has_task("my-task") {
+if worker.has_task("my-task").await? {
     println!("Task exists (any state)");
 }
 ```
@@ -310,14 +327,20 @@ if worker.has_task("my-task") {
 ### Cancel Individual Task
 
 ```rust
-// Request cancellation
-worker.cancel("my-task").await;
+// Cancel and wait for the task to actually stop
+let final_status = worker.cancel("my-task").await?;
+assert_eq!(final_status, Some(TaskStatus::Cancelled));
 
 // The worker will:
 // 1. Signal the task's cancellation token
-// 2. Wait up to the configured shutdown timeout for task completion
-// 3. Update status to Cancelled
+// 2. Wait up to the configured shutdown timeout for the task to report in
+// 3. Answer with the status the task finished in
 ```
+
+`cancel` returns `None` if no such task is tracked. It does not return until the
+task has genuinely stopped, so the status it hands back is the real outcome
+rather than a guess — a task that completes before it notices the token comes
+back as `Completed`, not `Cancelled`.
 
 ### Writing Cancellation-Aware Tasks
 
@@ -368,14 +391,14 @@ tokio::select! {
 Over time, completed/failed/cancelled tasks accumulate. Clean them up:
 
 ```rust
-// Remove all non-running tasks
-worker.cleanup_finished_tasks().await;
+// Remove all finished tasks; returns how many records were dropped
+let dropped = worker.cleanup_finished_tasks().await?;
 
-// Useful after checking results
-let status = worker.get_task_status("batch-job").await;
-if matches!(status, TaskStatus::Completed | TaskStatus::Failed(_)) {
+// Useful after waiting on a result
+let status = worker.wait_for_task("batch-job").await?;
+if matches!(status, Some(TaskStatus::Completed | TaskStatus::Failed(_))) {
     // Process result...
-    worker.cleanup_finished_tasks().await;
+    worker.cleanup_finished_tasks().await?;
 }
 ```
 
@@ -464,7 +487,14 @@ async fn get_job_status(
     let worker = state.background_worker()
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
 
-    let status = worker.get_task_status(&job_id).await;
+    let status = worker
+        .task_status(&job_id)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+
+    // `None` means the worker has never heard of this job — a 404, not a state.
+    let status = status.ok_or(StatusCode::NOT_FOUND)?;
+
     Ok(Json(JobStatusResponse { job_id, status }))
 }
 ```
@@ -487,12 +517,9 @@ worker.submit("failing-task", || async {
 }).await;
 
 // Later...
-match worker.get_task_status("failing-task").await {
-    TaskStatus::Failed(error) => {
-        tracing::error!(%error, "Task failed");
-        // error = "Something went wrong"
-    }
-    _ => {}
+if let Some(TaskStatus::Failed(error)) = worker.wait_for_task("failing-task").await? {
+    tracing::error!(%error, "Task failed");
+    // error = "Something went wrong"
 }
 ```
 
