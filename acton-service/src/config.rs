@@ -1431,35 +1431,90 @@ impl ResilienceConfig {
 }
 
 /// HTTP metrics configuration (OpenTelemetry)
+///
+/// Every key here reaches the instrumentation. `deny_unknown_fields` is what
+/// keeps that true: this table once accepted `include_path`, `include_method`,
+/// `include_status` and `service_name`, parsed them, and built the layer
+/// without them, so a config could ask for something and be told nothing. A key
+/// that cannot be honoured must fail at startup, not be quietly dropped.
+///
+/// The three `include_*` keys are gone rather than implemented. The metrics
+/// layer emits `http.request.method`, `http.route` and
+/// `http.response.status_code` because the OpenTelemetry semantic conventions
+/// require them; suppressing them would produce a metric that is no longer the
+/// metric its name claims. `service_name` was never a key of this table -- the
+/// resource-level `service.name` comes from `[service] name`, which is where a
+/// service is named once for traces, metrics and logs alike.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MetricsConfig {
     /// Enable metrics collection
     #[serde(default = "default_true")]
     pub enabled: bool,
 
-    /// Include request path in metrics
-    #[serde(default = "default_true")]
-    pub include_path: bool,
-
-    /// Include request method in metrics
-    #[serde(default = "default_true")]
-    pub include_method: bool,
-
-    /// Include status code in metrics
-    #[serde(default = "default_true")]
-    pub include_status: bool,
-
-    /// Histogram buckets for latency (in milliseconds)
+    /// Explicit histogram bucket boundaries for HTTP request duration, in
+    /// milliseconds.
+    ///
+    /// The instrument itself is in seconds, per semantic convention; these are
+    /// divided by 1000 on the way in. Boundaries must be finite, positive and
+    /// strictly increasing -- anything else is reported and ignored in favour
+    /// of the default, because a mis-bucketed metric must not take a service
+    /// down at boot.
     #[serde(default = "default_latency_buckets")]
     pub latency_buckets_ms: Vec<f64>,
 }
 
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            latency_buckets_ms: default_latency_buckets(),
+        }
+    }
+}
+
 impl MetricsConfig {
-    pub fn latency_buckets_as_duration(&self) -> Vec<Duration> {
-        self.latency_buckets_ms
-            .iter()
-            .map(|&ms| Duration::from_millis(ms as u64))
-            .collect()
+    /// Create a metrics configuration carrying the defaults.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set whether the HTTP metrics layer is installed.
+    #[must_use]
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    /// Set the latency histogram boundaries, in milliseconds.
+    #[must_use]
+    pub fn with_latency_buckets_ms(mut self, buckets_ms: Vec<f64>) -> Self {
+        self.latency_buckets_ms = buckets_ms;
+        self
+    }
+
+    /// The configured boundaries in seconds, the unit the instrument declares.
+    ///
+    /// Returns `None` when the list is empty or not strictly increasing through
+    /// finite, positive values; the caller falls back to the instrumentation
+    /// library's own defaults and says so.
+    pub fn latency_buckets_seconds(&self) -> Option<Vec<f64>> {
+        let usable = !self.latency_buckets_ms.is_empty()
+            && self
+                .latency_buckets_ms
+                .iter()
+                .all(|ms| ms.is_finite() && *ms > 0.0)
+            && self
+                .latency_buckets_ms
+                .windows(2)
+                .all(|pair| pair[0] < pair[1]);
+
+        usable.then(|| {
+            self.latency_buckets_ms
+                .iter()
+                .map(|ms| ms / 1000.0)
+                .collect()
+        })
     }
 }
 
@@ -1629,9 +1684,19 @@ fn default_bulkhead_max_wait_ms() -> u64 {
 }
 
 // Metrics default functions
+/// The seconds-histogram boundaries this service already applies, in
+/// milliseconds.
+///
+/// Deliberately the same set as `observability::SECONDS_HISTOGRAM_BOUNDARIES`,
+/// which a view applies to every seconds-valued histogram. Before this table
+/// was honoured, that view is what the HTTP duration histogram actually got;
+/// keeping the default identical means turning the key on changes nothing until
+/// an operator sets it, and no dashboard moves underneath one who does not. A
+/// test pins the two lists together.
 fn default_latency_buckets() -> Vec<f64> {
     vec![
-        5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0, 10000.0,
+        1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 75.0, 100.0, 250.0, 500.0, 750.0, 1000.0, 2500.0, 5000.0,
+        7500.0, 10000.0,
     ]
 }
 
@@ -2009,6 +2074,49 @@ mod tests {
         assert!(
             !policy.requires_client_ca(),
             "the default must not silently start demanding certificates"
+        );
+    }
+
+    #[test]
+    fn metrics_config_refuses_keys_it_cannot_honour() {
+        // Each of these parsed happily and reached nothing. `include_*` asked
+        // the layer to drop semantic-convention attributes it will always
+        // record; `service_name` belongs to [service], which names the process
+        // once for traces, metrics and logs together.
+        for key in [
+            r#""include_path": true"#,
+            r#""include_method": true"#,
+            r#""include_status": true"#,
+            r#""service_name": "whatever""#,
+        ] {
+            let json = format!(r#"{{ "enabled": true, {key} }}"#);
+
+            assert!(
+                serde_json::from_str::<MetricsConfig>(&json).is_err(),
+                "{key} must fail startup rather than be accepted and ignored"
+            );
+        }
+    }
+
+    #[test]
+    fn metrics_config_defaults_to_the_buckets_already_in_effect() {
+        let metrics: MetricsConfig =
+            serde_json::from_str("{}").expect("every key in the table has a default");
+
+        assert!(metrics.enabled);
+        assert_eq!(
+            metrics.latency_buckets_ms.first().copied(),
+            Some(1.0),
+            "the default must start at 1ms, as the seconds view does"
+        );
+        assert_eq!(
+            metrics.latency_buckets_seconds(),
+            Some(vec![
+                0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5,
+                5.0, 7.5, 10.0
+            ]),
+            "omitting the key must leave the boundaries exactly where they were \
+             before this table was honoured"
         );
     }
 

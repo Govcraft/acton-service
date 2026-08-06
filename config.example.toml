@@ -124,16 +124,20 @@ bulkhead_max_wait_ms = 5000         # Max wait for a slot (5 seconds)
 # When prometheus-metrics is enabled, metrics are scraped from GET /metrics
 # in Prometheus text-exposition format.
 # ----------------------------------------------------------------------------
+# This table rejects keys it cannot honour, so anything it accepts reaches the
+# instrumentation. `include_path`, `include_method`, `include_status` and
+# `service_name` were once accepted here and silently ignored; they are now
+# startup errors. Method, route and status are always recorded -- the semantic
+# conventions require them -- and a service is named once, under [service].
 [middleware.metrics]
 enabled = true
 
-# Include dimensions in metrics
-include_path = true
-include_method = true
-include_status = true
-
-# Latency histogram buckets (in milliseconds)
-latency_buckets_ms = [5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0, 10000.0]
+# Explicit boundaries for the request-duration histogram, in milliseconds.
+# The instrument is in seconds; these are converted on the way in. Boundaries
+# must be finite, positive and strictly increasing. Omit the key to get the
+# set below, which matches the buckets applied to every other seconds-valued
+# histogram in the service.
+latency_buckets_ms = [1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 75.0, 100.0, 250.0, 500.0, 750.0, 1000.0, 2500.0, 5000.0, 7500.0, 10000.0]
 
 # ----------------------------------------------------------------------------
 # Local Rate Limiting (Governor)

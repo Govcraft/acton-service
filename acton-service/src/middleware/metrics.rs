@@ -3,121 +3,60 @@
 //! Provides OpenTelemetry metrics integration for tracking
 //! request counts, latencies, and status codes.
 
-use std::time::Duration;
-
 #[cfg(feature = "_metrics")]
 use opentelemetry_instrumentation_tower::HTTPMetricsLayerBuilder;
 
-/// Configuration for HTTP metrics
-#[derive(Debug, Clone)]
-pub struct MetricsConfig {
-    /// Enable metrics collection
-    pub enabled: bool,
-    /// Service name for metrics
-    pub service_name: String,
-    /// Include request path in metrics
-    pub include_path: bool,
-    /// Include request method in metrics
-    pub include_method: bool,
-    /// Include status code in metrics
-    pub include_status: bool,
-    /// Histogram buckets for latency (in milliseconds)
-    pub latency_buckets: Vec<f64>,
-}
+/// Configuration for HTTP metrics.
+///
+/// This is [`crate::config::MetricsConfig`] itself, not a copy of it. There used
+/// to be two structs of this name -- one parsed from `[middleware.metrics]`, one
+/// consumed here -- with a hand-written conversion between them. Every field
+/// that conversion carried across was then dropped on the floor by the layer
+/// builder, and nothing could tell you so, because the two types agreeing is not
+/// the same as the layer honouring them. One type has no gap to fall into.
+pub use crate::config::MetricsConfig;
 
-impl Default for MetricsConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            service_name: "acton-service".to_string(),
-            include_path: true,
-            include_method: true,
-            include_status: true,
-            // Default buckets: 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s, 5s, 10s
-            latency_buckets: vec![
-                5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0, 10000.0,
-            ],
-        }
-    }
-}
-
-impl MetricsConfig {
-    /// Create a new metrics configuration
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Set metrics enabled
-    pub fn with_enabled(mut self, enabled: bool) -> Self {
-        self.enabled = enabled;
-        self
-    }
-
-    /// Set service name
-    pub fn with_service_name(mut self, name: impl Into<String>) -> Self {
-        self.service_name = name.into();
-        self
-    }
-
-    /// Set whether to include path in metrics
-    pub fn with_include_path(mut self, include: bool) -> Self {
-        self.include_path = include;
-        self
-    }
-
-    /// Set whether to include method in metrics
-    pub fn with_include_method(mut self, include: bool) -> Self {
-        self.include_method = include;
-        self
-    }
-
-    /// Set whether to include status code in metrics
-    pub fn with_include_status(mut self, include: bool) -> Self {
-        self.include_status = include;
-        self
-    }
-
-    /// Set custom latency histogram buckets (in milliseconds)
-    pub fn with_latency_buckets(mut self, buckets: Vec<f64>) -> Self {
-        self.latency_buckets = buckets;
-        self
-    }
-
-    /// Convert milliseconds to Duration for latency buckets
-    pub fn latency_buckets_as_duration(&self) -> Vec<Duration> {
-        self.latency_buckets
-            .iter()
-            .map(|&ms| Duration::from_millis(ms as u64))
-            .collect()
-    }
-}
-
-/// Standard metric names following OpenTelemetry conventions
+/// The instruments the HTTP metrics layer actually creates.
+///
+/// These are read back from a live scrape by
+/// `tests/metrics_config_reaches_the_scrape.rs`, because a constant naming a
+/// metric that is never emitted is worse than no constant: it is a dashboard
+/// query that returns nothing, with nothing to say why. There is deliberately
+/// no request-count instrument here -- the count is the duration histogram's
+/// `_count`, and naming one implied an instrument that never existed.
 pub mod metric_names {
-    /// HTTP server request count
-    pub const HTTP_SERVER_REQUEST_COUNT: &str = "http.server.request.count";
-    /// HTTP server request duration
+    /// Duration of HTTP server requests, in seconds.
     pub const HTTP_SERVER_REQUEST_DURATION: &str = "http.server.request.duration";
-    /// HTTP server active requests
+    /// Number of in-flight HTTP server requests.
     pub const HTTP_SERVER_ACTIVE_REQUESTS: &str = "http.server.active_requests";
-    /// HTTP server request size
-    pub const HTTP_SERVER_REQUEST_SIZE: &str = "http.server.request.size";
-    /// HTTP server response size
-    pub const HTTP_SERVER_RESPONSE_SIZE: &str = "http.server.response.size";
+    /// Size of HTTP server request bodies, in bytes.
+    pub const HTTP_SERVER_REQUEST_BODY_SIZE: &str = "http.server.request.body.size";
+    /// Size of HTTP server response bodies, in bytes.
+    pub const HTTP_SERVER_RESPONSE_BODY_SIZE: &str = "http.server.response.body.size";
 }
 
-/// Standard metric labels following OpenTelemetry conventions
+/// The attributes the HTTP metrics layer actually records.
+///
+/// Post-1.0 semantic-convention names. The pre-1.0 spellings (`http.method`,
+/// `http.status_code`) were published here and are not what any instrument
+/// emits.
 pub mod metric_labels {
-    /// HTTP method (GET, POST, etc.)
-    pub const HTTP_METHOD: &str = "http.method";
-    /// HTTP route/path
+    /// HTTP method (GET, POST, ...).
+    pub const HTTP_REQUEST_METHOD: &str = "http.request.method";
+    /// Matched route template, not the request URI -- this is what bounds
+    /// series count to the route table.
     pub const HTTP_ROUTE: &str = "http.route";
-    /// HTTP status code
-    pub const HTTP_STATUS_CODE: &str = "http.status_code";
-    /// Service name
+    /// HTTP response status code.
+    pub const HTTP_RESPONSE_STATUS_CODE: &str = "http.response.status_code";
+    /// Network protocol name (`http`).
+    pub const NETWORK_PROTOCOL_NAME: &str = "network.protocol.name";
+    /// Network protocol version (`1.1`, `2`).
+    pub const NETWORK_PROTOCOL_VERSION: &str = "network.protocol.version";
+    /// URL scheme (`http`, `https`).
+    pub const URL_SCHEME: &str = "url.scheme";
+    /// Service name, carried on the resource rather than per measurement, and
+    /// set from `[service] name`.
     pub const SERVICE_NAME: &str = "service.name";
-    /// Service version
-    pub const SERVICE_VERSION: &str = "service.version";
 }
 
 /// Create the HTTP metrics layer
@@ -142,7 +81,7 @@ pub mod metric_labels {
 /// use tower::ServiceBuilder;
 ///
 /// let config = MetricsConfig::new()
-///     .with_service_name("my-service");
+///     .with_latency_buckets_ms(vec![10.0, 100.0, 1000.0]);
 ///
 /// let layer = create_metrics_layer(&config);
 /// # /*
@@ -168,11 +107,26 @@ pub fn create_metrics_layer(
     // Get the global meter from the meter provider
     let meter = crate::observability::get_meter()?;
 
+    let mut builder = HTTPMetricsLayerBuilder::builder().with_meter(meter);
+
+    // The instrument is declared in seconds; the key is in milliseconds because
+    // that is the scale an operator thinks about a request in.
+    let boundaries = config.latency_buckets_seconds();
+    match &boundaries {
+        Some(seconds) => builder = builder.with_request_duration_bounds(seconds.clone()),
+        None => tracing::warn!(
+            latency_buckets_ms = ?config.latency_buckets_ms,
+            "[middleware.metrics] latency_buckets_ms is empty or not strictly increasing \
+             through finite, positive values; using the instrumentation library's default \
+             boundaries instead"
+        ),
+    }
+
     // Build the metrics layer
-    match HTTPMetricsLayerBuilder::builder().with_meter(meter).build() {
+    match builder.build() {
         Ok(layer) => {
             tracing::info!(
-                service_name = %config.service_name,
+                latency_buckets_seconds = ?boundaries,
                 "HTTP metrics layer initialized"
             );
             Some(layer)
@@ -199,56 +153,58 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_default_config() {
+    fn the_default_config_is_enabled_with_seconds_scaled_buckets() {
         let config = MetricsConfig::default();
+
         assert!(config.enabled);
-        assert!(config.include_path);
-        assert!(config.include_method);
-        assert!(config.include_status);
-        assert_eq!(config.service_name, "acton-service");
+        let seconds = config
+            .latency_buckets_seconds()
+            .expect("the default boundaries must be usable");
+        assert_eq!(seconds.first().copied(), Some(0.001));
+        assert_eq!(seconds.last().copied(), Some(10.0));
     }
 
     #[test]
-    fn test_builder_pattern() {
+    fn the_builder_sets_what_it_says_it_sets() {
         let config = MetricsConfig::new()
             .with_enabled(true)
-            .with_service_name("test-service")
-            .with_include_path(false)
-            .with_latency_buckets(vec![10.0, 50.0, 100.0]);
+            .with_latency_buckets_ms(vec![10.0, 50.0, 100.0]);
 
         assert!(config.enabled);
-        assert_eq!(config.service_name, "test-service");
-        assert!(!config.include_path);
-        assert_eq!(config.latency_buckets, vec![10.0, 50.0, 100.0]);
+        assert_eq!(config.latency_buckets_ms, vec![10.0, 50.0, 100.0]);
     }
 
     #[test]
-    fn test_latency_buckets_conversion() {
-        let config = MetricsConfig::new().with_latency_buckets(vec![10.0, 100.0, 1000.0]);
+    fn milliseconds_become_seconds_without_losing_fractions() {
+        // `2.5` ms is 2.5 ms, not the 2 ms an integer conversion would give.
+        let config = MetricsConfig::new().with_latency_buckets_ms(vec![2.5, 100.0, 1000.0]);
 
-        let durations = config.latency_buckets_as_duration();
-        assert_eq!(durations.len(), 3);
-        assert_eq!(durations[0], Duration::from_millis(10));
-        assert_eq!(durations[1], Duration::from_millis(100));
-        assert_eq!(durations[2], Duration::from_millis(1000));
-    }
-
-    #[test]
-    fn test_metric_names() {
         assert_eq!(
-            metric_names::HTTP_SERVER_REQUEST_COUNT,
-            "http.server.request.count"
-        );
-        assert_eq!(
-            metric_names::HTTP_SERVER_REQUEST_DURATION,
-            "http.server.request.duration"
+            config.latency_buckets_seconds(),
+            Some(vec![0.0025, 0.1, 1.0])
         );
     }
 
     #[test]
-    fn test_metric_labels() {
-        assert_eq!(metric_labels::HTTP_METHOD, "http.method");
-        assert_eq!(metric_labels::HTTP_STATUS_CODE, "http.status_code");
+    fn boundaries_that_no_histogram_can_use_are_refused() {
+        // Each of these would be accepted by serde and rejected by the SDK, or
+        // worse, accepted by both and silently useless.
+        for buckets in [
+            vec![],
+            vec![100.0, 50.0],
+            vec![10.0, 10.0],
+            vec![0.0, 10.0],
+            vec![-1.0, 10.0],
+            vec![10.0, f64::INFINITY],
+            vec![10.0, f64::NAN],
+        ] {
+            let config = MetricsConfig::new().with_latency_buckets_ms(buckets.clone());
+            assert_eq!(
+                config.latency_buckets_seconds(),
+                None,
+                "{buckets:?} must not reach the instrument"
+            );
+        }
     }
 
     #[test]
@@ -271,19 +227,5 @@ mod tests {
             layer.is_none(),
             "Should return None when meter provider is not initialized"
         );
-    }
-
-    #[test]
-    fn test_metrics_config_custom_buckets() {
-        let custom_buckets = vec![1.0, 5.0, 10.0];
-        let config = MetricsConfig::new().with_latency_buckets(custom_buckets.clone());
-
-        assert_eq!(config.latency_buckets, custom_buckets);
-
-        let durations = config.latency_buckets_as_duration();
-        assert_eq!(durations.len(), 3);
-        assert_eq!(durations[0], std::time::Duration::from_millis(1));
-        assert_eq!(durations[1], std::time::Duration::from_millis(5));
-        assert_eq!(durations[2], std::time::Duration::from_millis(10));
     }
 }

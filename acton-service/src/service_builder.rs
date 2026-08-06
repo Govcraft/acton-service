@@ -2371,13 +2371,7 @@ where
         #[cfg(feature = "_metrics")]
         if let Some(metrics_cfg) = &config.middleware.metrics {
             if metrics_cfg.enabled {
-                let mw_config = crate::middleware::metrics::MetricsConfig::new()
-                    .with_service_name(config.service.name.clone())
-                    .with_include_path(metrics_cfg.include_path)
-                    .with_include_method(metrics_cfg.include_method)
-                    .with_include_status(metrics_cfg.include_status)
-                    .with_latency_buckets(metrics_cfg.latency_buckets_ms.clone());
-                if let Some(layer) = crate::middleware::metrics::create_metrics_layer(&mw_config) {
+                if let Some(layer) = crate::middleware::metrics::create_metrics_layer(metrics_cfg) {
                     app = app.layer(layer);
                 }
             }

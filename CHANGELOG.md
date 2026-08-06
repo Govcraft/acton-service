@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **config(metrics)**: `[middleware.metrics] latency_buckets_ms` now reaches the
+  histogram. It was parsed, carried into a second struct of the same name, and
+  then dropped: the layer was built as
+  `HTTPMetricsLayerBuilder::builder().with_meter(meter).build()`, with nothing
+  else from the configuration reaching it. An operator who tuned buckets to
+  their SLO thresholds got the defaults back, with no warning at startup or in
+  the scrape.
+
+  Passing the boundaries would not have been enough on its own. The seconds
+  histogram view added in #107 matches on unit, and a view that matches an
+  instrument *overrules* that instrument's own boundaries — the SDK consults
+  them only when no view matched. The view now declines
+  `http.server.request.duration`, which is the instrument that carries a
+  configured value.
+
+  The default for the key is the view's own boundary set, so a config that omits
+  it keeps exactly the buckets it had.
+
+### Changed
+
+- **config(metrics)**: `[middleware.metrics]` is `deny_unknown_fields`, and
+  `include_path`, `include_method` and `include_status` are removed. All three
+  parsed and did nothing; they now fail startup, as does `service_name`, which
+  was never a key of this table. The metrics layer records
+  `http.request.method`, `http.route` and `http.response.status_code` because
+  the semantic conventions require them, and a service is named once under
+  `[service]`.
+- **config(metrics)**: `middleware::metrics::MetricsConfig` is now a re-export of
+  `config::MetricsConfig` rather than a second type with a hand-written
+  conversion between them. The conversion is where the configured values were
+  lost. `with_service_name`, `with_include_*` and `latency_buckets_as_duration`
+  are gone; `with_latency_buckets` is `with_latency_buckets_ms`.
+- **server**: the startup banner reports HTTP metrics as enabled only when they
+  are. A present `[middleware.metrics]` table with `enabled = false` was
+  announced as enabled, sending operators looking for a scrape that was never
+  going to appear.
+- **metrics**: `metric_names` and `metric_labels` now name what the layer emits.
+  `HTTP_SERVER_REQUEST_COUNT` named an instrument that has never existed — the
+  count is the duration histogram's `_count` — and the size constants and every
+  label used pre-1.0 semantic-convention spellings (`http.method`,
+  `http.status_code`) that no instrument records. A dashboard built on them
+  queried nothing. Both modules are now asserted against a live scrape rather
+  than against their own literals, which is all the previous tests did.
+
 ## [acton-service-v0.35.0] - 2026-08-03
 
 Upgrades to acton-reactive 9.0 and closes the gaps that version exposed in how

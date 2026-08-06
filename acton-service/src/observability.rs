@@ -27,7 +27,9 @@ use {
 #[cfg(feature = "_metrics")]
 use {
     opentelemetry::metrics::MeterProvider as _,
-    opentelemetry_sdk::metrics::{Aggregation, Instrument, InstrumentKind, SdkMeterProvider, Stream},
+    opentelemetry_sdk::metrics::{
+        Aggregation, Instrument, InstrumentKind, SdkMeterProvider, Stream,
+    },
 };
 
 #[cfg(feature = "otel-metrics")]
@@ -368,6 +370,12 @@ const SECONDS_HISTOGRAM_BOUNDARIES: &[f64] = &[
     0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0,
 ];
 
+/// The HTTP server duration instrument, which carries boundaries of its own.
+///
+/// Named here so the seconds view can decline it; see [`seconds_histogram_view`].
+#[cfg(feature = "_metrics")]
+const HTTP_SERVER_DURATION_INSTRUMENT: &str = "http.server.request.duration";
+
 /// Re-bucket seconds-valued histograms, leaving every other instrument alone.
 ///
 /// Selects on the instrument's declared unit rather than its name, so any
@@ -376,9 +384,28 @@ const SECONDS_HISTOGRAM_BOUNDARIES: &[f64] = &[
 /// in place, which is what every non-histogram and every other unit wants.
 ///
 /// The returned [`Stream`] sets no name, so the instrument keeps its own.
+///
+/// # Why the HTTP duration histogram is excluded
+///
+/// A view that matches wins outright. The SDK reads an instrument's own
+/// boundaries only on the branch it takes when *no* view matched
+/// (`opentelemetry_sdk::metrics::pipeline`, "Apply implicit default view"), so
+/// this view matching an instrument does not merely supply a default for it --
+/// it overrules whatever that instrument asked for.
+///
+/// The HTTP metrics layer sets its boundaries from `[middleware.metrics]
+/// latency_buckets_ms`. Matching it here would silently discard the operator's
+/// configuration, which is precisely what it did: buckets were configured, the
+/// layer dropped them, and this view then supplied boundaries close enough to
+/// plausible defaults that the loss looked like a default. Declining the
+/// instrument by name is what lets a configured value survive.
 #[cfg(feature = "_metrics")]
 fn seconds_histogram_view(instrument: &Instrument) -> Option<Stream> {
     if instrument.kind() != InstrumentKind::Histogram || instrument.unit() != "s" {
+        return None;
+    }
+
+    if instrument.name() == HTTP_SERVER_DURATION_INSTRUMENT {
         return None;
     }
 
@@ -745,8 +772,20 @@ mod tests {
         /// Record `values` into a histogram declared with `unit`, then return
         /// the `le` upper bounds Prometheus reports for it.
         fn scrape_bounds(name: &'static str, unit: &'static str, values: &[f64]) -> Vec<f64> {
-            let (reader, registry) =
-                prometheus_metric_reader().expect("prometheus reader builds");
+            scrape_bounds_declaring(name, unit, None, values, "probe")
+        }
+
+        /// As above, but the instrument declares `boundaries` of its own and the
+        /// caller says which metric-family substring to read back. Both are what
+        /// the HTTP duration histogram does.
+        fn scrape_bounds_declaring(
+            name: &'static str,
+            unit: &'static str,
+            boundaries: Option<Vec<f64>>,
+            values: &[f64],
+            family_match: &str,
+        ) -> Vec<f64> {
+            let (reader, registry) = prometheus_metric_reader().expect("prometheus reader builds");
 
             // A local provider, never installed globally: these tests must not
             // race the process-wide provider other tests may have set.
@@ -755,7 +794,12 @@ mod tests {
                 .with_view(seconds_histogram_view)
                 .build();
 
-            let histogram = provider.meter("test").f64_histogram(name).with_unit(unit).build();
+            let meter = provider.meter("test");
+            let mut builder = meter.f64_histogram(name).with_unit(unit);
+            if let Some(boundaries) = boundaries {
+                builder = builder.with_boundaries(boundaries);
+            }
+            let histogram = builder.build();
             for value in values {
                 histogram.record(*value, &[]);
             }
@@ -763,11 +807,54 @@ mod tests {
             registry
                 .gather()
                 .iter()
-                .filter(|family| family.name().contains("probe"))
+                .filter(|family| family.name().contains(family_match))
                 .flat_map(|family| family.get_metric().to_vec())
                 .flat_map(|metric| metric.get_histogram().get_bucket().to_vec())
                 .map(|bucket| bucket.upper_bound())
                 .collect()
+        }
+
+        #[test]
+        fn a_matching_view_overrules_the_instruments_own_boundaries() {
+            // The rule the exclusion below exists for. The SDK reads an
+            // instrument's boundaries only when no view matched, so a view is
+            // not a default -- it is the last word. This is why configuring
+            // latency buckets appeared to do nothing: the layer's boundaries,
+            // once passed, would have been discarded here anyway.
+            let asked_for = vec![0.2, 0.4, 0.6];
+            let bounds = scrape_bounds_declaring(
+                "probe.overruled",
+                "s",
+                Some(asked_for.clone()),
+                &[0.3],
+                "probe",
+            );
+
+            assert_ne!(
+                bounds, asked_for,
+                "a matching view must be understood to overrule the instrument"
+            );
+            assert_eq!(bounds, SECONDS_HISTOGRAM_BOUNDARIES);
+        }
+
+        #[test]
+        fn the_http_duration_histogram_keeps_its_configured_boundaries() {
+            // `[middleware.metrics] latency_buckets_ms` reaches the instrument
+            // through the metrics layer. The view must decline it, or the
+            // operator's configuration dies here without a word.
+            let configured = vec![0.05, 0.1, 0.5, 1.0];
+            let bounds = scrape_bounds_declaring(
+                HTTP_SERVER_DURATION_INSTRUMENT,
+                "s",
+                Some(configured.clone()),
+                &[0.075],
+                "http_server_request_duration",
+            );
+
+            assert_eq!(
+                bounds, configured,
+                "the configured boundaries must survive to the scrape"
+            );
         }
 
         #[test]

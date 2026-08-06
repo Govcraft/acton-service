@@ -51,7 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create metrics configuration
     let metrics_config = MetricsConfig::new()
         .with_enabled(true)
-        .with_service_name("test-metrics");
+        .with_latency_buckets_ms(vec![5.0, 25.0, 100.0, 500.0, 1000.0]);
 
     // Create metrics layer - should work now with in-memory provider
     println!("Creating metrics layer...");
