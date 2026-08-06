@@ -286,7 +286,24 @@ This is the semconv set for `http.server.request.duration`, extended downward wi
 A histogram with no unit, or one declared in milliseconds, keeps the SDK's default boundaries — `[0, 5, 10, 25, …, 7500, 10000]`, which are chosen for milliseconds. Feed those seconds-valued observations and every request under five seconds lands in the first bucket. Nothing warns, and the exposition still looks well-formed, so the histogram appears healthy while being unable to tell a fast request from a slow one.
 {% /callout %}
 
-`MetricsConfig::latency_buckets_ms` is unrelated: it configures the built-in HTTP middleware's own instruments, not histograms you create through `get_meter()`.
+### Boundaries for the HTTP request-duration histogram
+
+The view above applies to every seconds-valued histogram except one: `http.server.request.duration`, which takes its boundaries from configuration instead.
+
+```toml
+[middleware.metrics]
+enabled = true
+# Milliseconds; the instrument is in seconds and these are converted on the way in.
+latency_buckets_ms = [50.0, 150.0, 250.0, 400.0, 750.0]
+```
+
+The exclusion is what makes the key work at all. A view that matches an instrument does not supply a default for it — it overrules whatever that instrument asked for, because the SDK reads an instrument's own boundaries only on the branch it takes when no view matched. Omit the key and you get the same boundaries the view applies, so nothing moves until you ask it to.
+
+Boundaries must be finite, positive and strictly increasing. Anything else is logged and ignored in favour of the instrumentation library's defaults, on the same principle as everything else here: a mis-bucketed metric must not take a service down at boot.
+
+{% callout type="note" title="This table rejects what it cannot honour" %}
+`[middleware.metrics]` once accepted `include_path`, `include_method`, `include_status` and `service_name`, parsed them, and built the layer without them. They are now startup errors rather than silent no-ops. Method, route and status are always recorded — the semantic conventions require them — and a service is named once, under `[service]`, for traces, metrics and logs alike.
+{% /callout %}
 
 ---
 

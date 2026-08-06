@@ -231,10 +231,18 @@ impl Server {
         }
 
         if let Some(ref metrics) = self.config.middleware.metrics {
-            tracing::info!("  - HTTP metrics: enabled");
-            tracing::info!("    - Include path: {}", metrics.include_path);
-            tracing::info!("    - Include method: {}", metrics.include_method);
-            tracing::info!("    - Include status: {}", metrics.include_status);
+            if metrics.enabled {
+                tracing::info!("  - HTTP metrics: enabled");
+                tracing::info!(
+                    "    - Latency buckets (ms): {:?}",
+                    metrics.latency_buckets_ms
+                );
+            } else {
+                // The table being present is not the same as the middleware
+                // running, and reporting it as enabled sent operators looking
+                // for a scrape that was never going to appear.
+                tracing::info!("  - HTTP metrics: disabled ([middleware.metrics] enabled = false)");
+            }
         } else {
             tracing::info!("  - HTTP metrics: not configured");
         }

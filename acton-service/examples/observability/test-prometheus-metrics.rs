@@ -39,9 +39,6 @@ async fn main() -> Result<()> {
     config.service.name = "prometheus-metrics-example".to_string();
     config.middleware.metrics = Some(acton_service::config::MetricsConfig {
         enabled: true,
-        include_path: true,
-        include_method: true,
-        include_status: true,
         latency_buckets_ms: vec![5.0, 25.0, 100.0, 500.0, 1000.0],
     });
 
