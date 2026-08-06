@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.36.0] - 2026-08-05
+
+A single fix, and a breaking one: `[middleware.metrics]` now reaches the
+instruments it claimed to configure, and the keys it could never honour fail
+startup instead of being ignored. Anyone whose config sets only `enabled` is
+unaffected, and the boundaries a service already had do not move.
+
 ### Fixed
 
 - **config(metrics)**: `[middleware.metrics] latency_buckets_ms` now reaches the
