@@ -139,6 +139,32 @@ enabled = true
 # histogram in the service.
 latency_buckets_ms = [1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 75.0, 100.0, 250.0, 500.0, 750.0, 1000.0, 2500.0, 5000.0, 7500.0, 10000.0]
 
+# A dedicated, plaintext listener that serves only GET /metrics.
+# Requires feature: prometheus-metrics. Absent table means absent listener.
+#
+# The main listener's /metrics route inherits whatever that listener is: TLS,
+# auth, CORS, compression, body limits. That is right for an application
+# surface and wrong for a scrape target, because the collectors that matter in
+# practice speak plain HTTP to a declared port and offer no TLS knobs:
+# Fly.io's [[metrics]] block, GKE managed collection, and the defaults of most
+# PodMonitor / ServiceMonitor resources. A service terminating TLS on its main
+# listener cannot be scraped through any of them.
+#
+# This table is the other answer: a second socket carrying the same bytes,
+# from the same registry, through the same handler. It has NO TLS and NO
+# authentication, and it is not meant to. Bind it to a private scrape network
+# -- a pod interface, a WireGuard address, loopback -- never an
+# internet-facing one.
+#
+# Both keys are required; there is no default address to open unasked. The
+# port must not be 0 (an ephemeral port no scrape job can name) and must not
+# collide with the HTTP or separate-port gRPC listener. Either mistake is a
+# refusal to start, reported before anything binds.
+#
+# [middleware.metrics.exporter]
+# bind = "::"     # dual-stack on Linux by OS default; v6-only on some BSDs
+# port = 9090
+
 # ----------------------------------------------------------------------------
 # Local Rate Limiting (Governor)
 # Requires feature: governor

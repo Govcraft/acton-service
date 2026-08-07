@@ -183,10 +183,23 @@ bulkhead_max_concurrent = 100
     if template.observability {
         content.push_str(
             r#"# HTTP Metrics (OpenTelemetry)
+# This table rejects keys it cannot honour, so every key here reaches the
+# instrumentation. Metrics are pushed to the OTLP endpoint above and served
+# for scraping on the exporter listener below.
 [middleware.metrics]
 enabled = true
-export_interval_secs = 60
-# Metrics exported to OTLP endpoint above
+
+# A dedicated, plaintext listener serving only GET /metrics, separate from the
+# application listener. Managed collectors -- Fly.io's [[metrics]] block, GKE
+# managed collection, most PodMonitor/ServiceMonitor defaults -- speak plain
+# HTTP to a declared port and offer no TLS knobs, so they cannot scrape an
+# application listener that terminates TLS. This socket carries no TLS and no
+# authentication by design: bind it to a private scrape network, never an
+# internet-facing interface. The generated Kubernetes manifests declare a
+# container port, a Service port and a ServiceMonitor matching this table.
+[middleware.metrics.exporter]
+bind = "::"
+port = 9090
 
 "#,
         );

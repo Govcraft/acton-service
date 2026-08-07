@@ -114,6 +114,8 @@ pub mod events;
 #[cfg(feature = "clickhouse")]
 pub mod clickhouse_backend;
 
+pub mod metrics_exporter;
+
 pub mod observability;
 
 #[cfg(feature = "openapi")]
@@ -258,6 +260,12 @@ pub mod prelude {
 
     #[cfg(feature = "_metrics")]
     pub use crate::middleware::{metric_labels, metric_names, MetricsConfig};
+
+    #[cfg(feature = "_metrics")]
+    pub use crate::config::MetricsExporterConfig;
+
+    #[cfg(feature = "prometheus-metrics")]
+    pub use crate::metrics_exporter::MetricsExporter;
 
     #[cfg(feature = "governor")]
     pub use crate::middleware::{GovernorConfig, GovernorRateLimit, RateLimitExceeded};

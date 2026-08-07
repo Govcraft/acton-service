@@ -248,9 +248,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # The floor: no optional subsystem at all.
+          # The floor: no optional subsystem at all. This leg runs the tests
+          # too, because #129 gave the floor its own runtime behaviour: with
+          # `prometheus-metrics` absent, a configured
+          # `[middleware.metrics.exporter]` must be *refused at startup* rather
+          # than ignored. That refusal only exists in this cfg, so the `full`
+          # legs can never reach it and clippy alone would not notice if it
+          # stopped firing.
           - combo: minimal
             features: "http,crypto-aws-lc-rs"
+            test: true
           # TLS without gRPC. This combination is what let two dead-code
           # warnings survive in client_tls.rs until #76, and it is the only one
           # that can catch #120: with gRPC compiled in, tonic pulls

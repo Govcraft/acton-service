@@ -2013,6 +2013,37 @@ where
             record_startup_error(&mut startup_error, err);
         }
 
+        // Resolve the optional plaintext exporter listener against every
+        // listener this config will bind. Caught here, so `try_build()` /
+        // `serve()` report a collision or a feature this build lacks without
+        // binding anything. The gRPC peer only exists in separate-port mode.
+        #[cfg(feature = "grpc")]
+        let grpc_listener_addr = config.grpc.as_ref().and_then(|g| {
+            (g.enabled && g.use_separate_port)
+                .then(|| std::net::SocketAddr::new(g.effective_bind(config.service.bind), g.port))
+        });
+        #[cfg(not(feature = "grpc"))]
+        let grpc_listener_addr: Option<std::net::SocketAddr> = None;
+
+        let metrics_exporter_addr = match crate::metrics_exporter::resolve_exporter_addr(
+            config.middleware.metrics.as_ref(),
+            listener_addr,
+            grpc_listener_addr,
+        ) {
+            Ok(addr) => addr,
+            Err(err) => {
+                tracing::error!("{}", err);
+                record_startup_error(&mut startup_error, err);
+                None
+            }
+        };
+        #[cfg(not(feature = "prometheus-metrics"))]
+        let _ = metrics_exporter_addr;
+
+        crate::metrics_exporter::warn_if_http_instruments_are_absent(
+            config.middleware.metrics.as_ref(),
+        );
+
         #[cfg(feature = "grpc")]
         let grpc_router: Option<axum::Router> = match self.grpc_services {
             Some(routes) => {
@@ -2083,6 +2114,8 @@ where
             config,
             state: state_clone,
             listener_addr,
+            #[cfg(feature = "prometheus-metrics")]
+            metrics_exporter_addr,
             app,
             #[cfg(feature = "grpc")]
             grpc_routes: grpc_router,
@@ -2511,6 +2544,11 @@ where
     config: Config<T>,
     state: AppState<T>,
     listener_addr: std::net::SocketAddr,
+    /// Validated address for the plaintext exporter listener, from
+    /// `[middleware.metrics.exporter]`. `serve()` binds it before the service
+    /// listeners and drains it after them.
+    #[cfg(feature = "prometheus-metrics")]
+    metrics_exporter_addr: Option<std::net::SocketAddr>,
     app: Router,
     #[cfg(feature = "grpc")]
     grpc_routes: Option<axum::Router>,
@@ -2678,6 +2716,13 @@ where
     /// - Single-port mode (default): Both HTTP and gRPC on same port, routed by content-type
     /// - Dual-port mode: HTTP on configured port, gRPC on separate port
     ///
+    /// # Metrics exporter
+    ///
+    /// When `[middleware.metrics.exporter]` is configured, this also runs the
+    /// plaintext exporter listener. It binds *before* the service listeners,
+    /// so a taken port refuses startup, and drains *after* they finish, so the
+    /// final scrape can still observe the drain.
+    ///
     /// # Example
     ///
     /// ```rust,ignore
@@ -2689,17 +2734,40 @@ where
     ///
     /// service.serve().await?;
     /// ```
-    #[cfg_attr(not(feature = "grpc"), allow(unused_mut))]
     pub async fn serve(mut self) -> crate::error::Result<()> {
-        use tokio::net::TcpListener;
-        use tokio::signal;
-
         // Fail before any socket binds. A misconfiguration that would force a
         // weaker posture than configured (TLS that could not load, invalid token
         // auth) must never reach the point of accepting connections.
         if let Some(e) = self.startup_error.take() {
             return Err(e);
         }
+
+        #[cfg(feature = "prometheus-metrics")]
+        let exporter = match self.metrics_exporter_addr.take() {
+            Some(addr) => Some(crate::metrics_exporter::MetricsExporter::start(addr).await?),
+            None => None,
+        };
+
+        let result = self.serve_listeners().await;
+
+        #[cfg(feature = "prometheus-metrics")]
+        if let Some(exporter) = exporter {
+            exporter.shutdown().await;
+        }
+
+        result
+    }
+
+    /// The serve body proper: every service listener, every return path.
+    ///
+    /// Split from [`serve`](Self::serve) so that start-before/drain-after
+    /// bracketing (the startup-error check, the metrics exporter) lives in
+    /// exactly one place instead of being threaded through the five return
+    /// paths below.
+    #[cfg_attr(not(feature = "grpc"), allow(unused_mut))]
+    async fn serve_listeners(mut self) -> crate::error::Result<()> {
+        use tokio::net::TcpListener;
+        use tokio::signal;
 
         // Start credential rotation before binding, so a certificate that
         // rotates during startup is picked up rather than missed. The guard is

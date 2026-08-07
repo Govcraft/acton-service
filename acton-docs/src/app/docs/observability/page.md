@@ -255,6 +255,69 @@ scrape_configs:
 
 {% callout type="note" title="Endpoint exposure" %}
 `/metrics` is unauthenticated, like `/health`. It exposes route names, traffic volumes, and latency distributions — no request payloads or secrets — but if that surface matters in your deployment, restrict access at the network layer. The route is excluded from audit logging by default.
+
+This applies to both places the endpoint can appear: the route on your main listener, and the separate exporter listener below. The exporter is the more exposed of the two, because it carries no TLS and no auth even when your main listener carries both — put it on a private scrape network and never behind an Ingress.
+{% /callout %}
+
+### Exporter listener
+
+The route above inherits whatever your main listener is: TLS, authentication, CORS, body limits. That is correct for an application surface and wrong for a scrape target, because the collectors that matter in practice speak plain HTTP to a declared port and offer no TLS knobs at all — Fly.io's `[[metrics]]` block, GKE managed collection, and the defaults of most `PodMonitor`/`ServiceMonitor` resources. Terminate TLS on your main listener and none of them can scrape you.
+
+`[middleware.metrics.exporter]` is the other answer: an opt-in second socket carrying the same bytes, from the same registry, through the same handler.
+
+```toml
+[middleware.metrics]
+enabled = true
+
+[middleware.metrics.exporter]
+bind = "::"
+port = 9090
+```
+
+```bash
+# Plain HTTP, even when the main listener is HTTPS.
+curl http://localhost:9090/metrics
+```
+
+Both keys are required — a plaintext socket is a security-relevant act, so there is no default address to open unasked. Every path other than `GET /metrics` returns 404, and the listener carries no middleware of any kind: no CORS, no compression, no tracing, no timeout, no body limit.
+
+Absent table, absent listener. Nothing changes for a deployment that does not write it.
+
+**Fly.io** — the collector scrapes your instance over the private 6PN network, so bind `::`:
+
+```toml
+# fly.toml
+[[metrics]]
+port = 9090
+path = "/metrics"
+```
+
+**Kubernetes** — the container port, the Service port and the `ServiceMonitor` all name the exporter, not the application listener:
+
+```yaml
+ports:
+  - name: metrics
+    containerPort: 9090
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+spec:
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+```
+
+These are refused at startup, before anything binds, rather than surfacing later as a scrape that silently never arrives:
+
+- `port = 0`, which asks the OS for an ephemeral port that no scrape job can name and that changes on every restart.
+- A port shared with the HTTP listener or the separate-port gRPC listener. The check is on the port alone, deliberately: `::` and `0.0.0.0` overlap on the same port under Linux's dual-stack default, so a differing bind address is not a reliable escape.
+- The table appearing in a build without the `prometheus-metrics` feature, where there is no registry to serve and every scrape would answer 503.
+
+The exporter binds *before* the service's own listeners, so a port clash refuses to start rather than leaving a half-serving process; it drains *after* them, so the final scrape still observes the drain.
+
+{% callout type="note" title="`enabled = false` is not a contradiction here" %}
+`[middleware.metrics] enabled = false` suppresses the HTTP request instruments, not the registry — API-version counters and anything your application records through `get_meter()` still land there. So an exporter alongside `enabled = false` is legitimate and starts normally; it just serves a document with no `http_server_*` families in it. The service logs one warning at startup saying so, rather than refusing.
 {% /callout %}
 
 ### Histogram Bucket Boundaries
