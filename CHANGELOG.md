@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.37.0] - 2026-08-07
+
+One feature, and the config-surface change it carries: a TLS service can now
+be scraped by the plain-HTTP collectors platforms ship, through an opt-in
+second listener that serves only `GET /metrics`. A deployment that does not
+write the new table sees no change at runtime; code that constructs
+`MetricsConfig` as a struct literal must move to the builders.
+
 ### Changed
 
 - **BREAKING — config(metrics)**: `MetricsConfig` gains the public `exporter`
