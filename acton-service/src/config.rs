@@ -12,7 +12,7 @@ use figment::{
     Figment,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -1445,6 +1445,9 @@ impl ResilienceConfig {
 /// metric its name claims. `service_name` was never a key of this table -- the
 /// resource-level `service.name` comes from `[service] name`, which is where a
 /// service is named once for traces, metrics and logs alike.
+///
+/// The one nested table, `exporter`, is a real key that reaches a real
+/// listener; see [`MetricsExporterConfig`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MetricsConfig {
@@ -1462,6 +1465,13 @@ pub struct MetricsConfig {
     /// down at boot.
     #[serde(default = "default_latency_buckets")]
     pub latency_buckets_ms: Vec<f64>,
+
+    /// Optional plaintext exporter listener. Absent means no second socket.
+    ///
+    /// The one nested table this section permits; its own keys are as strict
+    /// as this table's.
+    #[serde(default)]
+    pub exporter: Option<MetricsExporterConfig>,
 }
 
 impl Default for MetricsConfig {
@@ -1469,6 +1479,7 @@ impl Default for MetricsConfig {
         Self {
             enabled: true,
             latency_buckets_ms: default_latency_buckets(),
+            exporter: None,
         }
     }
 }
@@ -1490,6 +1501,13 @@ impl MetricsConfig {
     #[must_use]
     pub fn with_latency_buckets_ms(mut self, buckets_ms: Vec<f64>) -> Self {
         self.latency_buckets_ms = buckets_ms;
+        self
+    }
+
+    /// Install a plaintext exporter listener serving only `GET /metrics`.
+    #[must_use]
+    pub fn with_exporter(mut self, exporter: MetricsExporterConfig) -> Self {
+        self.exporter = Some(exporter);
         self
     }
 
@@ -1515,6 +1533,49 @@ impl MetricsConfig {
                 .map(|ms| ms / 1000.0)
                 .collect()
         })
+    }
+}
+
+/// A dedicated, plaintext listener that serves only `GET /metrics`.
+///
+/// Absent table means absent listener: nothing changes for a deployment that
+/// does not write `[middleware.metrics.exporter]`. When present, the service
+/// binds one additional TCP socket at `bind:port` and serves the same
+/// Prometheus document as the main listener's `/metrics` route, rendered from
+/// the same registry. Every other path is 404.
+///
+/// This listener speaks HTTP only -- no TLS, no auth, no other middleware --
+/// which is the point: managed platform collectors (Fly.io `[[metrics]]`, GKE
+/// managed collection, most `PodMonitor`/`ServiceMonitor` defaults) scrape
+/// plain HTTP against a declared port and offer no TLS knobs, so a service
+/// whose main listener is TLS cannot be scraped through it. Bind this to a
+/// private scrape network, never an internet-facing interface.
+///
+/// Both keys are required. A plaintext socket is a security-relevant act, so
+/// there is no default address to open unasked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MetricsExporterConfig {
+    /// IP address the exporter listener binds. Required; there is no default.
+    ///
+    /// `::` is dual-stack on Linux by OS default and v6-only on some BSDs.
+    pub bind: IpAddr,
+
+    /// TCP port the exporter listener binds. Required; there is no default.
+    ///
+    /// Must not be `0` and must not collide with the HTTP or gRPC listener.
+    pub port: u16,
+}
+
+impl MetricsExporterConfig {
+    /// Create an exporter configuration for the given address.
+    pub fn new(bind: IpAddr, port: u16) -> Self {
+        Self { bind, port }
+    }
+
+    /// The address the exporter listener binds.
+    pub fn socket_addr(&self) -> SocketAddr {
+        SocketAddr::new(self.bind, self.port)
     }
 }
 
@@ -2117,6 +2178,82 @@ mod tests {
             ]),
             "omitting the key must leave the boundaries exactly where they were \
              before this table was honoured"
+        );
+        assert!(
+            metrics.exporter.is_none(),
+            "an absent exporter table must mean an absent listener"
+        );
+    }
+
+    #[test]
+    fn metrics_exporter_table_round_trips_through_figment() {
+        // Through Figment rather than serde_json because the real load path
+        // seeds `Serialized::defaults(Config::default())` first, and the
+        // exporter's `None` default must survive that merge.
+        let toml = r#"
+[middleware.metrics]
+enabled = true
+
+[middleware.metrics.exporter]
+bind = "::"
+port = 9091
+"#;
+        let config: Config<()> = Figment::new()
+            .merge(Serialized::defaults(Config::<()>::default()))
+            .merge(Toml::string(toml))
+            .extract()
+            .expect("a bind + port exporter table must deserialize");
+
+        let exporter = config
+            .middleware
+            .metrics
+            .as_ref()
+            .and_then(|m| m.exporter.as_ref())
+            .expect("the exporter table must reach the config");
+        assert_eq!(
+            exporter.socket_addr(),
+            "[::]:9091".parse::<SocketAddr>().expect("valid addr")
+        );
+    }
+
+    #[test]
+    fn metrics_exporter_table_requires_bind() {
+        // A defaulted bind would let a typo'd table open an interface unasked.
+        // That the omission fails here proves serde enforces it, not a runtime
+        // check that could drift.
+        let json = r#"{ "port": 9091 }"#;
+
+        assert!(
+            serde_json::from_str::<MetricsExporterConfig>(json).is_err(),
+            "an exporter table without `bind` must be a parse error"
+        );
+    }
+
+    #[test]
+    fn metrics_exporter_table_refuses_keys_it_cannot_honour() {
+        // The parent table's rule is inherited by intent: a key that reaches
+        // nothing must fail at startup, not be quietly dropped.
+        let json = r#"{ "bind": "127.0.0.1", "port": 9091, "tls": true }"#;
+
+        assert!(
+            serde_json::from_str::<MetricsExporterConfig>(json).is_err(),
+            "an unknown key in [middleware.metrics.exporter] must be a parse error"
+        );
+    }
+
+    #[test]
+    fn metrics_config_builder_sets_the_exporter() {
+        let metrics = MetricsConfig::new().with_exporter(MetricsExporterConfig::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            9091,
+        ));
+
+        assert_eq!(
+            metrics.exporter,
+            Some(MetricsExporterConfig::new(
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                9091
+            ))
         );
     }
 

@@ -75,6 +75,20 @@ impl Server {
             None => crate::tls::DEFAULT_HANDSHAKE_TIMEOUT,
         };
 
+        // And the optional plaintext exporter listener: a collision or a
+        // feature this build lacks is a refusal to start, reported before any
+        // listener binds. This path has no gRPC listener to collide with.
+        let metrics_exporter_addr = crate::metrics_exporter::resolve_exporter_addr(
+            self.config.middleware.metrics.as_ref(),
+            addr,
+            None,
+        )?;
+        #[cfg(not(feature = "prometheus-metrics"))]
+        let _ = metrics_exporter_addr;
+        crate::metrics_exporter::warn_if_http_instruments_are_absent(
+            self.config.middleware.metrics.as_ref(),
+        );
+
         // Log middleware configuration
         self.log_middleware_config();
 
@@ -138,6 +152,17 @@ impl Server {
 
         tracing::info!("Server listening on {}", addr);
 
+        // Bound after the main listener so its port takes precedence in a
+        // race, drained after the serve calls below return. On an error return
+        // the handle's abort-on-drop backstop closes the socket instead.
+        #[cfg(feature = "prometheus-metrics")]
+        let metrics_exporter = match metrics_exporter_addr {
+            Some(exporter_addr) => {
+                Some(crate::metrics_exporter::MetricsExporter::start(exporter_addr).await?)
+            }
+            None => None,
+        };
+
         // Serve with graceful shutdown -- TLS or plain TCP
         //
         // The TLS listener exposes `TlsConnectInfo` (remote address plus any
@@ -172,6 +197,10 @@ impl Server {
                 )
                 .with_graceful_shutdown(shutdown_signal())
                 .await?;
+                #[cfg(feature = "prometheus-metrics")]
+                if let Some(exporter) = metrics_exporter {
+                    exporter.shutdown().await;
+                }
                 tracing::info!("Server shutdown complete");
                 return Ok(());
             }
@@ -183,6 +212,11 @@ impl Server {
         )
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+
+        #[cfg(feature = "prometheus-metrics")]
+        if let Some(exporter) = metrics_exporter {
+            exporter.shutdown().await;
+        }
 
         tracing::info!("Server shutdown complete");
 
@@ -245,6 +279,20 @@ impl Server {
             }
         } else {
             tracing::info!("  - HTTP metrics: not configured");
+        }
+
+        match self
+            .config
+            .middleware
+            .metrics
+            .as_ref()
+            .and_then(|m| m.exporter.as_ref())
+        {
+            Some(exporter) => tracing::info!(
+                "  - Metrics exporter: {} (plaintext, GET /metrics only)",
+                exporter.socket_addr()
+            ),
+            None => tracing::info!("  - Metrics exporter: not configured"),
         }
 
         if let Some(ref governor) = self.config.middleware.governor {

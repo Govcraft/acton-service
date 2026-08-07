@@ -674,10 +674,13 @@ The same OpenTelemetry HTTP metrics, exposed for a direct Prometheus scrape — 
 
 **Provides**:
 - `GET /metrics` in Prometheus text-exposition format, mounted alongside `/health` and `/ready`
+- An optional second listener, `[middleware.metrics.exporter]`, serving only `GET /metrics` in plaintext on a port of its own
 - The same request metrics as `otel-metrics`, plus any application metrics registered through `get_meter()`
 - Independent of `otel-metrics`: enable either or both; with both, one meter provider feeds both exporters
 
 The endpoint is unauthenticated like `/health` — it exposes route names and traffic statistics, so restrict access at the network layer if that matters in your deployment. `/metrics` is excluded from audit-logged routes by default.
+
+This feature gates two things, and the second is opt-in twice over: the route on the main router, and the separate exporter listener. The exporter exists because managed collectors (Fly.io `[[metrics]]`, GKE managed collection, most `PodMonitor`/`ServiceMonitor` defaults) scrape plain HTTP and offer no TLS knobs, so they cannot reach a main listener that terminates TLS. It appears only when `[middleware.metrics.exporter]` is written, and writing that table in a build *without* this feature is a startup error rather than a silent no-op — there would be no registry to serve. See [Observability](/docs/observability) for the configuration.
 
 ```toml
 {% $dep.prometheusMetrics %}
@@ -1046,7 +1049,7 @@ Some features work better together:
 | `cedar-authz` | `cache` | Policy decision caching dramatically improves performance (10-50ms → 1-5ms) |
 | `cache` | `governor` | Distributed rate limiting needs Redis |
 | `otel-metrics` | `observability` | Metrics require tracing foundation |
-| `prometheus-metrics` | `http` | The `/metrics` scrape endpoint is served by the HTTP router |
+| `prometheus-metrics` | `http` | The `/metrics` scrape endpoint is served by the HTTP router, and the optional `[middleware.metrics.exporter]` listener serves the same route |
 | `journald` | `observability` | Journald layer works alongside OTLP tracing |
 | `resilience` | `http` or `grpc` | Resilience patterns apply to HTTP/gRPC calls |
 | `openapi` | `http` | OpenAPI docs are for HTTP endpoints |

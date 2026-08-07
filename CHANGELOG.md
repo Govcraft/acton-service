@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **config(metrics)**: `[middleware.metrics.exporter]` opens a dedicated,
+  plaintext listener that serves only `GET /metrics` (#129). The main
+  listener's `/metrics` route inherits that listener's TLS, auth and
+  middleware, which is right for an application surface and wrong for a scrape
+  target: managed collectors — Fly.io's `[[metrics]]` block, GKE managed
+  collection, the defaults of most `PodMonitor`/`ServiceMonitor` resources —
+  speak plain HTTP to a declared port and expose no TLS knobs, so a service
+  terminating TLS could not be scraped through any of them without stopping
+  terminating TLS.
+
+  The second socket serves the same bytes, from the same registry, through the
+  same handler, so the two cannot drift. It carries no TLS, no authentication
+  and no other middleware by design, and every path other than `GET /metrics`
+  is a 404 — bind it to a private scrape network.
+
+  Both `bind` and `port` are required; there is no default address to open
+  unasked. A `port` of `0`, a port shared with the HTTP or separate-port gRPC
+  listener, or the table appearing in a build without the `prometheus-metrics`
+  feature are all refused before anything binds. The listener binds ahead of
+  the service's own listeners, so a clash refuses to start, and drains after
+  them, so the last scrape still observes the drain. Absent table, absent
+  listener: nothing changes for a config that does not write it.
+
+### Fixed
+
+- **cli**: `acton new --observability` generated a `config.toml` whose
+  `[middleware.metrics]` table set `export_interval_secs`, a key that has never
+  existed. Since 0.36.0 made that table `deny_unknown_fields`, every service
+  the CLI generated with observability enabled failed at startup on its own
+  scaffold. The key is removed.
+- **cli**: generated Kubernetes manifests declared a `metrics` container port,
+  a Service port and a `ServiceMonitor` scraping 9090 — a port nothing had ever
+  listened on. The generated config now writes a matching
+  `[middleware.metrics.exporter]` table, and the generated project enables the
+  `prometheus-metrics` feature that table requires, so the manifest describes
+  something real.
+
 ## [acton-service-v0.36.0] - 2026-08-05
 
 A single fix, and a breaking one: `[middleware.metrics]` now reaches the

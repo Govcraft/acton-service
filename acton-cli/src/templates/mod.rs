@@ -84,6 +84,14 @@ impl ServiceTemplate {
 
         if self.observability {
             features.push("observability".to_string());
+            // `observability` alone carries traces and logs, not metrics: the
+            // Prometheus registry lives behind `prometheus-metrics`. The
+            // generated config writes a `[middleware.metrics.exporter]` table
+            // and the generated Kubernetes manifest declares a ServiceMonitor
+            // scraping it, and both are refused at startup without this
+            // feature -- so it is not optional for a scaffold that is meant to
+            // boot as generated.
+            features.push("prometheus-metrics".to_string());
         }
 
         if self.resilience {

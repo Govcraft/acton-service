@@ -103,6 +103,9 @@ spec:
         - name: http
           containerPort: 8080
           protocol: TCP
+        # Served by [middleware.metrics.exporter] in config.toml, which binds
+        # :: on 9090. Plaintext and unauthenticated by design -- keep it on the
+        # pod network and do not add it to an Ingress.
         - name: metrics
           containerPort: 9090
           protocol: TCP
@@ -172,6 +175,8 @@ spec:
     port: 80
     targetPort: http
     protocol: TCP
+  # ClusterIP only. The exporter behind this port carries no TLS and no auth,
+  # so it must stay reachable from inside the cluster and nowhere else.
   - name: metrics
     port: 9090
     targetPort: metrics
@@ -298,6 +303,10 @@ spec:
     matchLabels:
       app: {service_name}
   endpoints:
+  # Scrapes the exporter listener from [middleware.metrics.exporter], not the
+  # application listener. That separation is the point: this endpoint keeps
+  # working when the application listener terminates TLS, which the Prometheus
+  # operator's default scrape configuration cannot follow.
   - port: metrics
     interval: 30s
     path: /metrics
