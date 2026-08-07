@@ -205,12 +205,13 @@ Metrics, tracing, and monitoring integration.
 
 #### **test-prometheus-metrics.rs** - Prometheus Scrape Endpoint
 
-Pull-based `/metrics` endpoint via the `prometheus-metrics` feature, mounted automatically by `ServiceBuilder`.
+Pull-based `/metrics` endpoint via the `prometheus-metrics` feature, mounted automatically by `ServiceBuilder`. Also configures the optional `[middleware.metrics.exporter]` listener, which serves the same document in plaintext on a port of its own — the surface a platform collector such as Fly.io `[[metrics]]` or a `PodMonitor` would scrape.
 
 ```bash
 cargo run --manifest-path=acton-service/Cargo.toml --example test-prometheus-metrics --features prometheus-metrics
 curl http://localhost:8080/api/v1/hello
 curl http://localhost:8080/metrics
+curl http://localhost:9091/metrics
 ```
 
 #### **test-metrics.rs** - HTTP Metrics Layer
