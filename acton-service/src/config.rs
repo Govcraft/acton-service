@@ -1448,8 +1448,12 @@ impl ResilienceConfig {
 ///
 /// The one nested table, `exporter`, is a real key that reaches a real
 /// listener; see [`MetricsExporterConfig`].
+///
+/// `#[non_exhaustive]`, so future keys on this table are additive: construct
+/// it with [`MetricsConfig::new`] and the `with_*` setters.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct MetricsConfig {
     /// Enable metrics collection
     #[serde(default = "default_true")]
@@ -1553,8 +1557,12 @@ impl MetricsConfig {
 ///
 /// Both keys are required. A plaintext socket is a security-relevant act, so
 /// there is no default address to open unasked.
+///
+/// `#[non_exhaustive]` from birth, so future keys on this table are additive:
+/// construct it with [`MetricsExporterConfig::new`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct MetricsExporterConfig {
     /// IP address the exporter listener binds. Required; there is no default.
     ///

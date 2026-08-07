@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING — config(metrics)**: `MetricsConfig` gains the public `exporter`
+  field and is now `#[non_exhaustive]`, so struct-literal construction of it no
+  longer compiles downstream. Construct it with
+  `MetricsConfig::new().with_latency_buckets_ms(..).with_exporter(..)`; every
+  field has a setter. The one-time cost buys additivity: future keys on this
+  table will not break anyone again. `MetricsExporterConfig` is
+  `#[non_exhaustive]` from birth for the same reason — construct it with
+  `MetricsExporterConfig::new(bind, port)`.
+
 ### Added
 
 - **config(metrics)**: `[middleware.metrics.exporter]` opens a dedicated,
