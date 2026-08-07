@@ -29,7 +29,10 @@ fn config_with_exporter(service_port: u16) -> Config<()> {
     config
 }
 
-#[tokio::test]
+// Multi-thread flavor: in builds that carry the `audit` feature, the default
+// config enables the audit agent, whose own current-thread-runtime guard would
+// otherwise be recorded first and mask the refusal under test.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn try_build_refuses_an_exporter_this_build_cannot_serve() {
     let error = ServiceBuilder::new()
         .with_config(config_with_exporter(8080))
