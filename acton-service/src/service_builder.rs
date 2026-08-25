@@ -644,6 +644,8 @@ where
         // Determine if we need to spawn pool agents
         #[cfg(feature = "database")]
         let needs_db_agent = config.database.is_some();
+        #[cfg(feature = "mssql")]
+        let needs_mssql_agent = config.database.is_some();
 
         #[cfg(feature = "cache")]
         let needs_redis_agent = config.redis.is_some();
@@ -666,13 +668,18 @@ where
             feature = "events",
             feature = "turso",
             feature = "surrealdb",
-            feature = "clickhouse"
+            feature = "clickhouse",
+            feature = "mssql"
         ))]
         let needs_agents = {
             #[cfg(feature = "database")]
             let db = needs_db_agent;
             #[cfg(not(feature = "database"))]
             let db = false;
+            #[cfg(feature = "mssql")]
+            let mssql = needs_mssql_agent;
+            #[cfg(not(feature = "mssql"))]
+            let mssql = false;
 
             #[cfg(feature = "cache")]
             let redis = needs_redis_agent;
@@ -699,12 +706,18 @@ where
             #[cfg(not(feature = "clickhouse"))]
             let clickhouse = false;
 
-            db || redis || nats || turso || surrealdb || clickhouse
+            db || mssql || redis || nats || turso || surrealdb || clickhouse
         };
 
         // Initialize agent runtime and spawn pool agents if needed
         #[cfg(feature = "database")]
         let shared_db_pool: Option<crate::agents::SharedDbPool> = if needs_db_agent {
+            Some(std::sync::Arc::new(tokio::sync::RwLock::new(None)))
+        } else {
+            None
+        };
+        #[cfg(feature = "mssql")]
+        let shared_mssql_pool: Option<crate::agents::SharedMssqlPool> = if needs_mssql_agent {
             Some(std::sync::Arc::new(tokio::sync::RwLock::new(None)))
         } else {
             None
@@ -750,6 +763,8 @@ where
         // Agent handles for AppState
         #[cfg(feature = "database")]
         let mut db_agent_handle: Option<acton_reactive::prelude::ActorHandle> = None;
+        #[cfg(feature = "mssql")]
+        let mut mssql_agent_handle: Option<acton_reactive::prelude::ActorHandle> = None;
         #[cfg(feature = "cache")]
         let mut redis_agent_handle: Option<acton_reactive::prelude::ActorHandle> = None;
         #[cfg(feature = "events")]
@@ -767,7 +782,8 @@ where
             feature = "events",
             feature = "turso",
             feature = "surrealdb",
-            feature = "clickhouse"
+            feature = "clickhouse",
+            feature = "mssql"
         ))]
         let mut broker_handle = if needs_agents {
             // Use block_in_place to run async code in sync context
@@ -797,6 +813,22 @@ where
                                 }
                                 Err(e) => {
                                     tracing::warn!("Failed to spawn database pool agent: {}", e);
+                                }
+                            }
+                        }
+
+                        #[cfg(feature = "mssql")]
+                        if let Some(ref db_config) = config.database {
+                            match crate::agents::MssqlPoolAgent::spawn(
+                                runtime,
+                                db_config.clone(),
+                                shared_mssql_pool.clone(),
+                            )
+                            .await
+                            {
+                                Ok(handle) => mssql_agent_handle = Some(handle),
+                                Err(error) => {
+                                    tracing::warn!(%error, "failed to spawn SQL Server pool agent")
                                 }
                             }
                         }
@@ -936,6 +968,8 @@ where
                         &crate::audit::wiring::AuditStorageHandles {
                             #[cfg(feature = "database")]
                             db_pool: shared_db_pool.clone(),
+                            #[cfg(feature = "mssql")]
+                            mssql_pool: shared_mssql_pool.clone(),
                             #[cfg(feature = "turso")]
                             turso_db: shared_turso_db.clone(),
                             #[cfg(feature = "surrealdb")]
@@ -1073,6 +1107,8 @@ where
                     &config,
                     #[cfg(feature = "database")]
                     &shared_db_pool,
+                    #[cfg(feature = "mssql")]
+                    &shared_mssql_pool,
                     #[cfg(feature = "turso")]
                     &shared_turso_db,
                     #[cfg(feature = "surrealdb")]
@@ -1208,7 +1244,8 @@ where
             feature = "events",
             feature = "turso",
             feature = "surrealdb",
-            feature = "clickhouse"
+            feature = "clickhouse",
+            feature = "mssql"
         )))]
         let broker_handle: Option<acton_reactive::prelude::ActorHandle> = self.broker();
 
@@ -1221,7 +1258,8 @@ where
             feature = "events",
             feature = "turso",
             feature = "surrealdb",
-            feature = "clickhouse"
+            feature = "clickhouse",
+            feature = "mssql"
         ))]
         if broker_handle.is_none() {
             broker_handle = self.broker();
@@ -1244,6 +1282,10 @@ where
             #[cfg(feature = "database")]
             if let Some(pool) = shared_db_pool {
                 state.set_db_pool_storage(pool);
+            }
+            #[cfg(feature = "mssql")]
+            if let Some(pool) = shared_mssql_pool {
+                state.set_mssql_pool_storage(pool);
             }
 
             #[cfg(feature = "cache")]
@@ -2174,6 +2216,7 @@ where
         builder: &mut Self,
         config: &Config<T>,
         #[cfg(feature = "database")] shared_db_pool: &Option<crate::agents::SharedDbPool>,
+        #[cfg(feature = "mssql")] shared_mssql_pool: &Option<crate::agents::SharedMssqlPool>,
         #[cfg(feature = "turso")] shared_turso_db: &Option<crate::agents::SharedTursoDb>,
         #[cfg(feature = "surrealdb")] shared_surrealdb_client: &Option<
             crate::agents::SharedSurrealDb,
@@ -2232,6 +2275,21 @@ where
                                 crate::auth::key_rotation::PgKeyRotationStorage::new(pool.clone()),
                             ));
                             tracing::debug!("Key rotation using PostgreSQL storage");
+                        }
+                    }
+                }
+            }
+
+            #[cfg(feature = "mssql")]
+            if s.is_none() {
+                if let Some(ref pool_lock) = shared_mssql_pool {
+                    if let Ok(guard) = pool_lock.try_read() {
+                        if let Some(ref pool) = *guard {
+                            s = Some(std::sync::Arc::new(
+                                crate::auth::key_rotation::MssqlKeyRotationStorage::new(
+                                    pool.clone(),
+                                ),
+                            ));
                         }
                     }
                 }

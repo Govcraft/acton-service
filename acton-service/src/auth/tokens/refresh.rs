@@ -517,6 +517,118 @@ pub mod pg_storage {
 #[cfg(feature = "database")]
 pub use pg_storage::PgRefreshStorage;
 
+/// Microsoft SQL Server refresh-token storage.
+#[cfg(feature = "mssql")]
+pub mod mssql_storage {
+    use super::*;
+    use crate::mssql::{execute, query, MssqlPool};
+
+    /// SQL Server-backed refresh-token storage.
+    #[derive(Clone)]
+    pub struct MssqlRefreshStorage {
+        pool: MssqlPool,
+    }
+
+    impl MssqlRefreshStorage {
+        /// Creates the storage and its schema.
+        pub async fn new(pool: MssqlPool) -> Result<Self, Error> {
+            execute(&pool, "IF OBJECT_ID(N'refresh_tokens',N'U') IS NULL CREATE TABLE refresh_tokens (id NVARCHAR(255) PRIMARY KEY,user_id NVARCHAR(255) NOT NULL,family_id NVARCHAR(255) NOT NULL,expires_at DATETIMEOFFSET NOT NULL,metadata NVARCHAR(MAX) NOT NULL,is_revoked BIT NOT NULL CONSTRAINT DF_refresh_revoked DEFAULT 0,created_at DATETIMEOFFSET NOT NULL CONSTRAINT DF_refresh_created DEFAULT SYSDATETIMEOFFSET())", &[]).await?;
+            Ok(Self { pool })
+        }
+    }
+
+    #[async_trait]
+    impl RefreshTokenStorage for MssqlRefreshStorage {
+        async fn store(
+            &self,
+            token_id: &str,
+            user_id: &str,
+            family_id: &str,
+            expires_at: DateTime<Utc>,
+            metadata: &RefreshTokenMetadata,
+        ) -> Result<(), Error> {
+            let metadata = serde_json::to_string(metadata)
+                .map_err(|error| Error::Internal(error.to_string()))?;
+            execute(&self.pool,"INSERT INTO refresh_tokens(id,user_id,family_id,expires_at,metadata,is_revoked) VALUES(@P1,@P2,@P3,@P4,@P5,0)",&[&token_id,&user_id,&family_id,&expires_at,&metadata]).await?;
+            Ok(())
+        }
+        async fn get(&self, token_id: &str) -> Result<Option<RefreshTokenData>, Error> {
+            let rows=query(&self.pool,"SELECT id,user_id,family_id,is_revoked,expires_at,metadata FROM refresh_tokens WHERE id=@P1 AND expires_at>SYSDATETIMEOFFSET()",&[&token_id]).await?;
+            rows.first()
+                .map(|row| {
+                    let required = |name| {
+                        row.get::<&str, _>(name)
+                            .map(str::to_owned)
+                            .ok_or_else(|| Error::Internal(format!("missing {name}")))
+                    };
+                    let metadata = serde_json::from_str(required("metadata")?.as_str())
+                        .map_err(|error| Error::Internal(error.to_string()))?;
+                    Ok(RefreshTokenData {
+                        token_id: required("id")?,
+                        user_id: required("user_id")?,
+                        family_id: required("family_id")?,
+                        is_revoked: row.get("is_revoked").unwrap_or(false),
+                        expires_at: row
+                            .get("expires_at")
+                            .ok_or_else(|| Error::Internal("missing expires_at".to_string()))?,
+                        metadata,
+                    })
+                })
+                .transpose()
+        }
+        async fn revoke(&self, token_id: &str) -> Result<(), Error> {
+            execute(
+                &self.pool,
+                "UPDATE refresh_tokens SET is_revoked=1 WHERE id=@P1",
+                &[&token_id],
+            )
+            .await?;
+            Ok(())
+        }
+        async fn revoke_family(&self, family_id: &str) -> Result<u64, Error> {
+            execute(
+                &self.pool,
+                "UPDATE refresh_tokens SET is_revoked=1 WHERE family_id=@P1",
+                &[&family_id],
+            )
+            .await
+        }
+        async fn revoke_all_for_user(&self, user_id: &str) -> Result<u64, Error> {
+            execute(
+                &self.pool,
+                "UPDATE refresh_tokens SET is_revoked=1 WHERE user_id=@P1",
+                &[&user_id],
+            )
+            .await
+        }
+        async fn rotate(
+            &self,
+            old_token_id: &str,
+            new_token_id: &str,
+            user_id: &str,
+            family_id: &str,
+            expires_at: DateTime<Utc>,
+            metadata: &RefreshTokenMetadata,
+        ) -> Result<(), Error> {
+            let metadata = serde_json::to_string(metadata)
+                .map_err(|error| Error::Internal(error.to_string()))?;
+            execute(&self.pool,"SET XACT_ABORT ON; BEGIN TRANSACTION; UPDATE refresh_tokens SET is_revoked=1 WHERE id=@P1; INSERT INTO refresh_tokens(id,user_id,family_id,expires_at,metadata,is_revoked) VALUES(@P2,@P3,@P4,@P5,@P6,0); COMMIT TRANSACTION",&[&old_token_id,&new_token_id,&user_id,&family_id,&expires_at,&metadata]).await?;
+            Ok(())
+        }
+        async fn cleanup_expired(&self) -> Result<u64, Error> {
+            execute(
+                &self.pool,
+                "DELETE FROM refresh_tokens WHERE expires_at<SYSDATETIMEOFFSET()",
+                &[],
+            )
+            .await
+        }
+    }
+}
+
+#[cfg(feature = "mssql")]
+pub use mssql_storage::MssqlRefreshStorage;
+
 /// Turso/libsql-based refresh token storage
 #[cfg(feature = "turso")]
 pub mod turso_storage {

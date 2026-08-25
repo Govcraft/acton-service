@@ -26,12 +26,16 @@ use std::sync::Arc;
     feature = "events",
     feature = "turso",
     feature = "surrealdb",
-    feature = "clickhouse"
+    feature = "clickhouse",
+    feature = "mssql"
 ))]
 use tokio::sync::RwLock;
 
 #[cfg(feature = "database")]
 use sqlx::PgPool;
+
+#[cfg(feature = "mssql")]
+use crate::mssql::MssqlPool;
 
 #[cfg(feature = "cache")]
 use deadpool_redis::Pool as RedisPool;
@@ -73,6 +77,9 @@ where
     // Traditional pool storage (used when agents are not configured)
     #[cfg(feature = "database")]
     db_pool: Arc<RwLock<Option<PgPool>>>,
+
+    #[cfg(feature = "mssql")]
+    mssql_pool: Arc<RwLock<Option<MssqlPool>>>,
 
     #[cfg(feature = "turso")]
     turso_db: Arc<RwLock<Option<Arc<libsql::Database>>>>,
@@ -127,6 +134,8 @@ where
             config: Arc::new(Config::<T>::default()),
             #[cfg(feature = "database")]
             db_pool: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "mssql")]
+            mssql_pool: Arc::new(RwLock::new(None)),
             #[cfg(feature = "turso")]
             turso_db: Arc::new(RwLock::new(None)),
             #[cfg(feature = "cache")]
@@ -166,6 +175,8 @@ where
             config: Arc::new(config),
             #[cfg(feature = "database")]
             db_pool: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "mssql")]
+            mssql_pool: Arc::new(RwLock::new(None)),
             #[cfg(feature = "turso")]
             turso_db: Arc::new(RwLock::new(None)),
             #[cfg(feature = "cache")]
@@ -240,6 +251,23 @@ where
     #[cfg(feature = "database")]
     pub(crate) fn set_db_pool_storage(&mut self, storage: Arc<RwLock<Option<PgPool>>>) {
         self.db_pool = storage;
+    }
+
+    /// Gets the Microsoft SQL Server pool, if it is connected.
+    #[cfg(feature = "mssql")]
+    pub async fn mssql(&self) -> Option<MssqlPool> {
+        self.mssql_pool.read().await.clone()
+    }
+
+    /// Gets the shared SQL Server pool storage.
+    #[cfg(feature = "mssql")]
+    pub fn mssql_lock(&self) -> &Arc<RwLock<Option<MssqlPool>>> {
+        &self.mssql_pool
+    }
+
+    #[cfg(feature = "mssql")]
+    pub(crate) fn set_mssql_pool_storage(&mut self, storage: Arc<RwLock<Option<MssqlPool>>>) {
+        self.mssql_pool = storage;
     }
 
     /// Get the Turso database
@@ -542,6 +570,12 @@ where
                     &pool, db_config,
                 ));
             }
+        }
+        #[cfg(feature = "mssql")]
+        if let (Some(pool), Some(config)) = (self.mssql().await, self.config.database.as_ref()) {
+            summary.mssql = Some(crate::pool_health::MssqlPoolHealth::from_pool(
+                &pool, config,
+            ));
         }
 
         #[cfg(feature = "cache")]
@@ -857,10 +891,39 @@ where
             Arc::new(RwLock::new(None))
         };
 
+        #[cfg(feature = "mssql")]
+        let mssql_pool = if let Some(database_config) = &config.database {
+            if database_config.lazy_init {
+                let storage = Arc::new(RwLock::new(None));
+                let target = storage.clone();
+                let database_config = database_config.clone();
+                tokio::spawn(async move {
+                    match crate::mssql::create_pool(&database_config).await {
+                        Ok(pool) => *target.write().await = Some(pool),
+                        Err(error) => tracing::error!(%error, "lazy SQL Server connection failed"),
+                    }
+                });
+                storage
+            } else {
+                match crate::mssql::create_pool(database_config).await {
+                    Ok(pool) => Arc::new(RwLock::new(Some(pool))),
+                    Err(error) if database_config.optional => {
+                        tracing::warn!(%error, "optional SQL Server connection failed");
+                        Arc::new(RwLock::new(None))
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+        } else {
+            Arc::new(RwLock::new(None))
+        };
+
         Ok(AppState {
             config: Arc::new(config),
             #[cfg(feature = "database")]
             db_pool,
+            #[cfg(feature = "mssql")]
+            mssql_pool,
             #[cfg(feature = "turso")]
             turso_db: Arc::new(RwLock::new(None)), // Turso uses agents, not builder
             #[cfg(feature = "surrealdb")]

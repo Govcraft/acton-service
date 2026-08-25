@@ -694,6 +694,123 @@ pub mod pg_storage {
 #[cfg(feature = "database")]
 pub use pg_storage::PgApiKeyStorage;
 
+/// Microsoft SQL Server API-key storage.
+#[cfg(feature = "mssql")]
+pub mod mssql_storage {
+    use super::*;
+    use crate::mssql::{execute, query, MssqlPool};
+
+    #[derive(Clone)]
+    pub struct MssqlApiKeyStorage {
+        pool: MssqlPool,
+        generator: ApiKeyGenerator,
+    }
+    impl MssqlApiKeyStorage {
+        pub async fn new(pool: MssqlPool, prefix: impl Into<String>) -> Result<Self, Error> {
+            execute(&pool,"IF OBJECT_ID(N'api_keys',N'U') IS NULL CREATE TABLE api_keys(id NVARCHAR(255) PRIMARY KEY,user_id NVARCHAR(255) NOT NULL,name NVARCHAR(255) NOT NULL,key_prefix NVARCHAR(255) NOT NULL UNIQUE,key_hash NVARCHAR(MAX) NOT NULL,scopes NVARCHAR(MAX) NOT NULL,rate_limit INT NULL,is_revoked BIT NOT NULL,last_used_at DATETIMEOFFSET NULL,expires_at DATETIMEOFFSET NULL,created_at DATETIMEOFFSET NOT NULL)",&[]).await?;
+            Ok(Self {
+                pool,
+                generator: ApiKeyGenerator::new(prefix),
+            })
+        }
+    }
+    fn required(row: &tiberius::Row, name: &str) -> Result<String, Error> {
+        row.get::<&str, _>(name)
+            .map(str::to_owned)
+            .ok_or_else(|| Error::Internal(format!("missing {name}")))
+    }
+    fn decode(row: &tiberius::Row) -> Result<ApiKey, Error> {
+        Ok(ApiKey {
+            id: required(row, "id")?,
+            user_id: required(row, "user_id")?,
+            name: required(row, "name")?,
+            prefix: required(row, "key_prefix")?,
+            key_hash: required(row, "key_hash")?,
+            scopes: serde_json::from_str(required(row, "scopes")?.as_str()).unwrap_or_default(),
+            rate_limit: row.get::<i32, _>("rate_limit").map(|v| v as u32),
+            is_revoked: row.get("is_revoked").unwrap_or(false),
+            last_used_at: row.get("last_used_at"),
+            expires_at: row.get("expires_at"),
+            created_at: row
+                .get("created_at")
+                .ok_or_else(|| Error::Internal("missing created_at".to_string()))?,
+        })
+    }
+    #[async_trait]
+    impl ApiKeyStorage for MssqlApiKeyStorage {
+        async fn get_by_key(&self, key: &str) -> Result<Option<ApiKey>, Error> {
+            let prefix = ApiKeyGenerator::key_prefix_for_lookup(key)
+                .ok_or_else(|| Error::ValidationError("Invalid API key format".to_string()))?;
+            Ok(self.get_by_prefix(&prefix).await?.filter(|stored| {
+                self.generator
+                    .verify(key, &stored.key_hash)
+                    .unwrap_or(false)
+            }))
+        }
+        async fn get_by_prefix(&self, prefix: &str) -> Result<Option<ApiKey>, Error> {
+            query(
+                &self.pool,
+                "SELECT * FROM api_keys WHERE key_prefix=@P1",
+                &[&prefix],
+            )
+            .await?
+            .first()
+            .map(decode)
+            .transpose()
+        }
+        async fn get_by_id(&self, id: &str) -> Result<Option<ApiKey>, Error> {
+            query(&self.pool, "SELECT * FROM api_keys WHERE id=@P1", &[&id])
+                .await?
+                .first()
+                .map(decode)
+                .transpose()
+        }
+        async fn create(&self, key: &ApiKey) -> Result<(), Error> {
+            let scopes = serde_json::to_string(&key.scopes)
+                .map_err(|error| Error::Internal(error.to_string()))?;
+            let rate = key.rate_limit.map(|v| v as i32);
+            execute(&self.pool,"INSERT INTO api_keys(id,user_id,name,key_prefix,key_hash,scopes,rate_limit,is_revoked,last_used_at,expires_at,created_at) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9,@P10,@P11)",&[&key.id,&key.user_id,&key.name,&key.prefix,&key.key_hash,&scopes,&rate,&key.is_revoked,&key.last_used_at,&key.expires_at,&key.created_at]).await?;
+            Ok(())
+        }
+        async fn update_last_used(&self, id: &str) -> Result<(), Error> {
+            execute(
+                &self.pool,
+                "UPDATE api_keys SET last_used_at=SYSDATETIMEOFFSET() WHERE id=@P1",
+                &[&id],
+            )
+            .await?;
+            Ok(())
+        }
+        async fn revoke(&self, id: &str) -> Result<(), Error> {
+            execute(
+                &self.pool,
+                "UPDATE api_keys SET is_revoked=1 WHERE id=@P1",
+                &[&id],
+            )
+            .await?;
+            Ok(())
+        }
+        async fn list_by_user(&self, user_id: &str) -> Result<Vec<ApiKey>, Error> {
+            query(
+                &self.pool,
+                "SELECT * FROM api_keys WHERE user_id=@P1 ORDER BY created_at DESC",
+                &[&user_id],
+            )
+            .await?
+            .iter()
+            .map(decode)
+            .collect()
+        }
+        async fn delete(&self, id: &str) -> Result<(), Error> {
+            execute(&self.pool, "DELETE FROM api_keys WHERE id=@P1", &[&id]).await?;
+            Ok(())
+        }
+    }
+}
+
+#[cfg(feature = "mssql")]
+pub use mssql_storage::MssqlApiKeyStorage;
+
 /// Turso/libsql-based API key storage
 #[cfg(feature = "turso")]
 pub mod turso_storage {

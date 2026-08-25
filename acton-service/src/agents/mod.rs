@@ -45,6 +45,9 @@ pub use messages::{
 #[cfg(feature = "database")]
 pub(crate) use pool::{DatabasePoolAgent, SharedDbPool};
 
+#[cfg(feature = "mssql")]
+pub(crate) use pool::{MssqlPoolAgent, SharedMssqlPool};
+
 #[cfg(feature = "cache")]
 pub(crate) use pool::{RedisPoolAgent, SharedRedisPool};
 

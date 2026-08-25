@@ -65,6 +65,8 @@ pub use tokens::{TokenGenerator, TokenPair};
 #[cfg(feature = "cache")]
 pub use tokens::refresh::RedisRefreshStorage;
 
+#[cfg(feature = "mssql")]
+pub use tokens::refresh::MssqlRefreshStorage;
 #[cfg(feature = "database")]
 pub use tokens::refresh::PgRefreshStorage;
 
@@ -83,6 +85,8 @@ pub use api_keys::{ApiKey, ApiKeyGenerator, ApiKeyStorage};
 #[cfg(feature = "cache")]
 pub use api_keys::RedisApiKeyStorage;
 
+#[cfg(feature = "mssql")]
+pub use api_keys::MssqlApiKeyStorage;
 #[cfg(feature = "database")]
 pub use api_keys::PgApiKeyStorage;
 
@@ -108,6 +112,8 @@ pub use key_rotation::{
     SigningKeyMetadata,
 };
 
+#[cfg(feature = "mssql")]
+pub use key_rotation::MssqlKeyRotationStorage;
 #[cfg(feature = "database")]
 pub use key_rotation::PgKeyRotationStorage;
 

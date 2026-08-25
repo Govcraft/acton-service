@@ -43,7 +43,8 @@
     feature = "events",
     feature = "turso",
     feature = "surrealdb",
-    feature = "clickhouse"
+    feature = "clickhouse",
+    feature = "mssql"
 ))]
 use super::messages::{GetPoolHealth, WaitForPoolReady};
 
@@ -58,7 +59,8 @@ use super::messages::{GetPoolHealth, WaitForPoolReady};
     feature = "events",
     feature = "turso",
     feature = "surrealdb",
-    feature = "clickhouse"
+    feature = "clickhouse",
+    feature = "mssql"
 ))]
 fn pool_health(
     name: &str,
@@ -83,6 +85,133 @@ fn pool_health(
         name: name.to_string(),
         status,
         message,
+    }
+}
+
+// ============================================================================
+// Microsoft SQL Server Pool Agent
+// ============================================================================
+
+#[cfg(feature = "mssql")]
+use super::messages::{MssqlPoolConnected, MssqlPoolConnectionFailed};
+#[cfg(all(feature = "mssql", not(feature = "database")))]
+use acton_reactive::prelude::*;
+#[cfg(all(feature = "mssql", not(feature = "database")))]
+use std::sync::Arc;
+#[cfg(all(feature = "mssql", not(feature = "database")))]
+use tokio::sync::RwLock;
+#[cfg(all(feature = "mssql", not(feature = "database")))]
+use tokio_util::sync::CancellationToken;
+
+#[cfg(feature = "mssql")]
+pub type SharedMssqlPool = Arc<RwLock<Option<crate::mssql::MssqlPool>>>;
+
+#[cfg(feature = "mssql")]
+#[derive(Debug, Default)]
+pub struct MssqlPoolState {
+    pub pool: Option<crate::mssql::MssqlPool>,
+    pub config: Option<crate::config::DatabaseConfig>,
+    pub connecting: bool,
+    pub shared_pool: Option<SharedMssqlPool>,
+    pub last_error: Option<String>,
+    pub(crate) ready_waiters: Vec<OutboundEnvelope>,
+    pub cancel_token: Option<CancellationToken>,
+}
+
+/// Agent-managed Microsoft SQL Server pool lifecycle.
+#[cfg(feature = "mssql")]
+pub struct MssqlPoolAgent;
+
+#[cfg(feature = "mssql")]
+impl MssqlPoolAgent {
+    pub async fn spawn(
+        runtime: &mut ActorRuntime,
+        config: crate::config::DatabaseConfig,
+        shared_pool: Option<SharedMssqlPool>,
+    ) -> anyhow::Result<ActorHandle> {
+        let mut agent = runtime.new_actor::<MssqlPoolState>();
+        agent.model.config = Some(config);
+        agent.model.connecting = true;
+        agent.model.shared_pool = shared_pool;
+        agent.model.cancel_token = Some(CancellationToken::new());
+        agent.mutate_on::<MssqlPoolConnected>(|agent, envelope| {
+            let pool = envelope.message().pool.clone();
+            agent.model.pool = Some(pool.clone());
+            agent.model.connecting = false;
+            agent.model.last_error = None;
+            let shared = agent.model.shared_pool.clone();
+            let waiters = std::mem::take(&mut agent.model.ready_waiters);
+            let health = pool_health("mssql", true, false, None);
+            Reply::pending(async move {
+                if let Some(shared) = shared {
+                    *shared.write().await = Some(pool);
+                }
+                for waiter in waiters {
+                    waiter.send(health.clone()).await;
+                }
+            })
+        });
+        agent.mutate_on::<MssqlPoolConnectionFailed>(|agent, envelope| {
+            agent.model.connecting = false;
+            agent.model.last_error = Some(envelope.message().error.clone());
+            let waiters = std::mem::take(&mut agent.model.ready_waiters);
+            let health = pool_health("mssql", false, false, agent.model.last_error.as_deref());
+            Reply::pending(async move {
+                for waiter in waiters {
+                    waiter.send(health.clone()).await;
+                }
+            })
+        });
+        agent.mutate_on::<WaitForPoolReady>(|agent, envelope| {
+            let reply = envelope.reply_envelope();
+            if agent.model.connecting {
+                agent.model.ready_waiters.push(reply);
+                return Reply::ready();
+            }
+            let health = pool_health(
+                "mssql",
+                agent.model.pool.is_some(),
+                false,
+                agent.model.last_error.as_deref(),
+            );
+            Reply::pending(async move {
+                reply.send(health).await;
+            })
+        });
+        agent.act_on::<GetPoolHealth>(|agent, envelope| {
+            let reply = envelope.reply_envelope();
+            let health = pool_health(
+                "mssql",
+                agent.model.pool.is_some(),
+                agent.model.connecting,
+                agent.model.last_error.as_deref(),
+            );
+            Reply::pending(async move {
+                reply.send(health).await;
+            })
+        });
+        agent.after_start(|agent| {
+            let config = agent.model.config.clone();
+            let token = agent.model.cancel_token.clone();
+            let handle = agent.handle().clone();
+            if let Some(config) = config { tokio::spawn(async move {
+                tokio::select! {
+                    () = async { if let Some(token) = token { token.cancelled().await } } => handle.send(MssqlPoolConnectionFailed { error: "connection cancelled during shutdown".to_string() }).await,
+                    result = crate::mssql::create_pool(&config) => match result {
+                        Ok(pool) => handle.send(MssqlPoolConnected { pool }).await,
+                        Err(error) => handle.send(MssqlPoolConnectionFailed { error: error.to_string() }).await,
+                    }
+                }
+            }); }
+            Reply::ready()
+        });
+        agent.before_stop(|agent| {
+            if let Some(token) = &agent.model.cancel_token {
+                token.cancel();
+            }
+            Reply::ready()
+        });
+        Ok(agent.start().await)
     }
 }
 

@@ -139,6 +139,9 @@ hyper-util = { version = "0.1.20", features = ["tokio"], optional = true }
 # signature-checking features (`verify`, `verify-aws`) stay off and no second
 # crypto provider is pulled in.
 x509-parser = { version = "0.18.1", optional = true }
+bb8 = { version = "0.9.1", optional = true }
+bb8-tiberius = { version = "0.16.0", optional = true }
+tiberius = { version = "0.12.3", features = ["chrono"], optional = true }
 
 [features]
 default = ["http", "observability", "crypto-aws-lc-rs"]
@@ -167,6 +170,8 @@ crypto-ring = [
 http = []
 grpc = ["dep:tonic", "dep:prost", "dep:tonic-prost", "dep:tonic-prost-build", "dep:tokio-stream", "dep:tonic-health", "dep:tonic-reflection", "dep:hyper-util"]
 database = ["dep:sqlx"]
+postgres = ["database"]
+mssql = ["dep:bb8", "dep:bb8-tiberius", "dep:tiberius"]
 turso = ["dep:libsql"]
 surrealdb = ["dep:surrealdb"]
 cache = ["dep:redis", "dep:deadpool-redis"]
@@ -256,7 +261,6 @@ graphql = ["dep:async-graphql", "dep:async-graphql-axum", "dep:bytes"]
 # GraphQL with Cedar policy authorization callable from resolvers via
 # `acton_service::graphql::CedarResolverCheck`.
 graphql-cedar = ["graphql", "cedar-authz"]
-
 # Basic examples
 [[example]]
 name = "simple-api"
@@ -344,3 +348,4 @@ tonic-prost-build.workspace = true
 [dev-dependencies]
 rcgen = "0.14.8"
 tempfile = "3.24.0"
+testcontainers-modules = { version = "0.15.0", features = ["mssql_server"] }

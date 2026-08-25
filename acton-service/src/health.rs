@@ -158,6 +158,55 @@ where
         }
     }
 
+    #[cfg(feature = "mssql")]
+    if state.config().database.is_some() {
+        match state.mssql().await {
+            Some(pool) => match crate::mssql::health_check(&pool).await {
+                Ok(()) => dependencies.insert(
+                    "mssql".to_string(),
+                    DependencyStatus {
+                        healthy: true,
+                        message: Some("Connected".to_string()),
+                    },
+                ),
+                Err(error) => {
+                    if !state
+                        .config()
+                        .database
+                        .as_ref()
+                        .is_some_and(|config| config.optional)
+                    {
+                        all_ready = false;
+                    }
+                    dependencies.insert(
+                        "mssql".to_string(),
+                        DependencyStatus {
+                            healthy: false,
+                            message: Some(error.to_string()),
+                        },
+                    )
+                }
+            },
+            None => {
+                if !state
+                    .config()
+                    .database
+                    .as_ref()
+                    .is_some_and(|config| config.optional)
+                {
+                    all_ready = false;
+                }
+                dependencies.insert(
+                    "mssql".to_string(),
+                    DependencyStatus {
+                        healthy: false,
+                        message: Some("Not connected".to_string()),
+                    },
+                )
+            }
+        };
+    }
+
     // Check Redis connection
     #[cfg(feature = "cache")]
     if state.config().redis.is_some() {

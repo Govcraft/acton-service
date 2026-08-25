@@ -19,6 +19,8 @@ use super::storage::AuditStorage;
 pub(crate) struct AuditStorageHandles {
     #[cfg(feature = "database")]
     pub db_pool: Option<crate::agents::SharedDbPool>,
+    #[cfg(feature = "mssql")]
+    pub mssql_pool: Option<crate::agents::SharedMssqlPool>,
     #[cfg(feature = "turso")]
     pub turso_db: Option<crate::agents::SharedTursoDb>,
     #[cfg(feature = "surrealdb")]
@@ -45,6 +47,15 @@ pub(crate) fn select_audit_storage(handles: &AuditStorageHandles) -> Option<Arc<
                 super::storage::pg::PgAuditStorage,
             >::new(shared.clone())));
             tracing::debug!("Audit persistence will use PostgreSQL storage");
+        }
+    }
+
+    #[cfg(feature = "mssql")]
+    if storage.is_none() {
+        if let Some(ref shared) = handles.mssql_pool {
+            storage = Some(Arc::new(super::storage::lazy::LazyAuditStorage::<
+                super::storage::mssql::MssqlAuditStorage,
+            >::new(shared.clone())));
         }
     }
 
