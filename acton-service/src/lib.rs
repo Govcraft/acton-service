@@ -177,6 +177,9 @@ pub mod client_tls;
 #[cfg(feature = "tls")]
 pub mod caller_auth;
 
+#[cfg(feature = "windows-auth")]
+pub mod windows_auth;
+
 #[cfg(feature = "login-lockout")]
 pub mod lockout;
 
@@ -230,6 +233,9 @@ pub mod prelude {
     pub use crate::pool_health::DatabasePoolHealth;
     #[cfg(feature = "mssql")]
     pub use crate::pool_health::MssqlPoolHealth;
+
+    #[cfg(feature = "mssql")]
+    pub use crate::config::MssqlAuthMode;
 
     #[cfg(feature = "turso")]
     pub use crate::pool_health::TursoDbHealth;
@@ -297,6 +303,11 @@ pub mod prelude {
 
     #[cfg(feature = "tls")]
     pub use crate::config::CallerAuthConfig;
+
+    #[cfg(feature = "windows-auth")]
+    pub use crate::windows_auth::{
+        WindowsAuthConfig, WindowsAuthLayer, WindowsGroup, WindowsIdentity, WindowsPrincipal,
+    };
 
     #[cfg(all(feature = "cedar-authz", feature = "cache"))]
     pub use crate::middleware::{PolicyCache, RedisPolicyCache};

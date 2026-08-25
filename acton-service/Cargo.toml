@@ -141,7 +141,7 @@ hyper-util = { version = "0.1.20", features = ["tokio"], optional = true }
 x509-parser = { version = "0.18.1", optional = true }
 bb8 = { version = "0.9.1", optional = true }
 bb8-tiberius = { version = "0.16.0", optional = true }
-tiberius = { version = "0.12.3", features = ["chrono"], optional = true }
+tiberius = { version = "0.12.3", features = ["chrono", "integrated-auth-gssapi"], optional = true }
 
 [features]
 default = ["http", "observability", "crypto-aws-lc-rs"]
@@ -172,6 +172,7 @@ grpc = ["dep:tonic", "dep:prost", "dep:tonic-prost", "dep:tonic-prost-build", "d
 database = ["dep:sqlx"]
 postgres = ["database"]
 mssql = ["dep:bb8", "dep:bb8-tiberius", "dep:tiberius"]
+windows-auth = ["http", "tls"]
 turso = ["dep:libsql"]
 surrealdb = ["dep:surrealdb"]
 cache = ["dep:redis", "dep:deadpool-redis"]

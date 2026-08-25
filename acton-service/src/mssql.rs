@@ -34,7 +34,8 @@ pub async fn create_pool(config: &DatabaseConfig) -> Result<MssqlPool> {
 }
 
 async fn try_create_pool(config: &DatabaseConfig) -> Result<MssqlPool> {
-    let manager = ConnectionManager::build(config.url.as_str()).map_err(|error| {
+    let connection_config = connection_config(config)?;
+    let manager = ConnectionManager::build(connection_config).map_err(|error| {
         Error::Internal(format!(
             "invalid SQL Server connection configuration: {error}"
         ))
@@ -46,6 +47,27 @@ async fn try_create_pool(config: &DatabaseConfig) -> Result<MssqlPool> {
         .build(manager)
         .await
         .map_err(|error| Error::Internal(format!("failed to connect to SQL Server: {error}")))
+}
+
+fn connection_config(config: &DatabaseConfig) -> Result<tiberius::Config> {
+    let mut connection = tiberius::Config::from_ado_string(&config.url).map_err(|error| {
+        Error::Internal(format!(
+            "invalid SQL Server connection configuration: {error}"
+        ))
+    })?;
+
+    if let Some(auth) = auth_method(config.mssql_auth) {
+        connection.authentication(auth);
+    }
+
+    Ok(connection)
+}
+
+fn auth_method(mode: crate::config::MssqlAuthMode) -> Option<tiberius::AuthMethod> {
+    match mode {
+        crate::config::MssqlAuthMode::ConnectionString => None,
+        crate::config::MssqlAuthMode::Integrated => Some(tiberius::AuthMethod::Integrated),
+    }
 }
 
 /// Checks that SQL Server accepts and executes a query on a pooled connection.
@@ -97,4 +119,39 @@ fn pool_error(error: bb8::RunError<bb8_tiberius::Error>) -> Error {
 
 fn query_error(error: tiberius::error::Error) -> Error {
     Error::Internal(format!("SQL Server operation failed: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::MssqlAuthMode;
+
+    fn config(auth: MssqlAuthMode) -> DatabaseConfig {
+        DatabaseConfig {
+            url: "server=tcp:sql.internal,1433;database=app;user=sa;password=secret;TrustServerCertificate=true".to_string(),
+            max_connections: 5,
+            min_connections: 1,
+            connection_timeout_secs: 5,
+            max_retries: 0,
+            retry_delay_secs: 1,
+            optional: false,
+            lazy_init: false,
+            mssql_auth: auth,
+        }
+    }
+
+    #[test]
+    fn integrated_auth_overrides_connection_string_credentials() {
+        assert!(connection_config(&config(MssqlAuthMode::Integrated)).is_ok());
+        assert!(matches!(
+            auth_method(MssqlAuthMode::Integrated),
+            Some(tiberius::AuthMethod::Integrated)
+        ));
+    }
+
+    #[test]
+    fn connection_string_auth_is_preserved() {
+        assert!(connection_config(&config(MssqlAuthMode::ConnectionString)).is_ok());
+        assert!(auth_method(MssqlAuthMode::ConnectionString).is_none());
+    }
 }

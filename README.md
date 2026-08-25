@@ -430,6 +430,52 @@ Choose exactly one primary database backend (enforced at compile time), and opti
 - **Turso / libsql** (`turso`) - Edge-replicated SQLite ([guide](https://govcraft.github.io/acton-service/docs/turso))
 - **SurrealDB** (`surrealdb`) - Multi-model database
 - **ClickHouse** (`clickhouse`) - Analytical database, composable with any primary backend ([guide](https://govcraft.github.io/acton-service/docs/clickhouse))
+
+SQL Server can authenticate as the service process instead of storing a SQL
+password in the connection string:
+
+```toml
+[dependencies]
+acton-service = { version = "0.37", features = ["mssql"] }
+
+[database]
+url = "server=tcp:sql.internal,1433;database=service;TrustServerCertificate=false"
+mssql_auth = "integrated"
+```
+
+On Windows this uses SSPI. On Unix it uses the process's Kerberos credentials
+through GSSAPI and therefore requires the host's realm, SPN, and keytab to be
+configured.
+
+For intranet user authentication, terminate Negotiate/Kerberos at a dedicated
+proxy and forward identity only over an allowlisted mTLS connection:
+
+```toml
+[dependencies]
+acton-service = { version = "0.37", features = ["windows-auth"] }
+
+[caller_auth]
+mode = "mtls-or-bearer"
+allowlist = ["windows-auth-gateway.internal"]
+
+[caller_auth.windows]
+trusted_proxies = ["windows-auth-gateway.internal"]
+identity_header = "x-windows-user"
+groups_header = "x-windows-groups"
+
+[caller_auth.windows.group_roles]
+"CONTOSO\\Platform Admins" = "admin"
+"CONTOSO\\Service Readers" = "reader"
+```
+
+The proxy is responsible for completing Negotiate authentication and must not
+forward an identity until it has validated the Kerberos or NTLM exchange. The
+identity headers are ignored unless the request carries a verified client
+certificate whose SAN is present in both allowlists. A trusted proxy that omits
+or supplies an invalid identity is rejected. Acton-service removes the forwarded
+headers after parsing them and exposes `WindowsIdentity` plus unified `Claims`
+to handlers and authorization middleware. Group names are matched exactly and
+the groups header is a comma-separated list with a maximum of 256 entries.
 - **Redis** (`cache`) - Connection pooling via deadpool ([guide](https://govcraft.github.io/acton-service/docs/cache))
 - **NATS JetStream** (`events`) - Event streaming ([guide](https://govcraft.github.io/acton-service/docs/events))
 
@@ -545,6 +591,7 @@ acton-service = { version = "0.37", features = ["grpc", "database", "cache"] }
 |---|---|
 | `jwt` | JWT validation middleware |
 | `auth` | Argon2 password hashing, token generation, API keys, key rotation |
+| `windows-auth` | Trusted-proxy Windows/AD identity over mutually authenticated TLS (implies `http` and `tls`) |
 | `oauth` | OAuth 2.0 / OIDC providers (implies `auth`) |
 | `auth-full` | Everything: auth + oauth + jwt + cache + database + lockout + accounts |
 | `cedar-authz` | AWS Cedar policy-based authorization |

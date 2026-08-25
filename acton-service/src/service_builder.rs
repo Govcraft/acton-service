@@ -1765,6 +1765,41 @@ where
             None => None,
         };
 
+        // Applied in this source position so execution order is caller-auth,
+        // Windows identity, then bearer-token authentication.
+        #[cfg(feature = "windows-auth")]
+        if let Some(windows_auth_config) = config
+            .caller_auth
+            .as_ref()
+            .and_then(|caller_auth| caller_auth.windows.as_ref())
+        {
+            let windows_auth = windows_auth_config.to_layer().and_then(|layer| {
+                let policy = caller_auth_policy
+                    .as_ref()
+                    .ok_or(crate::windows_auth::WindowsAuthConfigError::RequiresMtlsOrBearer)?;
+                layer.validate_caller_policy(policy)?;
+                Ok(layer)
+            });
+
+            match windows_auth {
+                Ok(layer) => {
+                    tracing::debug!("Auto-applying trusted-proxy Windows authentication");
+                    app = app.layer(axum::middleware::from_fn_with_state(
+                        layer,
+                        crate::windows_auth::WindowsAuthLayer::middleware,
+                    ));
+                }
+                Err(error) => {
+                    let error = crate::error::Error::Internal(format!(
+                        "[caller_auth.windows] is invalid; refusing to start without Windows identity \
+                         verification: {error}"
+                    ));
+                    tracing::error!("{error}");
+                    record_startup_error(&mut startup_error, error);
+                }
+            }
+        }
+
         #[cfg(feature = "tls")]
         if let Some(ref policy) = caller_auth_policy {
             if policy.requires_client_ca() {
@@ -3282,6 +3317,8 @@ mod tests {
                     mode: crate::caller_auth::CallerAuthMode::Mtls,
                     allowlist: vec!["reporter.internal".to_string()],
                     public_paths: Vec::new(),
+                    #[cfg(feature = "windows-auth")]
+                    windows: None,
                 }),
                 ..Default::default()
             })
@@ -3314,6 +3351,8 @@ mod tests {
                     mode: crate::caller_auth::CallerAuthMode::MtlsOrBearer,
                     allowlist: vec!["reporter.internal".to_string()],
                     public_paths: Vec::new(),
+                    #[cfg(feature = "windows-auth")]
+                    windows: None,
                 }),
                 ..Default::default()
             })
@@ -3341,6 +3380,8 @@ mod tests {
                     mode: crate::caller_auth::CallerAuthMode::Bearer,
                     allowlist: vec!["reporter.internal".to_string()],
                     public_paths: Vec::new(),
+                    #[cfg(feature = "windows-auth")]
+                    windows: None,
                 }),
                 ..Default::default()
             })
@@ -3376,6 +3417,8 @@ mod tests {
                     mode: crate::caller_auth::CallerAuthMode::Mtls,
                     allowlist: vec!["reporter.internal".to_string()],
                     public_paths: Vec::new(),
+                    #[cfg(feature = "windows-auth")]
+                    windows: None,
                 }),
                 ..Default::default()
             })

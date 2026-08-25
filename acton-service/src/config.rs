@@ -453,6 +453,26 @@ pub struct DatabaseConfig {
     /// Whether to initialize connection lazily (in background)
     #[serde(default = "default_lazy_init")]
     pub lazy_init: bool,
+
+    /// Microsoft SQL Server authentication mode.
+    ///
+    /// Ignored by non-MSSQL backends. `integrated` authenticates as the
+    /// process identity through SSPI on Windows or GSSAPI/Kerberos on Unix.
+    #[cfg(feature = "mssql")]
+    #[serde(default)]
+    pub mssql_auth: MssqlAuthMode,
+}
+
+/// Authentication used by the Microsoft SQL Server connection pool.
+#[cfg(feature = "mssql")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MssqlAuthMode {
+    /// Use the credentials encoded in the ADO connection string.
+    #[default]
+    ConnectionString,
+    /// Authenticate as the service process using SSPI or Kerberos/GSSAPI.
+    Integrated,
 }
 
 /// Turso/libsql connection mode
@@ -1050,6 +1070,12 @@ pub struct TlsConfig {
 /// treated as a URI SAN, anything else as a DNS SAN; there is no wildcard or
 /// suffix matching.
 ///
+/// With the `windows-auth` feature, an optional nested
+/// `[caller_auth.windows]` section can name mTLS-authenticated proxies that
+/// have already completed Negotiate authentication and may assert a Windows
+/// principal and Active Directory groups. This requires `mtls-or-bearer`;
+/// each trusted proxy must also appear in this section's `allowlist`.
+///
 /// Combinations that would look like protection without being it are refused
 /// at startup rather than accepted: a certificate mode with no
 /// `client_ca_path` on the listener it guards, an allowlist under
@@ -1079,6 +1105,15 @@ pub struct CallerAuthConfig {
     /// `/api-docs` on HTTP; the gRPC health and reflection services on gRPC).
     #[serde(default)]
     pub public_paths: Vec<String>,
+
+    /// Windows identity asserted by selected allowlisted mTLS proxies.
+    ///
+    /// The proxy, rather than acton-service, completes the Kerberos or NTLM
+    /// exchange. Forwarded identity headers are accepted only from a proxy in
+    /// both allowlists and are removed before application handlers run.
+    #[cfg(feature = "windows-auth")]
+    #[serde(default)]
+    pub windows: Option<crate::windows_auth::WindowsAuthConfig>,
 }
 
 #[cfg(feature = "tls")]
@@ -2393,6 +2428,8 @@ port = 9091
             mode: crate::caller_auth::CallerAuthMode::Bearer,
             allowlist: vec!["reporter.internal".to_string()],
             public_paths: Vec::new(),
+            #[cfg(feature = "windows-auth")]
+            windows: None,
         };
         assert_eq!(
             dead_allowlist
@@ -2405,6 +2442,8 @@ port = 9091
             mode: crate::caller_auth::CallerAuthMode::Mtls,
             allowlist: Vec::new(),
             public_paths: Vec::new(),
+            #[cfg(feature = "windows-auth")]
+            windows: None,
         };
         assert_eq!(
             empty_allowlist
