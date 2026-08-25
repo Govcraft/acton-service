@@ -57,6 +57,17 @@ compile_error!(
      Enable only one database backend."
 );
 
+#[cfg(all(feature = "database", feature = "mssql"))]
+compile_error!(
+    "Features `database`/`postgres` and `mssql` are mutually exclusive. Enable only one primary database backend."
+);
+
+#[cfg(all(feature = "mssql", feature = "turso"))]
+compile_error!("Features `mssql` and `turso` are mutually exclusive.");
+
+#[cfg(all(feature = "mssql", feature = "surrealdb"))]
+compile_error!("Features `mssql` and `surrealdb` are mutually exclusive.");
+
 #[cfg(all(feature = "database", feature = "surrealdb"))]
 compile_error!(
     "Features `database` (PostgreSQL) and `surrealdb` are mutually exclusive. \
@@ -98,6 +109,9 @@ pub mod versioning;
 
 #[cfg(feature = "database")]
 pub mod database;
+
+#[cfg(feature = "mssql")]
+pub mod mssql;
 
 #[cfg(feature = "turso")]
 pub mod turso;
@@ -204,7 +218,7 @@ pub mod prelude {
 
     pub use crate::error::{Error, Result};
 
-    #[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
+    #[cfg(any(feature = "database", feature = "mssql", feature = "turso", feature = "surrealdb"))]
     pub use crate::error::{DatabaseError, DatabaseErrorKind, DatabaseOperation};
 
     pub use crate::checks::CheckOutcome;
@@ -214,6 +228,8 @@ pub mod prelude {
 
     #[cfg(feature = "database")]
     pub use crate::pool_health::DatabasePoolHealth;
+    #[cfg(feature = "mssql")]
+    pub use crate::pool_health::MssqlPoolHealth;
 
     #[cfg(feature = "turso")]
     pub use crate::pool_health::TursoDbHealth;
@@ -321,7 +337,7 @@ pub mod prelude {
     // Key rotation storage trait (requires auth + a database backend)
     #[cfg(all(
         feature = "auth",
-        any(feature = "database", feature = "turso", feature = "surrealdb")
+        any(feature = "database", feature = "mssql", feature = "turso", feature = "surrealdb")
     ))]
     pub use crate::auth::KeyRotationStorage;
 

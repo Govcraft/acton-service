@@ -54,6 +54,40 @@ impl DatabasePoolHealth {
     }
 }
 
+/// Microsoft SQL Server connection-pool health metrics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg(feature = "mssql")]
+pub struct MssqlPoolHealth {
+    pub size: u32,
+    pub idle: u32,
+    pub max_size: u32,
+    pub min_size: u32,
+    pub healthy: bool,
+    pub utilization_percent: f32,
+}
+#[cfg(feature = "mssql")]
+impl MssqlPoolHealth {
+    pub fn from_pool(
+        pool: &crate::mssql::MssqlPool,
+        config: &crate::config::DatabaseConfig,
+    ) -> Self {
+        let state = pool.state();
+        let utilization_percent = if config.max_connections == 0 {
+            0.0
+        } else {
+            (state.connections as f32 / config.max_connections as f32 * 100.0).min(100.0)
+        };
+        Self {
+            size: state.connections,
+            idle: state.idle_connections,
+            max_size: config.max_connections,
+            min_size: config.min_connections,
+            healthy: state.connections < config.max_connections,
+            utilization_percent,
+        }
+    }
+}
+
 /// Redis connection pool health metrics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg(feature = "cache")]
@@ -207,6 +241,9 @@ pub struct PoolHealthSummary {
     #[cfg(feature = "database")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub database: Option<DatabasePoolHealth>,
+    #[cfg(feature = "mssql")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mssql: Option<MssqlPoolHealth>,
 
     /// Redis pool health
     #[cfg(feature = "cache")]
@@ -243,6 +280,8 @@ impl PoolHealthSummary {
         Self {
             #[cfg(feature = "database")]
             database: None,
+            #[cfg(feature = "mssql")]
+            mssql: None,
             #[cfg(feature = "cache")]
             redis: None,
             #[cfg(feature = "events")]
@@ -269,6 +308,8 @@ impl PoolHealthSummary {
                 true
             }
         };
+        #[cfg(feature = "mssql")]
+        let database_healthy = database_healthy && self.mssql.as_ref().is_none_or(|db| db.healthy);
 
         let cache_healthy = {
             #[cfg(feature = "cache")]

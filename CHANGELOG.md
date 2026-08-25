@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **database(mssql)**: Added first-class Microsoft SQL Server support through
+  Tiberius and bb8, including agent-managed pooling, retries, readiness and
+  gRPC health checks, pool telemetry, accounts, API keys, refresh tokens,
+  signing-key rotation, and append-only audit storage. SQL Server integration
+  tests run against SQL Server 2022 in CI.
+- **database(postgres)**: Added `postgres` as a descriptive compatibility alias
+  for the existing `database` feature. Existing `database` users are unchanged.
+
 - **platforms**: Native Windows configuration discovery now uses `%APPDATA%`
   for per-user configuration and `%PROGRAMDATA%` for system-wide configuration.
   Windows builds are compiled and tested in CI alongside the existing Linux

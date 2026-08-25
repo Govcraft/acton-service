@@ -17,6 +17,9 @@ use crate::error::Error;
 #[cfg(feature = "database")]
 pub mod pg;
 
+#[cfg(feature = "mssql")]
+pub mod mssql;
+
 #[cfg(feature = "turso")]
 pub mod turso;
 

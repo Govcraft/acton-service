@@ -38,6 +38,8 @@ pub use key_metadata::{
 pub use manager::{CachedKey, KeyManager};
 pub use storage::KeyRotationStorage;
 
+#[cfg(feature = "mssql")]
+pub use storage::mssql::MssqlKeyRotationStorage;
 #[cfg(feature = "database")]
 pub use storage::pg::PgKeyRotationStorage;
 

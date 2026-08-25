@@ -88,6 +88,20 @@ pub(crate) struct DatabasePoolConnectionFailed {
     pub error: String,
 }
 
+/// Internal message sent when the SQL Server pool connects successfully.
+#[cfg(feature = "mssql")]
+#[derive(Clone, Debug)]
+pub(crate) struct MssqlPoolConnected {
+    pub pool: crate::mssql::MssqlPool,
+}
+
+/// Internal message sent when the SQL Server pool connection fails.
+#[cfg(feature = "mssql")]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct MssqlPoolConnectionFailed {
+    pub error: String,
+}
+
 /// Internal message sent when a Redis pool connects successfully
 #[cfg(feature = "cache")]
 #[derive(Clone, Debug)]

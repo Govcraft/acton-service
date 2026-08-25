@@ -214,6 +214,8 @@ jobs:
         run: cargo test -p acton-service
       - name: Check full feature set
         run: cargo check -p acton-service --all-targets --features full
+      - name: Check Microsoft SQL Server feature set
+        run: cargo check -p acton-service --all-targets --no-default-features --features "mssql,http,grpc,auth,accounts,audit,observability,crypto-aws-lc-rs"
 
   # The `full` legs above cover audit with the PostgreSQL storage backend
   # (`database` is in `full`). The optional backends are mutually exclusive
@@ -249,6 +251,27 @@ jobs:
         run: cargo clippy -p acton-service --all-targets ${{ matrix.features }} -- -D warnings
       - name: Nextest
         run: cargo nextest run -p acton-service ${{ matrix.features }}
+
+  mssql:
+    name: Microsoft SQL Server parity
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: mssql
+      - uses: taiki-e/install-action@nextest
+      - name: Clippy
+        run: cargo clippy -p acton-service --all-targets --no-default-features --features "mssql,http,grpc,auth,accounts,audit,observability,crypto-aws-lc-rs" -- -D warnings
+      - name: Integration tests
+        run: cargo nextest run -p acton-service --no-default-features --features "mssql,http,grpc,auth,accounts,audit,observability,crypto-aws-lc-rs" --test mssql_integration
 
   # Lint-only legs for feature combinations no test job compiles. `--all-features`
   # cannot stand in for these: the crate's mutual-exclusion `compile_error!`
@@ -365,7 +388,7 @@ jobs:
   # those PRs, because a skipped job reports nothing at all.
   ci-gate:
     name: ci-gate
-    needs: [changes, aws-lc-rs, ring, windows, audit-storage, feature-combos, docs-build]
+    needs: [changes, aws-lc-rs, ring, windows, audit-storage, mssql, feature-combos, docs-build]
     if: always()
     runs-on: ubuntu-latest
     steps:

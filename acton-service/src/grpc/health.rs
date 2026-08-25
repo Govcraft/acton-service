@@ -63,6 +63,34 @@ impl HealthService {
                 }
             }
         }
+        #[cfg(feature = "mssql")]
+        if self.state.config().database.is_some() {
+            match self.state.mssql().await {
+                Some(pool) if crate::mssql::health_check(&pool).await.is_err() => {
+                    if !self
+                        .state
+                        .config()
+                        .database
+                        .as_ref()
+                        .is_some_and(|config| config.optional)
+                    {
+                        all_healthy = false;
+                    }
+                }
+                None => {
+                    if !self
+                        .state
+                        .config()
+                        .database
+                        .as_ref()
+                        .is_some_and(|config| config.optional)
+                    {
+                        all_healthy = false;
+                    }
+                }
+                Some(_) => {}
+            }
+        }
 
         // Check Redis connection
         #[cfg(feature = "cache")]

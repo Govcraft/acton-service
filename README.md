@@ -22,7 +22,7 @@ acton-service provides a **batteries-included, type-enforced framework** where p
 - **Security & compliance built-in** - BLAKE3 hash-chained audit logging, login lockout, NIST AC-2 account lifecycle, FIPS 140-3 capable crypto
 - **Production observability** - OpenTelemetry tracing, metrics, and structured logging built-in
 - **Resilience patterns** - Circuit breaker, retry logic, and bulkhead patterns included
-- **Multi-database support** - PostgreSQL, Turso/libsql, SurrealDB, plus ClickHouse for analytics
+- **Multi-database support** - PostgreSQL, Microsoft SQL Server, Turso/libsql, SurrealDB, plus ClickHouse for analytics
 - **Zero-config defaults** - XDG-compliant configuration with sensible production defaults and custom config extensions
 - **Kubernetes-ready** - Automatic health/readiness probes for orchestration
 
@@ -425,7 +425,8 @@ Enable `htmx-full` (htmx + askama + sse + in-memory sessions) and you have every
 
 Choose exactly one primary database backend (enforced at compile time), and optionally add ClickHouse for analytics:
 
-- **PostgreSQL** (`database`) - SQLx with compile-time checked queries ([guide](https://govcraft.github.io/acton-service/docs/database))
+- **PostgreSQL** (`database` or `postgres`) - SQLx with compile-time checked queries ([guide](https://govcraft.github.io/acton-service/docs/database))
+- **Microsoft SQL Server** (`mssql`) - Tiberius with bb8 pooling, including auth and audit storage parity
 - **Turso / libsql** (`turso`) - Edge-replicated SQLite ([guide](https://govcraft.github.io/acton-service/docs/turso))
 - **SurrealDB** (`surrealdb`) - Multi-model database
 - **ClickHouse** (`clickhouse`) - Analytical database, composable with any primary backend ([guide](https://govcraft.github.io/acton-service/docs/clickhouse))
@@ -526,7 +527,9 @@ acton-service = { version = "0.37", features = ["grpc", "database", "cache"] }
 
 | Feature | Description |
 |---|---|
-| `database` | PostgreSQL via SQLx |
+| `database` | PostgreSQL via SQLx (backward-compatible feature name) |
+| `postgres` | PostgreSQL via SQLx (alias for `database`) |
+| `mssql` | Microsoft SQL Server via Tiberius and bb8 |
 | `turso` | Turso / libsql |
 | `surrealdb` | SurrealDB |
 | `clickhouse` | ClickHouse analytics (composable with any primary backend) |

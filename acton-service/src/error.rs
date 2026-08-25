@@ -15,7 +15,7 @@ use thiserror::Error;
 
 /// Database operation being performed when the error occurred
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
+#[cfg(any(feature = "database", feature = "mssql", feature = "turso", feature = "surrealdb"))]
 pub enum DatabaseOperation {
     /// Establishing a database connection
     Connect,
@@ -37,7 +37,7 @@ pub enum DatabaseOperation {
     PoolAcquire,
 }
 
-#[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
+#[cfg(any(feature = "database", feature = "mssql", feature = "turso", feature = "surrealdb"))]
 impl fmt::Display for DatabaseOperation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -56,7 +56,7 @@ impl fmt::Display for DatabaseOperation {
 
 /// Category of database error
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
+#[cfg(any(feature = "database", feature = "mssql", feature = "turso", feature = "surrealdb"))]
 pub enum DatabaseErrorKind {
     /// Failed to establish connection
     ConnectionFailed,
@@ -84,7 +84,7 @@ pub enum DatabaseErrorKind {
     Other,
 }
 
-#[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
+#[cfg(any(feature = "database", feature = "mssql", feature = "turso", feature = "surrealdb"))]
 impl fmt::Display for DatabaseErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -106,7 +106,7 @@ impl fmt::Display for DatabaseErrorKind {
 
 /// Structured database error with operation context
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
+#[cfg(any(feature = "database", feature = "mssql", feature = "turso", feature = "surrealdb"))]
 pub struct DatabaseError {
     /// The operation being performed when the error occurred
     pub operation: DatabaseOperation,
@@ -118,7 +118,7 @@ pub struct DatabaseError {
     pub context: Option<String>,
 }
 
-#[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
+#[cfg(any(feature = "database", feature = "mssql", feature = "turso", feature = "surrealdb"))]
 impl DatabaseError {
     /// Create a new database error
     pub fn new(
@@ -227,7 +227,7 @@ impl DatabaseError {
     }
 }
 
-#[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
+#[cfg(any(feature = "database", feature = "mssql", feature = "turso", feature = "surrealdb"))]
 impl fmt::Display for DatabaseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -242,11 +242,11 @@ impl fmt::Display for DatabaseError {
     }
 }
 
-#[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
+#[cfg(any(feature = "database", feature = "mssql", feature = "turso", feature = "surrealdb"))]
 impl std::error::Error for DatabaseError {}
 
 /// Sanitize a database URL by removing credentials
-#[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
+#[cfg(any(feature = "database", feature = "mssql", feature = "turso", feature = "surrealdb"))]
 pub fn sanitize_url(url: &str) -> String {
     // Handle standard database URLs like postgres://user:pass@host/db
     if let Some(at_pos) = url.find('@') {
@@ -282,7 +282,7 @@ pub enum Error {
     Config(Box<figment::Error>),
 
     /// Structured database error with operation context
-    #[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
+    #[cfg(any(feature = "database", feature = "mssql", feature = "turso", feature = "surrealdb"))]
     #[error("{0}")]
     Database(DatabaseError),
 
@@ -451,7 +451,7 @@ impl IntoResponse for Error {
                 ),
             ),
 
-            #[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
+            #[cfg(any(feature = "database", feature = "mssql", feature = "turso", feature = "surrealdb"))]
             Error::Database(ref e) => {
                 // Log with structured context
                 tracing::error!(
@@ -814,8 +814,20 @@ impl From<sqlx::Error> for Error {
     }
 }
 
+#[cfg(feature = "mssql")]
+impl From<tiberius::error::Error> for DatabaseError {
+    fn from(err: tiberius::error::Error) -> Self {
+        Self::new(DatabaseOperation::Query, DatabaseErrorKind::QueryFailed, err.to_string())
+    }
+}
+
+#[cfg(feature = "mssql")]
+impl From<tiberius::error::Error> for Error {
+    fn from(err: tiberius::error::Error) -> Self { Error::Database(DatabaseError::from(err)) }
+}
+
 // Conversion from DatabaseError to Error
-#[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
+#[cfg(any(feature = "database", feature = "mssql", feature = "turso", feature = "surrealdb"))]
 impl From<DatabaseError> for Error {
     fn from(err: DatabaseError) -> Self {
         Error::Database(err)
@@ -953,7 +965,7 @@ impl From<axum::http::Error> for Error {
 // Conversion from DatabaseError to RepositoryError
 #[cfg(all(
     feature = "repository",
-    any(feature = "database", feature = "turso", feature = "surrealdb")
+    any(feature = "database", feature = "mssql", feature = "turso", feature = "surrealdb")
 ))]
 impl From<DatabaseError> for crate::repository::RepositoryError {
     fn from(err: DatabaseError) -> Self {
@@ -1014,7 +1026,7 @@ mod tests {
     // DatabaseError Tests
     // =========================================================================
 
-    #[cfg(any(feature = "database", feature = "turso", feature = "surrealdb"))]
+    #[cfg(any(feature = "database", feature = "mssql", feature = "turso", feature = "surrealdb"))]
     mod database_error_tests {
         use super::*;
 

@@ -20,12 +20,16 @@ use crate::error::Error;
     feature = "database",
     feature = "turso",
     feature = "surrealdb",
-    feature = "clickhouse"
+    feature = "clickhouse",
+    feature = "mssql"
 ))]
 pub(crate) mod lazy;
 
 #[cfg(feature = "database")]
 pub mod pg;
+
+#[cfg(feature = "mssql")]
+pub mod mssql;
 
 #[cfg(feature = "turso")]
 pub mod turso;
@@ -46,7 +50,8 @@ pub mod clickhouse_impl;
     feature = "database",
     feature = "turso",
     feature = "surrealdb",
-    feature = "clickhouse"
+    feature = "clickhouse",
+    feature = "mssql"
 ))]
 pub(crate) fn looks_like_framework_kind(s: &str) -> bool {
     s.starts_with("auth.")
@@ -67,7 +72,8 @@ pub(crate) fn looks_like_framework_kind(s: &str) -> bool {
     feature = "database",
     feature = "turso",
     feature = "surrealdb",
-    feature = "clickhouse"
+    feature = "clickhouse",
+    feature = "mssql"
 ))]
 pub(crate) fn parse_custom_kind(s: &str) -> String {
     if looks_like_framework_kind(s) {
