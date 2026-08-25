@@ -452,7 +452,7 @@ async fn list_products(State(state): State<AppState>) -> Result<Json<Vec<Product
 
 ### Zero-Configuration Defaults
 
-Configuration follows the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html):
+On Unix, configuration follows the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html):
 
 ```
 ~/.config/acton-service/
@@ -476,6 +476,10 @@ ACTON_SERVICE_PORT=9090 cargo run
 # Production config location
 ~/.config/acton-service/my-service/config.toml
 ```
+
+On Windows, the equivalent user configuration is
+`%APPDATA%\acton-service\my-service\config.toml`; system-wide configuration is
+loaded from `%PROGRAMDATA%\acton-service\my-service\config.toml`.
 
 **Custom Config Extensions**: Extend the framework configuration with your own application-specific fields that are automatically loaded from the same `config.toml`:
 

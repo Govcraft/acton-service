@@ -87,9 +87,6 @@ async-trait = { workspace = true }
 
 # HTTP types
 http = { workspace = true }
-
-# Other dependencies
-xdg = "3.0.0"
 utoipa = { version = "5.4.0", features = ["axum_extras"], optional = true }
 utoipa-swagger-ui = { version = "9.0.2", features = ["axum"], optional = true }
 tonic-health = { version = "0.14.2", optional = true }
@@ -100,7 +97,7 @@ tower-resilience-bulkhead = { workspace = true, optional = true }
 cedar-policy = { version = "4.7.0", default-features = false, features = ["datetime", "ipaddr"], optional = true }
 regex = "1.12.2"
 mti = "1.0.0"
-acton-reactive = "9.0.0"
+acton-reactive = "9.2.0"
 tokio-util = "0.7.17"
 dashmap = "6.1.0"
 anyhow.workspace = true

@@ -192,6 +192,29 @@ jobs:
       - name: Nextest
         run: cargo nextest run -p acton-service --no-default-features --features "full,crypto-ring"
 
+  windows:
+    name: Windows native
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows
+      - name: Clippy default features
+        run: cargo clippy -p acton-service --all-targets -- -D warnings
+      - name: Test default features
+        run: cargo test -p acton-service
+      - name: Check full feature set
+        run: cargo check -p acton-service --all-targets --features full
+
   # The `full` legs above cover audit with the PostgreSQL storage backend
   # (`database` is in `full`). The optional backends are mutually exclusive
   # with `database`, so each parser/unit path gets its own leg. All storage
@@ -342,7 +365,7 @@ jobs:
   # those PRs, because a skipped job reports nothing at all.
   ci-gate:
     name: ci-gate
-    needs: [changes, aws-lc-rs, ring, audit-storage, feature-combos, docs-build]
+    needs: [changes, aws-lc-rs, ring, windows, audit-storage, feature-combos, docs-build]
     if: always()
     runs-on: ubuntu-latest
     steps:

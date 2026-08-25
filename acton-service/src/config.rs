@@ -3,8 +3,8 @@
 //! Configuration is loaded from multiple sources with the following precedence (highest to lowest):
 //! 1. Environment variables (prefix: ACTON_)
 //! 2. Current working directory: ./config.toml
-//! 3. XDG config directory: ~/.config/acton-service/{service_name}/config.toml
-//! 4. System directory: /etc/acton-service/{service_name}/config.toml
+//! 3. Platform user config directory (`XDG_CONFIG_HOME` on Unix, `APPDATA` on Windows)
+//! 4. Platform system directory (`/etc` on Unix, `PROGRAMDATA` on Windows)
 //! 5. Default values
 
 use figment::{
@@ -13,7 +13,7 @@ use figment::{
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::error::Result;
@@ -1806,6 +1806,77 @@ fn default_cedar_policy_cache_ttl() -> u64 {
     300 // Cache for 5 minutes
 }
 
+#[cfg(unix)]
+fn platform_user_config_root(
+    xdg_config_home: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> Option<PathBuf> {
+    xdg_config_home
+        .filter(|path| path.is_absolute())
+        .or_else(|| home.map(|path| path.join(".config")))
+}
+
+#[cfg(windows)]
+fn platform_user_config_root(
+    app_data: Option<PathBuf>,
+    profile: Option<PathBuf>,
+) -> Option<PathBuf> {
+    app_data.or_else(|| profile.map(|path| path.join("AppData").join("Roaming")))
+}
+
+#[cfg(unix)]
+fn user_config_root() -> Option<PathBuf> {
+    platform_user_config_root(
+        std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+        std::env::var_os("HOME").map(PathBuf::from),
+    )
+}
+
+#[cfg(windows)]
+fn user_config_root() -> Option<PathBuf> {
+    platform_user_config_root(
+        std::env::var_os("APPDATA").map(PathBuf::from),
+        std::env::var_os("USERPROFILE").map(PathBuf::from),
+    )
+}
+
+#[cfg(not(any(unix, windows)))]
+fn user_config_root() -> Option<PathBuf> {
+    None
+}
+
+fn user_config_path(service_name: &str) -> Option<PathBuf> {
+    user_config_root().map(|root| {
+        root.join("acton-service")
+            .join(service_name)
+            .join("config.toml")
+    })
+}
+
+#[cfg(unix)]
+fn system_config_path(service_name: &str) -> Option<PathBuf> {
+    Some(
+        PathBuf::from("/etc/acton-service")
+            .join(service_name)
+            .join("config.toml"),
+    )
+}
+
+#[cfg(windows)]
+fn system_config_path(service_name: &str) -> Option<PathBuf> {
+    std::env::var_os("PROGRAMDATA").map(|root| {
+        PathBuf::from(root)
+            .join("acton-service")
+            .join(service_name)
+            .join("config.toml")
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn system_config_path(_service_name: &str) -> Option<PathBuf> {
+    None
+}
+
 impl<T> Config<T>
 where
     T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
@@ -1814,8 +1885,8 @@ where
     ///
     /// Searches for config files in this order (first found is used):
     /// 1. Current working directory: ./config.toml
-    /// 2. XDG config directory: ~/.config/acton-service/{service_name}/config.toml
-    /// 3. System directory: /etc/acton-service/{service_name}/config.toml
+    /// 2. Platform user config directory (`XDG_CONFIG_HOME` or `APPDATA`)
+    /// 3. Platform system config directory (`/etc` or `PROGRAMDATA`)
     ///
     /// Environment variables (ACTON_ prefix) override all file-based configs.
     ///
@@ -1883,7 +1954,7 @@ where
     ///
     /// Returns paths in priority order (highest first):
     /// 1. Current working directory
-    /// 2. XDG config directory
+    /// 2. User config directory
     /// 3. System directory
     fn find_config_paths(service_name: &str) -> Vec<PathBuf> {
         let mut paths = Vec::new();
@@ -1891,20 +1962,16 @@ where
         // 1. Current working directory (highest priority for dev/testing)
         paths.push(PathBuf::from("config.toml"));
 
-        // 2. XDG config directory (~/.config/acton-service/{service_name}/config.toml)
-        // Use find_config_file instead of place_config_file to avoid creating directories
-        let xdg_dirs = xdg::BaseDirectories::with_prefix("acton-service");
-        let config_file_path = Path::new(service_name).join("config.toml");
-        if let Some(path) = xdg_dirs.find_config_file(&config_file_path) {
+        // 2. Platform user config directory. Only include an existing file so
+        // loading configuration remains side-effect free.
+        if let Some(path) = user_config_path(service_name).filter(|path| path.is_file()) {
             paths.push(path);
         }
 
-        // 3. System-wide directory (/etc/acton-service/{service_name}/config.toml)
-        paths.push(
-            PathBuf::from("/etc/acton-service")
-                .join(service_name)
-                .join("config.toml"),
-        );
+        // 3. Platform system-wide directory.
+        if let Some(path) = system_config_path(service_name) {
+            paths.push(path);
+        }
 
         paths
     }
@@ -1912,40 +1979,34 @@ where
     /// Get the recommended config path for a service
     ///
     /// This is where the config file should be placed in production.
-    /// Returns: ~/.config/acton-service/{service_name}/config.toml
+    /// On Unix this follows `XDG_CONFIG_HOME` and falls back to
+    /// `~/.config`. On Windows it follows `APPDATA` and falls back to
+    /// `%USERPROFILE%\AppData\Roaming`.
     pub fn recommended_path(service_name: &str) -> PathBuf {
-        let xdg_dirs = xdg::BaseDirectories::with_prefix("acton-service");
-        let config_file_path = Path::new(service_name).join("config.toml");
-
-        // place_config_file creates parent directories if needed
-        xdg_dirs
-            .place_config_file(&config_file_path)
-            .unwrap_or_else(|_| {
-                // Fallback to manual path construction if place_config_file fails
-                PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| String::from("~")))
-                    .join(".config/acton-service")
-                    .join(service_name)
-                    .join("config.toml")
-            })
+        user_config_path(service_name).unwrap_or_else(|| {
+            PathBuf::from("acton-service")
+                .join(service_name)
+                .join("config.toml")
+        })
     }
 
     /// Create the config directory structure for a service
     ///
-    /// Creates ~/.config/acton-service/{service_name}/ if it doesn't exist
+    /// Creates the platform user configuration directory if it doesn't exist.
     pub fn create_config_dir(service_name: &str) -> Result<PathBuf> {
-        let xdg_dirs = xdg::BaseDirectories::with_prefix("acton-service");
-        let config_file_path = Path::new(service_name).join("config.toml");
+        let config_path = Self::recommended_path(service_name);
+        let config_dir = config_path
+            .parent()
+            .ok_or_else(|| crate::error::Error::Internal("Invalid config path".to_string()))?;
 
-        // place_config_file creates all necessary parent directories
-        let config_path = xdg_dirs.place_config_file(&config_file_path).map_err(|e| {
-            crate::error::Error::Internal(format!("Failed to create config directory: {}", e))
+        std::fs::create_dir_all(config_dir).map_err(|e| {
+            crate::error::Error::Internal(format!(
+                "Failed to create config directory {}: {e}",
+                config_dir.display()
+            ))
         })?;
 
-        // Return the directory path, not the file path
-        Ok(config_path
-            .parent()
-            .ok_or_else(|| crate::error::Error::Internal("Invalid config path".to_string()))?
-            .to_path_buf())
+        Ok(config_dir.to_path_buf())
     }
 
     /// Get database URL
@@ -2074,6 +2135,53 @@ where
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[cfg(unix)]
+    #[test]
+    fn user_config_root_prefers_an_absolute_xdg_path() {
+        let root = platform_user_config_root(
+            Some(PathBuf::from("/var/lib/example-config")),
+            Some(PathBuf::from("/home/example")),
+        );
+
+        assert_eq!(root, Some(PathBuf::from("/var/lib/example-config")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn user_config_root_ignores_a_relative_xdg_path() {
+        let root = platform_user_config_root(
+            Some(PathBuf::from("relative/config")),
+            Some(PathBuf::from("/home/example")),
+        );
+
+        assert_eq!(root, Some(PathBuf::from("/home/example/.config")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn user_config_root_prefers_app_data() {
+        let root = platform_user_config_root(
+            Some(PathBuf::from(r"C:\Users\example\AppData\Roaming")),
+            Some(PathBuf::from(r"C:\Users\example")),
+        );
+
+        assert_eq!(
+            root,
+            Some(PathBuf::from(r"C:\Users\example\AppData\Roaming"))
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn user_config_root_falls_back_to_the_user_profile() {
+        let root = platform_user_config_root(None, Some(PathBuf::from(r"C:\Users\example")));
+
+        assert_eq!(
+            root,
+            Some(PathBuf::from(r"C:\Users\example\AppData\Roaming"))
+        );
+    }
 
     #[test]
     fn test_default_config() {
