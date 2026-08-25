@@ -20,6 +20,12 @@ ignore = [
     "RUSTSEC-2026-0098",
     "RUSTSEC-2026-0099",
     "RUSTSEC-2026-0104",
+    # h2 0.3.27 unbounded empty DATA frame buffering. h2 0.4 is updated to the
+    # patched 0.4.16; this older line is pinned by optional libsql 0.9.30 via
+    # tonic/hyper, with no patched 0.3.x or newer stable libsql available.
+    # Turso is a client-only path, so exploitation requires a malicious or
+    # compromised upstream. Revisit with the next stable libsql release.
+    "RUSTSEC-2026-0258",
     # rkyv 0.7.46 out-of-bounds reads on archives containing Rc/Arc. The fix is
     # in 0.8.17, and 0.7.46 is the newest 0.7.x, so there is nothing to update
     # to on this line. rkyv reaches the lockfile through `rust_decimal`'s

@@ -31,6 +31,13 @@ ignore = [
     "RUSTSEC-2026-0098",
     "RUSTSEC-2026-0099",
     "RUSTSEC-2026-0104",
+    # h2 0.3.27 unbounded empty DATA frame buffering. The directly used h2
+    # line is upgraded to 0.4.16; 0.3.27 remains only through optional
+    # libsql 0.9.30 -> tonic/hyper. There is no patched 0.3.x release and the
+    # latest stable libsql still pins that stack. Turso endpoints are not
+    # exposed HTTP/2 servers, limiting this low-severity issue to a malicious
+    # or compromised upstream. Re-evaluate with the next stable libsql release.
+    "RUSTSEC-2026-0258",
 ]
 
 # Control which licenses are allowed

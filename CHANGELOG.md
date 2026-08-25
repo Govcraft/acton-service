@@ -12,13 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **platforms**: Native Windows configuration discovery now uses `%APPDATA%`
   for per-user configuration and `%PROGRAMDATA%` for system-wide configuration.
   Windows builds are compiled and tested in CI alongside the existing Linux
-  matrix.
+  matrix. `acton-reactive` is updated to 9.2.0, the first release in the 9.x
+  line with the matching Windows portability fix.
 
 ### Changed
 
 - **config**: Removed the Unix-only `xdg` dependency. Unix configuration still
   follows `XDG_CONFIG_HOME` with the same `$HOME/.config` fallback, while
   `recommended_path` no longer creates directories as a side effect.
+- **security**: Updated the locked `h2` version to 0.4.16, fixing
+  RUSTSEC-2026-0258 (unbounded empty DATA frame buffering).
 
 ## [acton-service-v0.37.0] - 2026-08-07
 
