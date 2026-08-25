@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **platforms**: Native Windows configuration discovery now uses `%APPDATA%`
+  for per-user configuration and `%PROGRAMDATA%` for system-wide configuration.
+  Windows builds are compiled and tested in CI alongside the existing Linux
+  matrix.
+
+### Changed
+
+- **config**: Removed the Unix-only `xdg` dependency. Unix configuration still
+  follows `XDG_CONFIG_HOME` with the same `$HOME/.config` fallback, while
+  `recommended_path` no longer creates directories as a side effect.
+
 ## [acton-service-v0.37.0] - 2026-08-07
 
 One feature, and the config-surface change it carries: a TLS service can now
