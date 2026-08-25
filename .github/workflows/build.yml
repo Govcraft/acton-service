@@ -216,6 +216,8 @@ jobs:
         run: cargo check -p acton-service --all-targets --features full
       - name: Check Microsoft SQL Server feature set
         run: cargo check -p acton-service --all-targets --no-default-features --features "mssql,http,grpc,auth,accounts,audit,observability,crypto-aws-lc-rs"
+      - name: Check trusted-proxy Windows authentication
+        run: cargo check -p acton-service --all-targets --no-default-features --features "http,tls,windows-auth,crypto-aws-lc-rs"
 
   # The `full` legs above cover audit with the PostgreSQL storage backend
   # (`database` is in `full`). The optional backends are mutually exclusive
@@ -260,7 +262,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libkrb5-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -311,6 +313,10 @@ jobs:
           # workspace asked for it. So this leg runs the tests too.
           - combo: tls-no-grpc
             features: "http,tls,crypto-aws-lc-rs"
+            test: true
+          # Windows identities asserted by an mTLS-authenticated proxy.
+          - combo: windows-auth
+            features: "http,tls,windows-auth,crypto-aws-lc-rs"
             test: true
           # The mirror image: gRPC transport with no TLS material.
           - combo: grpc-no-tls

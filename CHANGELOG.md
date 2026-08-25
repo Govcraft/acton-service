@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **auth(windows)**: Added trusted-proxy Windows/Active Directory authentication
+  over allowlisted mutual TLS, including validated principals, group-to-role
+  mappings, unified claims, and defensive removal of forwarded identity headers.
+- **database(mssql)**: Added SSPI integrated authentication on Windows and
+  Kerberos/GSSAPI integrated authentication on Unix for SQL Server pools.
+
 - **database(mssql)**: Added first-class Microsoft SQL Server support through
   Tiberius and bb8, including agent-managed pooling, retries, readiness and
   gRPC health checks, pool telemetry, accounts, API keys, refresh tokens,

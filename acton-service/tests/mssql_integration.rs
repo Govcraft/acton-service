@@ -9,7 +9,7 @@ async fn mssql_backends_initialize_and_accounts_round_trip(){
  let container=MssqlServer::default().with_accept_eula().start().await.expect("start SQL Server container");
  let host=container.get_host().await.expect("container host");
  let port=container.get_host_port_ipv4(1433).await.expect("container port");
- let config=DatabaseConfig{url:format!("Server=tcp:{host},{port};Database=master;User Id=sa;Password={};TrustServerCertificate=True;",MssqlServer::DEFAULT_SA_PASSWORD),max_connections:5,min_connections:1,connection_timeout_secs:30,max_retries:10,retry_delay_secs:2,optional:false,lazy_init:false};
+    let config=DatabaseConfig{url:format!("Server=tcp:{host},{port};Database=master;User Id=sa;Password={};TrustServerCertificate=True;",MssqlServer::DEFAULT_SA_PASSWORD),max_connections:5,min_connections:1,connection_timeout_secs:30,max_retries:10,retry_delay_secs:2,optional:false,lazy_init:false,mssql_auth:acton_service::config::MssqlAuthMode::ConnectionString};
  let pool=mssql::create_pool(&config).await.expect("SQL Server pool");
  mssql::health_check(&pool).await.expect("health query");
  let accounts=MssqlAccountStorage::new(pool.clone()).await.expect("accounts schema");
