@@ -436,8 +436,12 @@ password in the connection string:
 
 ```toml
 [dependencies]
-acton-service = { version = "0.37", features = ["mssql"] }
+acton-service = { version = "0.38", features = ["mssql"] }
+```
 
+Then select integrated authentication in the service configuration:
+
+```toml
 [database]
 url = "server=tcp:sql.internal,1433;database=service;TrustServerCertificate=false"
 mssql_auth = "integrated"
@@ -452,8 +456,13 @@ proxy and forward identity only over an allowlisted mTLS connection:
 
 ```toml
 [dependencies]
-acton-service = { version = "0.37", features = ["windows-auth"] }
+acton-service = { version = "0.38", features = ["windows-auth"] }
+```
 
+Configure the trusted proxy and its exact group-to-role mappings in the service
+configuration:
+
+```toml
 [caller_auth]
 mode = "mtls-or-bearer"
 allowlist = ["windows-auth-gateway.internal"]
@@ -553,7 +562,7 @@ Defaults: `http`, `observability`, `crypto-aws-lc-rs`. Enable only what you need
 
 ```toml
 [dependencies]
-acton-service = { version = "0.37", features = ["grpc", "database", "cache"] }
+acton-service = { version = "0.38", features = ["grpc", "database", "cache"] }
 ```
 
 **Transports & protocols**
@@ -629,7 +638,7 @@ Or use `full` to enable everything (with PostgreSQL as the database backend):
 
 ```toml
 [dependencies]
-acton-service = { version = "0.37", features = ["full"] }
+acton-service = { version = "0.38", features = ["full"] }
 ```
 
 See the [Feature Flags guide](https://govcraft.github.io/acton-service/docs/feature-flags) for a decision tree.
@@ -646,7 +655,7 @@ that `aws-lc-rs` requires at build time:
 
 ```toml
 [dependencies]
-acton-service = { version = "0.37", default-features = false, features = [
+acton-service = { version = "0.38", default-features = false, features = [
     "http",
     "observability",
     "crypto-ring",
