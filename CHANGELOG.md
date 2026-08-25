@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.38.0] - 2026-08-25
+
+This release adds native Windows portability, first-class Microsoft SQL Server
+storage parity, SQL Server Integrated Authentication, and trusted-proxy
+Windows/Active Directory application identities over mutual TLS.
+
 ### Added
 
 - **auth(windows)**: Added trusted-proxy Windows/Active Directory authentication
