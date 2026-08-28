@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **auth(saml)**: Added a SAML 2.0 service provider behind the `saml` feature
+  (#138). SP-initiated SSO over HTTP-Redirect and HTTP-POST, an Assertion
+  Consumer Service that validates signature, `Conditions`,
+  `AudienceRestriction`, `InResponseTo`, `Destination`, `Recipient`, and
+  session windows, replay protection through `SamlReplayStore` (in-memory
+  and Redis), IdP metadata pinning by `entityID` and optional signing
+  certificate, SP metadata generation, encrypted-assertion decryption, and
+  attribute-to-`Claims` mapping so `PasetoAuth` and Cedar are unchanged.
+  Built on the pure-Rust `saml-rs`; XML signatures use aws-lc-rs on Linux
+  x86_64/aarch64 and RustCrypto on every other target, with no native
+  `xmlsec`/OpenSSL. `saml` is now part of `auth-full` and `full`.
+
 ## [acton-service-v0.38.0] - 2026-08-25
 
 This release adds native Windows portability, first-class Microsoft SQL Server

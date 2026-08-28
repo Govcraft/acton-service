@@ -17,7 +17,7 @@ acton-service provides a **batteries-included, type-enforced framework** where p
 - **Type-enforced API versioning** - Impossible to bypass, compiler-enforced versioning
 - **Dual HTTP + gRPC** - Run both protocols on the same port with automatic detection
 - **GraphQL transport** - Versioned schemas that inherit the same middleware stack
-- **Complete authentication stack** - PASETO (default) and JWT tokens, Argon2 password hashing, API keys, key rotation, OAuth/OIDC, sessions
+- **Complete authentication stack** - PASETO (default) and JWT tokens, Argon2 password hashing, API keys, key rotation, OAuth/OIDC, SAML 2.0, sessions
 - **Cedar policy-based authorization** - AWS Cedar integration for fine-grained access control
 - **Security & compliance built-in** - BLAKE3 hash-chained audit logging, login lockout, NIST AC-2 account lifecycle, FIPS 140-3 capable crypto
 - **Production observability** - OpenTelemetry tracing, metrics, and structured logging built-in
@@ -274,6 +274,7 @@ Beyond token validation, the `auth` feature family provides a complete identity 
 - **API keys** (`auth`) - BLAKE3-hashed API key issuance and validation ([guide](https://govcraft.github.io/acton-service/docs/api-keys))
 - **Signing-key rotation** (`auth`) - Rotate token signing keys with a drain grace period for in-flight tokens
 - **OAuth 2.0 / OIDC** (`oauth`) - Pluggable provider integration built on `oauth2` and `openidconnect` ([guide](https://govcraft.github.io/acton-service/docs/oauth))
+- **SAML 2.0 service provider** (`saml`) - SP-initiated SSO with ADFS, Shibboleth, and other SAML-only identity providers; pure Rust, XML-DSig on aws-lc-rs (Linux x86_64/aarch64) or RustCrypto elsewhere
 - **Sessions** (`session-memory` / `session-redis`) - Cookie sessions via `tower-sessions` with in-memory or Redis stores ([guide](https://govcraft.github.io/acton-service/docs/session))
 - **Login lockout** (`login-lockout`) - Progressive delays and account lockout on repeated failures ([guide](https://govcraft.github.io/acton-service/docs/login-lockout))
 - **Account lifecycle** (`accounts` / `account-handlers`) - NIST AC-2 aligned account management with optional pre-built REST handlers
@@ -602,7 +603,8 @@ acton-service = { version = "0.38", features = ["grpc", "database", "cache"] }
 | `auth` | Argon2 password hashing, token generation, API keys, key rotation |
 | `windows-auth` | Trusted-proxy Windows/AD identity over mutually authenticated TLS (implies `http` and `tls`) |
 | `oauth` | OAuth 2.0 / OIDC providers (implies `auth`) |
-| `auth-full` | Everything: auth + oauth + jwt + cache + database + lockout + accounts |
+| `saml` | SAML 2.0 service provider: signed `AuthnRequest`s, ACS validation, replay protection, encrypted assertions (implies `auth`) |
+| `auth-full` | Everything: auth + oauth + saml + jwt + cache + database + lockout + accounts |
 | `cedar-authz` | AWS Cedar policy-based authorization |
 | `session`, `session-memory`, `session-redis` | Cookie sessions (tower-sessions) |
 | `login-lockout` | Progressive delay and account lockout |

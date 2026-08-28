@@ -1,6 +1,6 @@
 //! Authentication configuration structures
 //!
-//! Configuration for password hashing, token generation, API keys, and OAuth.
+//! Configuration for password hashing, token generation, API keys, OAuth, and SAML.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -42,6 +42,11 @@ pub struct AuthConfig {
     #[cfg(feature = "oauth")]
     #[serde(default)]
     pub oauth: Option<OAuthConfig>,
+
+    /// SAML 2.0 service provider configuration (requires saml feature)
+    #[cfg(feature = "saml")]
+    #[serde(default)]
+    pub saml: Option<super::saml::SamlConfig>,
 
     /// Key rotation configuration (NIST SC-12)
     #[serde(default)]

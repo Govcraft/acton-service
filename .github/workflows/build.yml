@@ -318,6 +318,11 @@ jobs:
           - combo: windows-auth
             features: "http,tls,windows-auth,crypto-aws-lc-rs"
             test: true
+          # SAML SP standalone, without cache or the rest of auth-full. Runs
+          # the in-process IdP round trip and the negative cases (#138).
+          - combo: saml
+            features: "http,saml,crypto-aws-lc-rs"
+            test: true
           # The mirror image: gRPC transport with no TLS material.
           - combo: grpc-no-tls
             features: "http,grpc,crypto-aws-lc-rs"

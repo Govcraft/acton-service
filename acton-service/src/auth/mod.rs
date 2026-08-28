@@ -8,6 +8,7 @@
 //!
 //! - `auth` - Core authentication: password hashing (Argon2id) + token generation
 //! - `oauth` - OAuth/OIDC provider support (requires `auth`)
+//! - `saml` - SAML 2.0 service provider (requires `auth`)
 //! - `auth-full` - All auth features combined
 //!
 //! # Example
@@ -47,6 +48,10 @@ pub mod key_rotation;
 // OAuth/OIDC providers (requires oauth feature)
 #[cfg(feature = "oauth")]
 pub mod oauth;
+
+// SAML 2.0 service provider (requires saml feature)
+#[cfg(feature = "saml")]
+pub mod saml;
 
 // Re-exports for convenience
 pub use config::{
@@ -105,6 +110,10 @@ pub use oauth::{
 
 #[cfg(all(feature = "oauth", feature = "cache"))]
 pub use oauth::RedisOAuthStateManager;
+
+// SAML exports (requires saml feature)
+#[cfg(feature = "saml")]
+pub use saml::{SamlConfig, SamlLogin, SamlLoginDelivery, SamlLoginRequest, SamlServiceProvider};
 
 // Key rotation exports
 pub use key_rotation::{

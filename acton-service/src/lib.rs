@@ -221,7 +221,12 @@ pub mod prelude {
 
     pub use crate::error::{Error, Result};
 
-    #[cfg(any(feature = "database", feature = "mssql", feature = "turso", feature = "surrealdb"))]
+    #[cfg(any(
+        feature = "database",
+        feature = "mssql",
+        feature = "turso",
+        feature = "surrealdb"
+    ))]
     pub use crate::error::{DatabaseError, DatabaseErrorKind, DatabaseOperation};
 
     pub use crate::checks::CheckOutcome;
@@ -348,7 +353,12 @@ pub mod prelude {
     // Key rotation storage trait (requires auth + a database backend)
     #[cfg(all(
         feature = "auth",
-        any(feature = "database", feature = "mssql", feature = "turso", feature = "surrealdb")
+        any(
+            feature = "database",
+            feature = "mssql",
+            feature = "turso",
+            feature = "surrealdb"
+        )
     ))]
     pub use crate::auth::KeyRotationStorage;
 
@@ -358,6 +368,11 @@ pub mod prelude {
     #[cfg(feature = "oauth")]
     pub use crate::auth::{
         ApiKeyConfig, OAuthConfig, OAuthProvider, OAuthProviderConfig, OAuthTokens, OAuthUserInfo,
+    };
+
+    #[cfg(feature = "saml")]
+    pub use crate::auth::{
+        SamlConfig, SamlLogin, SamlLoginDelivery, SamlLoginRequest, SamlServiceProvider,
     };
 
     #[cfg(feature = "websocket")]

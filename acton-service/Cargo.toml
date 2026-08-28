@@ -143,6 +143,19 @@ bb8 = { version = "0.9.1", optional = true }
 bb8-tiberius = { version = "0.16.0", optional = true }
 tiberius = { version = "0.12.3", features = ["chrono", "integrated-auth-gssapi"], optional = true }
 
+# saml-rs's aws-lc XML-DSig backend (kryptering) compiles only on Linux
+# x86_64/aarch64 and refuses every other target with compile_error!, so the
+# backend is chosen per target here rather than by the crypto-* features:
+# aws-lc-rs on Linux x86_64/aarch64 (also under `crypto-ring`, since Cargo
+# cannot express "this feature, but only on that platform"), the pure-Rust
+# RustCrypto provider everywhere else. `full` therefore keeps building on
+# Windows and macOS. `build.rs` mirrors the split as `saml_backend_rustcrypto`.
+[target.'cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))'.dependencies]
+saml-rs = { version = "0.5.0", default-features = false, features = ["crypto-aws-lc"], optional = true }
+
+[target.'cfg(not(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))'.dependencies]
+saml-rs = { version = "0.5.0", default-features = false, features = ["crypto-rustcrypto"], optional = true }
+
 [features]
 default = ["http", "observability", "crypto-aws-lc-rs"]
 
@@ -196,9 +209,12 @@ jwt = ["dep:jsonwebtoken"]
 # Authentication features
 auth = ["dep:argon2", "dep:rand", "dep:blake3", "dep:base64"] # Core: password hashing + token generation + key rotation
 oauth = ["auth", "dep:oauth2", "dep:openidconnect", "dep:base64"]  # OAuth/OIDC providers (requires auth)
-auth-full = ["auth", "oauth", "jwt", "cache", "database", "login-lockout", "accounts"]  # All auth features (excludes turso - mutually exclusive with database)
+# SAML 2.0 service provider (requires auth). Pure Rust; XML-DSig backend is
+# chosen per target (see the saml-rs target tables above).
+saml = ["auth", "dep:saml-rs", "dep:base64"]
+auth-full = ["auth", "oauth", "saml", "jwt", "cache", "database", "login-lockout", "accounts"]  # All auth features (excludes turso - mutually exclusive with database)
 
-full = ["http", "grpc", "websocket", "database", "cache", "events", "observability", "resilience", "otel-metrics", "prometheus-metrics", "governor", "openapi", "cedar-authz", "jwt", "auth", "session-memory", "session-redis", "htmx", "askama", "sse", "pagination-full", "handlers", "login-lockout", "tls", "accounts", "account-handlers", "journald", "graphql", "graphql-cedar", "audit", "oauth"]
+full = ["http", "grpc", "websocket", "database", "cache", "events", "observability", "resilience", "otel-metrics", "prometheus-metrics", "governor", "openapi", "cedar-authz", "jwt", "auth", "session-memory", "session-redis", "htmx", "askama", "sse", "pagination-full", "handlers", "login-lockout", "tls", "accounts", "account-handlers", "journald", "graphql", "graphql-cedar", "audit", "oauth", "saml"]
 tonic-health = ["dep:tonic-health"]
 tonic-reflection = ["dep:tonic-reflection"]
 tower-resilience-circuitbreaker = ["dep:tower-resilience-circuitbreaker"]
@@ -350,3 +366,4 @@ tonic-prost-build.workspace = true
 rcgen = "0.14.8"
 tempfile = "3.24.0"
 testcontainers-modules = { version = "0.15.0", features = ["mssql_server"] }
+toml = "1.1.4"
