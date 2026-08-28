@@ -142,6 +142,7 @@ x509-parser = { version = "0.18.1", optional = true }
 bb8 = { version = "0.9.1", optional = true }
 bb8-tiberius = { version = "0.16.0", optional = true }
 tiberius = { version = "0.12.3", features = ["chrono", "integrated-auth-gssapi"], optional = true }
+saml-rs = { version = "0.5.0", default-features = false, optional = true }
 
 [features]
 default = ["http", "observability", "crypto-aws-lc-rs"]
@@ -158,6 +159,7 @@ crypto-aws-lc-rs = [
     "reqwest/rustls-tls-webpki-roots-no-provider",
     "sqlx?/tls-rustls-aws-lc-rs",
     "tonic?/tls-aws-lc",
+    "saml-rs?/crypto-aws-lc",
 ]
 crypto-ring = [
     "dep:rustls",
@@ -166,6 +168,7 @@ crypto-ring = [
     "reqwest/rustls-tls",
     "sqlx?/tls-rustls-ring-webpki",
     "tonic?/tls-ring",
+    "saml-rs?/crypto-rustcrypto",
 ]
 http = []
 grpc = ["dep:tonic", "dep:prost", "dep:tonic-prost", "dep:tonic-prost-build", "dep:tokio-stream", "dep:tonic-health", "dep:tonic-reflection", "dep:hyper-util"]
@@ -196,9 +199,13 @@ jwt = ["dep:jsonwebtoken"]
 # Authentication features
 auth = ["dep:argon2", "dep:rand", "dep:blake3", "dep:base64"] # Core: password hashing + token generation + key rotation
 oauth = ["auth", "dep:oauth2", "dep:openidconnect", "dep:base64"]  # OAuth/OIDC providers (requires auth)
-auth-full = ["auth", "oauth", "jwt", "cache", "database", "login-lockout", "accounts"]  # All auth features (excludes turso - mutually exclusive with database)
+# SAML 2.0 service provider (requires auth). Pure Rust; XML-DSig rides the
+# selected rustls crypto provider: aws-lc-rs under `crypto-aws-lc-rs`,
+# RustCrypto under `crypto-ring`.
+saml = ["auth", "dep:saml-rs", "dep:base64"]
+auth-full = ["auth", "oauth", "saml", "jwt", "cache", "database", "login-lockout", "accounts"]  # All auth features (excludes turso - mutually exclusive with database)
 
-full = ["http", "grpc", "websocket", "database", "cache", "events", "observability", "resilience", "otel-metrics", "prometheus-metrics", "governor", "openapi", "cedar-authz", "jwt", "auth", "session-memory", "session-redis", "htmx", "askama", "sse", "pagination-full", "handlers", "login-lockout", "tls", "accounts", "account-handlers", "journald", "graphql", "graphql-cedar", "audit", "oauth"]
+full = ["http", "grpc", "websocket", "database", "cache", "events", "observability", "resilience", "otel-metrics", "prometheus-metrics", "governor", "openapi", "cedar-authz", "jwt", "auth", "session-memory", "session-redis", "htmx", "askama", "sse", "pagination-full", "handlers", "login-lockout", "tls", "accounts", "account-handlers", "journald", "graphql", "graphql-cedar", "audit", "oauth", "saml"]
 tonic-health = ["dep:tonic-health"]
 tonic-reflection = ["dep:tonic-reflection"]
 tower-resilience-circuitbreaker = ["dep:tower-resilience-circuitbreaker"]
@@ -350,3 +357,4 @@ tonic-prost-build.workspace = true
 rcgen = "0.14.8"
 tempfile = "3.24.0"
 testcontainers-modules = { version = "0.15.0", features = ["mssql_server"] }
+toml = "1.1.4"

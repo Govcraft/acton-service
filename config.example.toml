@@ -60,6 +60,39 @@ environment = "dev"  # dev, staging, production
 # audience = "api.mydomain.com"
 # # public_paths = ["/admin/", "/forge/"]    # Skip token auth for these prefixes
 
+# ============================================================================
+# SAML 2.0 SERVICE PROVIDER ([auth.saml], requires the `saml` feature)
+# ============================================================================
+# SP-initiated SSO against a SAML-only identity provider (ADFS, Shibboleth,
+# Entra/Okta in SAML mode). Validation is strict: signed assertions, audience,
+# InResponseTo, destination, recipient, validity windows, and replay are all
+# enforced. IdP-initiated (unsolicited) responses are refused.
+# [auth.saml]
+# entity_id = "https://my-service.example.com/saml/metadata"
+# acs_url = "https://my-service.example.com/saml/acs"   # HTTP-POST binding
+# signing_key_path = "./keys/saml-sp.key.pem"           # RSA, PEM
+# certificate_path = "./keys/saml-sp.cert.pem"
+# # decryption_key_path = "./keys/saml-sp.key.pem"      # accept EncryptedAssertion
+# # allow_software_rsa_decryption = false               # crypto-ring builds only; see docs
+# # request_binding = "redirect"                         # "redirect" | "post"
+# # sign_authn_requests = true                           # must match IdP WantAuthnRequestsSigned
+# # name_id_format = "unspecified"                       # "email-address" | "persistent" | "transient" | ...
+# # clock_skew_secs = 60
+# # pending_request_ttl_secs = 600
+#
+# [auth.saml.idp]
+# entity_id = "https://adfs.example.com/adfs/services/trust"
+# metadata_path = "./saml/idp-metadata.xml"
+# # metadata_signing_certificate_path = "./saml/idp-metadata-signing.cert.pem"  # pin, strongly recommended
+#
+# [auth.saml.attributes]
+# # email = "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress"
+# # username = "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/upn"
+# # groups = "http://schemas.xmlsoap.org/claims/Group"
+# # default_roles = ["employee"]
+# # [auth.saml.attributes.group_roles]
+# # "Domain Admins" = "admin"
+
 [rate_limit]
 # Redis-based global rate limiting
 per_user_rpm = 200      # Requests per minute per user
