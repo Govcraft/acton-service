@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.39.0] - 2026-08-28
+
+This release adds a SAML 2.0 service provider so services can federate with
+ADFS, Shibboleth, and other SAML-only identity providers using the same
+`Claims`, `PasetoAuth`, and Cedar authorization path as every other login.
+
 ### Added
 
 - **auth(saml)**: Added a SAML 2.0 service provider behind the `saml` feature
