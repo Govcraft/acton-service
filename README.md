@@ -274,7 +274,7 @@ Beyond token validation, the `auth` feature family provides a complete identity 
 - **API keys** (`auth`) - BLAKE3-hashed API key issuance and validation ([guide](https://govcraft.github.io/acton-service/docs/api-keys))
 - **Signing-key rotation** (`auth`) - Rotate token signing keys with a drain grace period for in-flight tokens
 - **OAuth 2.0 / OIDC** (`oauth`) - Pluggable provider integration built on `oauth2` and `openidconnect` ([guide](https://govcraft.github.io/acton-service/docs/oauth))
-- **SAML 2.0 service provider** (`saml`) - SP-initiated SSO with ADFS, Shibboleth, and other SAML-only identity providers; pure Rust, rides the selected rustls crypto provider
+- **SAML 2.0 service provider** (`saml`) - SP-initiated SSO with ADFS, Shibboleth, and other SAML-only identity providers; pure Rust, XML-DSig on aws-lc-rs (Linux x86_64/aarch64) or RustCrypto elsewhere
 - **Sessions** (`session-memory` / `session-redis`) - Cookie sessions via `tower-sessions` with in-memory or Redis stores ([guide](https://govcraft.github.io/acton-service/docs/session))
 - **Login lockout** (`login-lockout`) - Progressive delays and account lockout on repeated failures ([guide](https://govcraft.github.io/acton-service/docs/login-lockout))
 - **Account lifecycle** (`accounts` / `account-handlers`) - NIST AC-2 aligned account management with optional pre-built REST handlers

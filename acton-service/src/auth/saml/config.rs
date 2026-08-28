@@ -31,10 +31,11 @@ pub struct SamlConfig {
     /// and the identity provider is expected to encrypt assertions.
     #[serde(default)]
     pub decryption_key_path: Option<PathBuf>,
-    /// Permit software RSA key-transport decryption on the RustCrypto backend
-    /// (`crypto-ring` builds). RustCrypto's RSA decryption is subject to
-    /// RUSTSEC-2023-0071 (Marvin timing side channel), so it is off unless
-    /// explicitly accepted. The aws-lc-rs backend does not need this.
+    /// Permit software RSA key-transport decryption on the RustCrypto backend,
+    /// which every target other than Linux x86_64/aarch64 uses. RustCrypto's
+    /// RSA decryption is subject to RUSTSEC-2023-0071 (Marvin timing side
+    /// channel), so it is off unless explicitly accepted. The aws-lc-rs
+    /// backend used on Linux does not need this.
     #[serde(default)]
     pub allow_software_rsa_decryption: bool,
     /// Binding used to deliver the `AuthnRequest` to the identity provider.

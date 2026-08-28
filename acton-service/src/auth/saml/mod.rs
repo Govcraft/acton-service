@@ -15,9 +15,13 @@
 //! [`SamlReplayStore`] until they would have expired. IdP-initiated
 //! (unsolicited) SSO is not accepted.
 //!
-//! Crypto follows the crate's rustls provider selection: `crypto-aws-lc-rs`
-//! backs XML signature and encryption with aws-lc-rs, `crypto-ring` with
-//! RustCrypto. No native `xmlsec` or OpenSSL is involved.
+//! XML signature and encryption run on aws-lc-rs on Linux x86_64/aarch64
+//! (the only targets its backend supports, so this holds under `crypto-ring`
+//! too) and on the pure-Rust RustCrypto provider everywhere else. No native
+//! `xmlsec` or OpenSSL is involved. On RustCrypto, decrypting
+//! `EncryptedAssertion`s requires the explicit
+//! [`allow_software_rsa_decryption`](SamlConfig::allow_software_rsa_decryption)
+//! opt-in.
 //!
 //! # Example
 //!

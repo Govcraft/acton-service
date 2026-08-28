@@ -512,13 +512,13 @@ fn build_sp(
     Saml::sp(sp_config).map_err(|error| saml_error("service provider", &error))
 }
 
-#[cfg(feature = "crypto-ring")]
+#[cfg(saml_backend_rustcrypto)]
 fn encryption_policy(config: &SamlConfig) -> Result<XmlEncryptionPolicy, SamlConfigError> {
     if !config.allow_software_rsa_decryption {
         return Err(SamlConfigError::Invalid(
-            "decryption_key_path on a crypto-ring build uses RustCrypto RSA, which is subject to \
-             RUSTSEC-2023-0071; set allow_software_rsa_decryption = true to accept that, or build \
-             with crypto-aws-lc-rs"
+            "decryption_key_path on this target uses RustCrypto RSA (aws-lc is available only on \
+             Linux x86_64/aarch64), which is subject to RUSTSEC-2023-0071; set \
+             allow_software_rsa_decryption = true to accept that, or deploy on Linux"
                 .to_owned(),
         ));
     }
@@ -526,7 +526,7 @@ fn encryption_policy(config: &SamlConfig) -> Result<XmlEncryptionPolicy, SamlCon
         .with_insecure_software_rsa_key_transport_decryption_allowed())
 }
 
-#[cfg(not(feature = "crypto-ring"))]
+#[cfg(not(saml_backend_rustcrypto))]
 fn encryption_policy(_config: &SamlConfig) -> Result<XmlEncryptionPolicy, SamlConfigError> {
     Ok(XmlEncryptionPolicy::encrypt_assertions())
 }
