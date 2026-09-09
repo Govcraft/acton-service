@@ -123,6 +123,7 @@ where
     T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
 {
     config: Option<Config<T>>,
+    optional_token_auth: Option<fn(&http::Method, &str) -> bool>,
     routes: Option<VersionedRoutes<T>>,
     state: Option<AppState<T>>,
     #[cfg(feature = "grpc")]
@@ -159,10 +160,27 @@ impl<T> ServiceBuilder<T>
 where
     T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
 {
+    /// Allow missing bearer credentials on application-selected HTTP routes.
+    ///
+    /// The predicate receives the HTTP method and full request path (without
+    /// query parameters). Matching requests without an `Authorization` header
+    /// continue without claims so downstream authorization can decide access.
+    /// Supplied credentials still undergo normal validation, revocation and
+    /// audit processing. This preserves the normal middleware ordering and key
+    /// rotation support. Existing `public_paths` retain their bypass semantics.
+    ///
+    /// Only opt in routes whose handlers or policy middleware authorize
+    /// anonymous callers. This does not make gRPC authentication optional.
+    pub fn with_optional_token_auth(mut self, predicate: fn(&http::Method, &str) -> bool) -> Self {
+        self.optional_token_auth = Some(predicate);
+        self
+    }
+
     /// Create a new service builder with defaults
     pub fn new() -> Self {
         Self {
             config: None,
+            optional_token_auth: None,
             routes: None,
             state: None,
             #[cfg(feature = "grpc")]
@@ -1675,6 +1693,11 @@ where
                 crate::config::TokenConfig::Paseto(paseto_config) => {
                     match crate::middleware::paseto::PasetoAuth::new(paseto_config) {
                         Ok(paseto_auth) => {
+                            let paseto_auth = if let Some(predicate) = self.optional_token_auth {
+                                paseto_auth.with_optional_auth(predicate)
+                            } else {
+                                paseto_auth
+                            };
                             #[cfg(feature = "auth")]
                             let paseto_auth = if let Some(ref km) = key_manager {
                                 paseto_auth.with_key_manager(km.clone())
@@ -1706,6 +1729,11 @@ where
                 crate::config::TokenConfig::Jwt(jwt_config) => {
                     match crate::middleware::jwt::JwtAuth::new(jwt_config) {
                         Ok(jwt_auth) => {
+                            let jwt_auth = if let Some(predicate) = self.optional_token_auth {
+                                jwt_auth.with_optional_auth(predicate)
+                            } else {
+                                jwt_auth
+                            };
                             #[cfg(feature = "auth")]
                             let jwt_auth = if let Some(ref km) = key_manager {
                                 jwt_auth.with_key_manager(km.clone())
@@ -4282,5 +4310,161 @@ mod tests {
                 .is_ok(),
             "an HTTP-only service must not be affected by the gRPC registration check"
         );
+    }
+}
+
+#[cfg(all(test, feature = "auth"))]
+mod optional_auth_tests {
+    use super::*;
+    use crate::{
+        auth::{
+            config::TokenGenerationConfig,
+            tokens::{paseto_generator::PasetoGenerator, ClaimsBuilder, TokenGenerator},
+        },
+        config::{PasetoConfig, TokenConfig},
+        middleware::token::Claims,
+    };
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+        routing::any,
+        Extension,
+    };
+    use tower::ServiceExt;
+
+    fn public_read(method: &http::Method, path: &str) -> bool {
+        (method == http::Method::GET || method == http::Method::HEAD) && path == "/api/v1/catalog"
+    }
+
+    async fn assert_optional_auth(token_config: TokenConfig, token: String) {
+        let mut config = Config::<()> {
+            token: Some(token_config),
+            ..Default::default()
+        };
+        #[cfg(feature = "audit")]
+        {
+            config.audit.enabled = false;
+        }
+        config.middleware.cors_mode = "disabled".into();
+        let routes = VersionedRoutes::WithoutState(Router::new().route(
+            "/{*rest}",
+            any(|claims: Option<Extension<Claims>>| async move {
+                if claims.is_some_and(|Extension(claims)| claims.has_role("admin")) {
+                    StatusCode::ACCEPTED
+                } else {
+                    StatusCode::OK
+                }
+            }),
+        ));
+        let service = ServiceBuilder::new()
+            .with_config(config)
+            .with_routes(routes)
+            .with_optional_token_auth(public_read)
+            .try_build()
+            .unwrap();
+        for (method, path, credential, expected) in [
+            ("GET", "/api/v1/catalog?limit=2", None, StatusCode::OK),
+            ("HEAD", "/api/v1/catalog", None, StatusCode::OK),
+            ("POST", "/api/v1/catalog", None, StatusCode::UNAUTHORIZED),
+            ("GET", "/api/v1/private", None, StatusCode::UNAUTHORIZED),
+            (
+                "GET",
+                "/api/v1/catalog",
+                Some(String::new()),
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "GET",
+                "/api/v1/catalog",
+                Some("Basic abc".into()),
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "GET",
+                "/api/v1/catalog",
+                Some("Bearer ".into()),
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "GET",
+                "/api/v1/catalog",
+                Some("Bearer invalid".into()),
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "GET",
+                "/api/v1/catalog",
+                Some(format!("Bearer {token}")),
+                StatusCode::ACCEPTED,
+            ),
+            (
+                "POST",
+                "/api/v1/catalog",
+                Some(format!("Bearer {token}")),
+                StatusCode::ACCEPTED,
+            ),
+        ] {
+            let mut request = Request::builder().method(method).uri(path);
+            if let Some(credential) = credential {
+                request = request.header(http::header::AUTHORIZATION, credential);
+            }
+            let response = service
+                .app
+                .clone()
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected, "{method} {path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn optional_paseto_auth_preserves_verification_through_service_builder() {
+        let key = [42_u8; 32];
+        let key_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(key_file.path(), key).unwrap();
+        let config = PasetoConfig {
+            key_path: key_file.path().into(),
+            ..Default::default()
+        };
+        let claims = ClaimsBuilder::new()
+            .subject("user:test")
+            .roles(["admin"])
+            .build()
+            .unwrap();
+        let generator = PasetoGenerator::with_symmetric_key(key, TokenGenerationConfig::default());
+        assert_optional_auth(
+            TokenConfig::Paseto(config),
+            generator.generate_token(&claims).unwrap(),
+        )
+        .await;
+    }
+
+    #[cfg(feature = "jwt")]
+    #[tokio::test]
+    async fn optional_jwt_auth_preserves_verification_through_service_builder() {
+        let key = [42_u8; 32];
+        let key_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(key_file.path(), key).unwrap();
+        let config = crate::config::JwtConfig {
+            public_key_path: key_file.path().into(),
+            algorithm: "HS256".into(),
+            issuer: None,
+            audience: None,
+            public_paths: vec![],
+        };
+        let mut claims = ClaimsBuilder::new()
+            .subject("user:test")
+            .roles(["admin"])
+            .build()
+            .unwrap();
+        claims.exp = chrono::Utc::now().timestamp() + 3600;
+        let token = jsonwebtoken::encode(
+            &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
+            &claims,
+            &jsonwebtoken::EncodingKey::from_secret(&key),
+        )
+        .unwrap();
+        assert_optional_auth(TokenConfig::Jwt(config), token).await;
     }
 }
