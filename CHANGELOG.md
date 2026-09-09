@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.40.1] - 2026-09-09
+
+### Fixed
+
+- Audit storage verification now anchors partial ranges to their immediate
+  predecessor across PostgreSQL, Turso, SurrealDB, ClickHouse, and SQL Server.
+  It checks predecessor content, consecutive sequences, event hashes, and
+  links. Empty ranges and unavailable retention boundaries return errors
+  instead of reporting success or corruption. Verification proves local
+  consistency against the stored anchor, not completeness against an
+  independently trusted chain head. Fixes #144.
+- Turso audit verification propagates row iteration failures instead of
+  accepting a silently truncated result.
+
 ## [acton-service-v0.40.0] - 2026-09-09
 
 ### Added

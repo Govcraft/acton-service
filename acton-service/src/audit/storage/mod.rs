@@ -85,6 +85,57 @@ pub(crate) fn parse_custom_kind(s: &str) -> String {
     s.strip_prefix("custom.").unwrap_or(s).to_string()
 }
 
+/// Verify a requested range fetched together with its immediate predecessor.
+/// A stored predecessor anchors local consistency, not externally trusted history.
+#[cfg(any(
+    test,
+    feature = "database",
+    feature = "turso",
+    feature = "surrealdb",
+    feature = "clickhouse",
+    feature = "mssql"
+))]
+fn verify_stored_chain(events: &[AuditEvent], from_sequence: u64) -> Result<Option<u64>, Error> {
+    let start = from_sequence.max(1);
+    let first_requested = events
+        .iter()
+        .find(|event| event.sequence >= start)
+        .ok_or_else(|| {
+            Error::Internal(format!(
+                "Audit verification unavailable: empty range starting at sequence {start}"
+            ))
+        })?;
+    if first_requested.sequence != start {
+        return Err(Error::Internal(format!(
+            "Audit verification incomplete: requested sequence {start} is unavailable"
+        )));
+    }
+
+    let (previous_sequence, previous_hash) = if start == 1 {
+        (0, None)
+    } else {
+        let predecessor = events.first().filter(|event| event.sequence == start - 1)
+            .ok_or_else(|| Error::Internal(format!(
+                "Audit verification incomplete: predecessor anchor at sequence {} is unavailable; a trusted retention checkpoint is required",
+                start - 1
+            )))?;
+        // Include the anchor's content hash in verification, but make no claim
+        // about its linkage to history preceding the fetched range.
+        let previous_hash = if predecessor.sequence == 1 {
+            None
+        } else {
+            predecessor.previous_hash.as_deref()
+        };
+        (predecessor.sequence - 1, previous_hash)
+    };
+
+    Ok(
+        super::chain::verify_chain_with_anchor(events, previous_sequence, previous_hash)
+            .err()
+            .map(|error| error.sequence),
+    )
+}
+
 /// Trait for audit event persistence backends
 ///
 /// Implementations MUST enforce append-only semantics at the database level
@@ -110,8 +161,18 @@ pub trait AuditStorage: Send + Sync {
 
     /// Verify chain integrity from a given sequence number
     ///
-    /// Returns `Ok(None)` if the chain is intact, or `Ok(Some(sequence))` with
-    /// the first broken sequence number.
+    /// The range starts at `from_sequence` (0 is an alias for genesis, 1).
+    /// Built-in adapters fetch the immediate predecessor in the same ordered
+    /// query and check its content hash, then every sequence, hash, and link in
+    /// the requested range. `Ok(None)` means local consistency against that
+    /// stored anchor; it does not prove completeness against an independently
+    /// trusted chain head or integrity of history before the anchor.
+    ///
+    /// `Ok(Some(sequence))` identifies the first broken event, including a
+    /// corrupt predecessor. An empty range, missing requested start, or missing
+    /// predecessor returns `Err`, never an affirmative integrity result. After
+    /// prefix retention, verification at the retained boundary is incomplete
+    /// without a trusted checkpoint; these adapters do not store checkpoints.
     async fn verify_chain(&self, from_sequence: u64) -> Result<Option<u64>, Error>;
 
     /// Query events with timestamps before the given cutoff
@@ -197,5 +258,114 @@ mod helper_tests {
             parse_custom_kind("auth.token.invalid"),
             "auth.token.invalid"
         );
+    }
+}
+
+#[cfg(test)]
+mod verification_tests {
+    use super::verify_stored_chain;
+    use crate::audit::{AuditChain, AuditEvent, AuditEventKind, AuditSeverity};
+
+    fn events() -> Vec<AuditEvent> {
+        let mut chain = AuditChain::new("verification-test".into());
+        (0..4)
+            .map(|_| {
+                chain.seal(AuditEvent::new(
+                    AuditEventKind::HttpRequest,
+                    AuditSeverity::Informational,
+                    "verification-test".into(),
+                ))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn full_chain_and_each_anchored_suffix_are_valid() {
+        let events = events();
+        assert_eq!(verify_stored_chain(&events, 0).unwrap(), None);
+        assert_eq!(verify_stored_chain(&events, 1).unwrap(), None);
+        for start in 2..=4 {
+            assert_eq!(
+                verify_stored_chain(&events[start as usize - 2..], start).unwrap(),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn empty_ranges_and_predecessor_only_are_unavailable() {
+        assert!(verify_stored_chain(&[], 0)
+            .unwrap_err()
+            .to_string()
+            .contains("empty range"));
+        let events = events();
+        assert!(verify_stored_chain(&events[3..], 5)
+            .unwrap_err()
+            .to_string()
+            .contains("empty range"));
+    }
+
+    #[test]
+    fn purged_prefix_requires_an_anchor() {
+        let events = events();
+        let retained = &events[2..];
+        assert!(verify_stored_chain(retained, 3)
+            .unwrap_err()
+            .to_string()
+            .contains("predecessor anchor"));
+        assert!(verify_stored_chain(retained, 1)
+            .unwrap_err()
+            .to_string()
+            .contains("requested sequence 1"));
+        assert_eq!(verify_stored_chain(retained, 4).unwrap(), None);
+    }
+
+    #[test]
+    fn modified_payload_hash_and_links_report_the_first_broken_event() {
+        for index in 0..4 {
+            let mut payload = events();
+            payload[index].path = Some("/tampered".into());
+            assert_eq!(
+                verify_stored_chain(&payload, 2).unwrap(),
+                Some(index as u64 + 1)
+            );
+            let mut hash = events();
+            hash[index].hash = Some("tampered".into());
+            assert_eq!(
+                verify_stored_chain(&hash, 2).unwrap(),
+                Some(index as u64 + 1)
+            );
+        }
+        let mut events = events();
+        events[1].previous_hash = Some("wrong-anchor".into());
+        assert_eq!(verify_stored_chain(&events, 2).unwrap(), Some(2));
+    }
+
+    #[test]
+    fn genesis_anchor_cannot_claim_a_predecessor() {
+        let mut chain = AuditChain::resume("verification-test".into(), "forged".into(), 0);
+        let forged: Vec<_> = events()
+            .into_iter()
+            .take(2)
+            .map(|event| chain.seal(event))
+            .collect();
+        assert_eq!(verify_stored_chain(&forged, 2).unwrap(), Some(1));
+    }
+
+    #[test]
+    fn replaced_anchor_and_resealed_gap_are_detected() {
+        let mut events = events();
+        let mut unrelated = AuditChain::new("another-service".into());
+        events[0] = unrelated.seal(events[0].clone());
+        assert_eq!(verify_stored_chain(&events, 2).unwrap(), Some(2));
+
+        let mut events = self::events();
+        let mut gap = AuditChain::resume(
+            "verification-test".into(),
+            events[1].hash.clone().unwrap(),
+            3,
+        );
+        events[2] = gap.seal(events[2].clone());
+        assert_eq!(verify_stored_chain(&events[..3], 2).unwrap(), Some(4));
     }
 }

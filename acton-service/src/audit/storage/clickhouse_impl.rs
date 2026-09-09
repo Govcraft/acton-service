@@ -272,7 +272,7 @@ impl AuditStorage for ClickHouseAuditStorage {
         let rows = self
             .client
             .query("SELECT ?fields FROM audit_events WHERE sequence >= ? ORDER BY sequence ASC")
-            .bind(from_sequence)
+            .bind(from_sequence.saturating_sub(1))
             .fetch_all::<AuditQueryRow>()
             .await
             .map_err(|e| {
@@ -284,10 +284,7 @@ impl AuditStorage for ClickHouseAuditStorage {
 
         let events: Vec<AuditEvent> = rows.into_iter().map(Into::into).collect();
 
-        match crate::audit::chain::verify_chain(&events) {
-            Ok(()) => Ok(None),
-            Err(e) => Ok(Some(e.sequence)),
-        }
+        super::verify_stored_chain(&events, from_sequence)
     }
 
     async fn query_before(

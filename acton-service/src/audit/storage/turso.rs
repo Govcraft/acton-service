@@ -274,6 +274,9 @@ impl AuditStorage for TursoAuditStorage {
     }
 
     async fn verify_chain(&self, from_sequence: u64) -> Result<Option<u64>, Error> {
+        let query_from = i64::try_from(from_sequence.saturating_sub(1)).map_err(|_| {
+            Error::Internal("Audit verification sequence exceeds the storage range".to_string())
+        })?;
         let conn = self
             .db
             .connect()
@@ -282,7 +285,7 @@ impl AuditStorage for TursoAuditStorage {
         let mut rows = conn
             .query(
                 "SELECT * FROM audit_events WHERE sequence >= ?1 ORDER BY sequence ASC",
-                libsql::params![from_sequence as i64],
+                libsql::params![query_from],
             )
             .await
             .map_err(|e| {
@@ -290,14 +293,13 @@ impl AuditStorage for TursoAuditStorage {
             })?;
 
         let mut events = Vec::new();
-        while let Ok(Some(row)) = rows.next().await {
+        while let Some(row) = rows.next().await.map_err(|e| {
+            Error::Internal(format!("Failed to read events for verification: {}", e))
+        })? {
             events.push(row_to_event(&row)?);
         }
 
-        match crate::audit::chain::verify_chain(&events) {
-            Ok(()) => Ok(None),
-            Err(e) => Ok(Some(e.sequence)),
-        }
+        super::verify_stored_chain(&events, from_sequence)
     }
 }
 
@@ -429,5 +431,96 @@ impl super::lazy::InitializableStorage for TursoAuditStorage {
 
     fn backend_name() -> &'static str {
         "Turso"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audit::chain::AuditChain;
+
+    async fn storage_with_events(events: &[AuditEvent]) -> (TursoAuditStorage, tempfile::TempDir) {
+        // The adapter opens a fresh connection per operation, so use a shared
+        // temporary database instead of a connection-local :memory: database.
+        let directory = tempfile::tempdir().expect("create test directory");
+        let database = libsql::Builder::new_local(directory.path().join("audit.db"))
+            .build()
+            .await
+            .expect("create temporary database");
+        let storage = TursoAuditStorage::new(Arc::new(database));
+        storage.initialize().await.expect("initialize audit schema");
+        for event in events {
+            storage.append(event).await.expect("append audit event");
+        }
+        (storage, directory)
+    }
+
+    fn sealed_events() -> Vec<AuditEvent> {
+        let mut chain = AuditChain::new("verification-test".to_string());
+        (0..5)
+            .map(|offset| {
+                let mut event = AuditEvent::new(
+                    AuditEventKind::HttpRequest,
+                    AuditSeverity::Informational,
+                    "verification-test".to_string(),
+                );
+                event.timestamp = DateTime::from_timestamp(1_700_000_000 + offset, 0)
+                    .expect("valid test timestamp");
+                chain.seal(event)
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn verifies_full_chain_and_anchored_suffixes() {
+        let (storage, _directory) = storage_with_events(&sealed_events()).await;
+        for from in [0, 1, 2, 3, 5] {
+            assert_eq!(storage.verify_chain(from).await.unwrap(), None);
+        }
+    }
+
+    #[tokio::test]
+    async fn reports_tampered_suffix_content() {
+        let mut events = sealed_events();
+        events[2].path = Some("/tampered".to_string());
+        let (storage, _directory) = storage_with_events(&events).await;
+        assert_eq!(storage.verify_chain(3).await.unwrap(), Some(3));
+    }
+
+    #[tokio::test]
+    async fn reports_broken_link_to_predecessor() {
+        let mut events = sealed_events();
+        events[2].previous_hash = Some("wrong-predecessor".to_string());
+        let (storage, _directory) = storage_with_events(&events).await;
+        assert_eq!(storage.verify_chain(3).await.unwrap(), Some(3));
+    }
+
+    #[tokio::test]
+    async fn rejects_empty_verification_ranges() {
+        let (storage, _directory) = storage_with_events(&[]).await;
+        assert!(storage.verify_chain(0).await.is_err());
+        assert!(storage.verify_chain(1).await.is_err());
+        let (storage, _directory) = storage_with_events(&sealed_events()).await;
+        assert!(storage.verify_chain(6).await.is_err());
+        assert!(storage.verify_chain(20).await.is_err());
+        assert!(storage.verify_chain(u64::MAX).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn purged_prefix_requires_a_retained_predecessor() {
+        let events = sealed_events();
+        let (storage, _directory) = storage_with_events(&events).await;
+        assert_eq!(storage.purge_before(events[2].timestamp).await.unwrap(), 2);
+        assert!(storage.verify_chain(1).await.is_err());
+        assert!(storage.verify_chain(3).await.is_err());
+        assert_eq!(storage.verify_chain(4).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn reports_missing_event_inside_suffix() {
+        let mut events = sealed_events();
+        events.remove(3);
+        let (storage, _directory) = storage_with_events(&events).await;
+        assert_eq!(storage.verify_chain(3).await.unwrap(), Some(5));
     }
 }
