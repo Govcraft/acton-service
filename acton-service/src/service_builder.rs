@@ -4343,7 +4343,10 @@ mod optional_auth_tests {
         };
         #[cfg(feature = "audit")]
         {
-            config.audit.enabled = false;
+            config.audit = Some(crate::audit::AuditConfig {
+                enabled: false,
+                ..Default::default()
+            });
         }
         config.middleware.cors_mode = "disabled".into();
         let routes = VersionedRoutes::WithoutState(Router::new().route(
