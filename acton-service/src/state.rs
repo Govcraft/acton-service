@@ -99,6 +99,8 @@ where
     /// Audit logger for emitting audit events
     #[cfg(feature = "audit")]
     audit_logger: Option<crate::audit::AuditLogger>,
+    #[cfg(feature = "audit")]
+    audit_storage: Option<Arc<dyn crate::audit::AuditStorage>>,
 
     /// BLAKE3 fingerprint of the active (redacted) configuration (NIST CM-3)
     #[cfg(feature = "audit")]
@@ -149,6 +151,8 @@ where
             #[cfg(feature = "audit")]
             audit_logger: None,
             #[cfg(feature = "audit")]
+            audit_storage: None,
+            #[cfg(feature = "audit")]
             config_fingerprint: None,
             #[cfg(feature = "accounts")]
             account_service: None,
@@ -189,6 +193,8 @@ where
             clickhouse_client: Arc::new(RwLock::new(None)),
             #[cfg(feature = "audit")]
             audit_logger: None,
+            #[cfg(feature = "audit")]
+            audit_storage: None,
             #[cfg(feature = "audit")]
             config_fingerprint: None,
             #[cfg(feature = "accounts")]
@@ -520,6 +526,17 @@ where
         self.audit_logger = Some(logger);
     }
 
+    /// The storage attached to the active audit agent, if configured.
+    #[cfg(feature = "audit")]
+    pub fn audit_storage(&self) -> Option<&Arc<dyn crate::audit::AuditStorage>> {
+        self.audit_storage.as_ref()
+    }
+
+    #[cfg(feature = "audit")]
+    pub(crate) fn set_audit_storage(&mut self, storage: Arc<dyn crate::audit::AuditStorage>) {
+        self.audit_storage = Some(storage);
+    }
+
     /// Get the BLAKE3 fingerprint of the active config (NIST CM-3)
     #[cfg(feature = "audit")]
     pub fn config_fingerprint(&self) -> Option<&str> {
@@ -639,6 +656,8 @@ where
 {
     config: Option<Config<T>>,
     enable_tracing: bool,
+    #[cfg(feature = "audit")]
+    audit_storage: Option<Arc<dyn crate::audit::AuditStorage>>,
 
     #[cfg(feature = "database")]
     db_pool: Option<PgPool>,
@@ -663,6 +682,8 @@ where
         Self {
             config: None,
             enable_tracing: true,
+            #[cfg(feature = "audit")]
+            audit_storage: None,
             #[cfg(feature = "database")]
             db_pool: None,
             #[cfg(feature = "cache")]
@@ -675,6 +696,13 @@ where
     /// Set the configuration
     pub fn config(mut self, config: Config<T>) -> Self {
         self.config = Some(config);
+        self
+    }
+
+    /// Attach application-managed audit storage. This does not spawn an audit agent.
+    #[cfg(feature = "audit")]
+    pub fn audit_storage(mut self, storage: Arc<dyn crate::audit::AuditStorage>) -> Self {
+        self.audit_storage = Some(storage);
         self
     }
 
@@ -936,6 +964,8 @@ where
             nats_client,
             #[cfg(feature = "audit")]
             audit_logger: None,
+            #[cfg(feature = "audit")]
+            audit_storage: self.audit_storage,
             #[cfg(feature = "audit")]
             config_fingerprint: None,
             #[cfg(feature = "accounts")]

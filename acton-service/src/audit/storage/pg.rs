@@ -75,15 +75,15 @@ impl PgAuditStorage {
             DO $$
             BEGIN
                 IF NOT EXISTS (
-                    SELECT 1 FROM pg_rules
-                    WHERE rulename = 'audit_no_update' AND tablename = 'audit_events'
+                    SELECT 1 FROM pg_rewrite
+                    WHERE ev_class = 'audit_events'::regclass AND rulename = 'audit_no_update'
                 ) THEN
                     CREATE RULE audit_no_update AS ON UPDATE TO audit_events DO INSTEAD NOTHING;
                 END IF;
 
                 IF NOT EXISTS (
-                    SELECT 1 FROM pg_rules
-                    WHERE rulename = 'audit_no_delete' AND tablename = 'audit_events'
+                    SELECT 1 FROM pg_rewrite
+                    WHERE ev_class = 'audit_events'::regclass AND rulename = 'audit_no_delete'
                 ) THEN
                     CREATE RULE audit_no_delete AS ON DELETE TO audit_events DO INSTEAD NOTHING;
                 END IF;
@@ -147,6 +147,32 @@ impl AuditStorage for PgAuditStorage {
         .map_err(|e| Error::Internal(format!("Failed to fetch latest audit event: {}", e)))?;
 
         Ok(row.map(Into::into))
+    }
+
+    async fn query_sequence(
+        &self,
+        from: u64,
+        to: u64,
+        limit: usize,
+    ) -> Result<Vec<AuditEvent>, Error> {
+        let from = i64::try_from(from)
+            .map_err(|_| Error::Internal("Audit sequence exceeds storage range".into()))?;
+        let to = i64::try_from(to)
+            .map_err(|_| Error::Internal("Audit sequence exceeds storage range".into()))?;
+        let limit = i64::try_from(limit)
+            .map_err(|_| Error::Internal("Audit query limit exceeds storage range".into()))?;
+
+        let rows = sqlx::query_as::<_, AuditEventRow>(
+            "SELECT * FROM audit_events WHERE sequence >= $1 AND sequence <= $2 ORDER BY sequence ASC LIMIT $3",
+        )
+        .bind(from)
+        .bind(to)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| Error::Internal(format!("Failed to query audit events: {}", e)))?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
     }
 
     async fn query_range(
@@ -381,6 +407,19 @@ mod verification_tests {
             .execute(&pool)
             .await
             .unwrap();
+        let shadow_schema = format!("{schema}_shadow");
+        sqlx::query(&format!("CREATE SCHEMA {shadow_schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("SET search_path TO {shadow_schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        PgAuditStorage::new(pool.clone())
+            .initialize()
+            .await
+            .unwrap();
         sqlx::query(&format!("SET search_path TO {schema}"))
             .execute(&pool)
             .await
@@ -397,11 +436,48 @@ mod verification_tests {
                 AuditSeverity::Informational,
                 "postgres-verification-test".to_string(),
             );
-            event.timestamp = DateTime::from_timestamp(1_700_000_000 + offset, 0).unwrap();
+            event.timestamp =
+                DateTime::from_timestamp(1_700_000_000 + offset, 123_456_789).unwrap();
             let event = chain.seal(event);
             storage.append(&event).await.unwrap();
+            assert_eq!(
+                storage.latest().await.unwrap().unwrap().timestamp,
+                event.timestamp
+            );
             events.push(event);
         }
+        // Identically named rules in another schema must not disable protection.
+        assert_eq!(
+            sqlx::query("DELETE FROM audit_events WHERE sequence = 5")
+                .execute(&pool)
+                .await
+                .unwrap()
+                .rows_affected(),
+            0
+        );
+        assert_eq!(
+            sqlx::query("UPDATE audit_events SET path = '/blocked' WHERE sequence = 4")
+                .execute(&pool)
+                .await
+                .unwrap()
+                .rows_affected(),
+            0
+        );
+        assert_eq!(storage.sequence_bounds().await.unwrap(), Some((1, 5)));
+        assert_eq!(
+            storage
+                .query_sequence(2, 4, 2)
+                .await
+                .unwrap()
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        assert_eq!(
+            storage.verify_chain_range(2, 4).await.unwrap(),
+            super::super::AuditVerification::Consistent
+        );
         for from in [0, 1, 2, 3, 5] {
             assert_eq!(storage.verify_chain(from).await.unwrap(), None);
         }
@@ -423,6 +499,10 @@ mod verification_tests {
             .unwrap();
         assert_eq!(storage.verify_chain(4).await.unwrap(), Some(4));
         sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA {shadow_schema} CASCADE"))
             .execute(&pool)
             .await
             .unwrap();

@@ -33,6 +33,7 @@
 //! the `AuditAgent` actor, which processes events sequentially.
 
 use super::event::AuditEvent;
+use chrono::SubsecRound;
 
 /// Prefix marking a hash computed under the v2 (full-coverage) scheme.
 const HASH_V2_PREFIX: &str = "v2:";
@@ -73,12 +74,17 @@ impl AuditChain {
     /// Seal an event by computing its BLAKE3 hash and advancing the chain
     ///
     /// Sets the event's `hash`, `previous_hash`, `sequence`, and `service_name` fields.
+    /// Truncates the timestamp to milliseconds before hashing so all built-in
+    /// storage adapters preserve the canonical timestamp exactly. Previously
+    /// sealed events retain their original verification semantics.
     /// Returns the event with chain fields populated.
     pub fn seal(&mut self, mut event: AuditEvent) -> AuditEvent {
         self.sequence += 1;
         event.sequence = self.sequence;
         event.previous_hash = self.previous_hash.clone();
         event.service_name = self.service_name.clone();
+
+        event.timestamp = event.timestamp.trunc_subsecs(3);
 
         // Compute BLAKE3 hash over canonical fields
         let hash = self.compute_hash(&event);
@@ -532,5 +538,22 @@ mod tests {
             canonical_json(&value),
             r#"{"alpha":[{"x":false,"y":true}],"zeta":{"a":1,"b":2}}"#
         );
+    }
+    #[test]
+    fn seals_at_storage_safe_precision_without_reinterpreting_old_hashes() {
+        let mut event = make_event(AuditEventKind::HttpRequest);
+        event.timestamp = chrono::DateTime::from_timestamp(1_700_000_000, 123_456_789).unwrap();
+        let mut chain = AuditChain::new(event.service_name.clone());
+        let sealed = chain.seal(event.clone());
+        assert_eq!(sealed.timestamp.timestamp_subsec_nanos(), 123_000_000);
+        assert!(verify_chain(&[sealed]).is_ok());
+
+        // Historic exact timestamps still verify if storage preserved them.
+        event.sequence = 1;
+        event.hash = Some(compute_hash_v2(&event));
+        assert!(verify_chain(&[event.clone()]).is_ok());
+        // Precision already lost by historic storage is not guessed or repaired.
+        event.timestamp = event.timestamp.trunc_subsecs(6);
+        assert!(verify_chain(&[event]).is_err());
     }
 }

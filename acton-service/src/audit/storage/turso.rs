@@ -172,6 +172,43 @@ impl AuditStorage for TursoAuditStorage {
         }
     }
 
+    async fn query_sequence(
+        &self,
+        from: u64,
+        to: u64,
+        limit: usize,
+    ) -> Result<Vec<AuditEvent>, Error> {
+        let from = i64::try_from(from)
+            .map_err(|_| Error::Internal("Audit sequence exceeds storage range".into()))?;
+        let to = i64::try_from(to)
+            .map_err(|_| Error::Internal("Audit sequence exceeds storage range".into()))?;
+        let limit = i64::try_from(limit)
+            .map_err(|_| Error::Internal("Audit query limit exceeds storage range".into()))?;
+
+        let conn = self
+            .db
+            .connect()
+            .map_err(|e| Error::Internal(format!("Failed to connect for audit query: {}", e)))?;
+
+        let mut rows = conn
+            .query(
+                "SELECT * FROM audit_events WHERE sequence >= ?1 AND sequence <= ?2 ORDER BY sequence ASC LIMIT ?3",
+                libsql::params![from, to, limit],
+            )
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to query audit events: {}", e)))?;
+
+        let mut events = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to read audit event: {e}")))?
+        {
+            events.push(row_to_event(&row)?);
+        }
+        Ok(events)
+    }
+
     async fn query_range(
         &self,
         from: DateTime<Utc>,
@@ -522,5 +559,45 @@ mod tests {
         events.remove(3);
         let (storage, _directory) = storage_with_events(&events).await;
         assert_eq!(storage.verify_chain(3).await.unwrap(), Some(5));
+    }
+    #[tokio::test]
+    async fn bounded_pages_and_verification_survive_append_and_report_retention() {
+        use super::super::AuditVerification;
+        let events = sealed_events();
+        let (storage, _directory) = storage_with_events(&events[..4]).await;
+        assert_eq!(storage.sequence_bounds().await.unwrap(), Some((1, 4)));
+        let first = storage.query_sequence(1, 4, 2).await.unwrap();
+        assert_eq!(
+            first.iter().map(|event| event.sequence).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        storage.append(&events[4]).await.unwrap();
+        let second = storage.query_sequence(3, 4, 2).await.unwrap();
+        assert_eq!(
+            second
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
+            vec![3, 4]
+        );
+        assert_eq!(
+            storage.verify_chain_range(2, 4).await.unwrap(),
+            AuditVerification::Consistent
+        );
+        assert_eq!(
+            storage.verify_chain_range(2, 6).await.unwrap(),
+            AuditVerification::Incomplete
+        );
+        storage.purge_before(events[2].timestamp).await.unwrap();
+        assert_eq!(storage.sequence_bounds().await.unwrap(), Some((3, 5)));
+        assert_eq!(
+            storage.verify_chain_range(3, 5).await.unwrap(),
+            AuditVerification::Incomplete
+        );
+        assert_eq!(
+            storage.verify_chain_range(4, 5).await.unwrap(),
+            AuditVerification::Consistent
+        );
+        assert!(storage.query_sequence(1, u64::MAX, 1).await.is_err());
     }
 }

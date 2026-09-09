@@ -1,3 +1,12 @@
+# 0.41.0
+
+- Install PostgreSQL audit immutability rules on the actual table even when another schema has identically named rules.
+
+- Seal new events at millisecond timestamp precision so database rounding cannot invalidate their hashes. Historical hashes retain their original verification semantics.
+
+- Expose the active audit storage through application state.
+- Add bounded sequence browsing, retained sequence bounds, and typed bounded chain verification across all audit storage adapters.
+
 # Changelog
 
 All notable changes to this project will be documented in this file.

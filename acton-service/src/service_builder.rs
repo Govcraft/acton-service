@@ -969,6 +969,8 @@ where
             None
         };
 
+        #[cfg(feature = "audit")]
+        let mut active_audit_storage = None;
         // Spawn audit agent if configured
         #[cfg(feature = "audit")]
         let audit_logger: Option<crate::audit::AuditLogger> = {
@@ -1011,12 +1013,13 @@ where
                                 match crate::audit::AuditAgent::spawn(
                                     runtime,
                                     audit_config,
-                                    storage,
+                                    storage.clone(),
                                     service_name.clone(),
                                 )
                                 .await
                                 {
                                     Ok(handle) => {
+                                        active_audit_storage = storage;
                                         tracing::info!("Audit agent spawned");
                                         Some(crate::audit::AuditLogger::new(
                                             handle,
@@ -1334,6 +1337,9 @@ where
             #[cfg(feature = "audit")]
             if let Some(ref logger) = audit_logger {
                 state.set_audit_logger(logger.clone());
+                if let Some(storage) = active_audit_storage {
+                    state.set_audit_storage(storage);
+                }
             }
 
             #[cfg(feature = "audit")]
