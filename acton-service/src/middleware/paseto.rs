@@ -134,7 +134,8 @@ impl PasetoAuth {
     ///
     /// Matching requests continue without claims; downstream authorization must
     /// enforce anonymous access. A present `Authorization` header is always
-    /// validated unless an existing public-path or infrastructure bypass applies.
+    /// validated unless an existing public-path, infrastructure, or verified
+    /// mTLS caller bypass applies.
     pub fn with_optional_auth(mut self, predicate: fn(&http::Method, &str) -> bool) -> Self {
         self.optional_auth = Some(predicate);
         self
