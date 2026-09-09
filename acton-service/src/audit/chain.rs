@@ -199,20 +199,31 @@ fn compute_hash_v2(event: &AuditEvent) -> String {
 
 /// Verify a chain of events is intact
 ///
-/// Recomputes hashes for the given events (which must be in sequence order)
+/// Recomputes hashes for the given events (which must start at sequence 1
+/// with no predecessor and have consecutive sequence numbers)
 /// and checks they match. Returns `Ok(())` if the chain is valid, or
 /// `Err(ChainVerificationError)` with the sequence number of the first
 /// broken link.
 pub fn verify_chain(events: &[AuditEvent]) -> Result<(), ChainVerificationError> {
-    if events.is_empty() {
-        return Ok(());
-    }
+    verify_chain_with_anchor(events, 0, None)
+}
 
-    let mut expected_prev: Option<String> = None;
+/// Verify consecutive events against an explicit predecessor sequence and hash.
+/// The caller is responsible for the anchor's provenance. This checks local
+/// consistency only, not completeness against an independently trusted head.
+pub(super) fn verify_chain_with_anchor(
+    events: &[AuditEvent],
+    previous_sequence: u64,
+    previous_hash: Option<&str>,
+) -> Result<(), ChainVerificationError> {
+    let mut expected_prev = previous_hash.map(str::to_owned);
+    let mut previous_sequence = previous_sequence;
 
     for event in events {
         // Check previous_hash linkage
-        if event.previous_hash != expected_prev {
+        if previous_sequence.checked_add(1) != Some(event.sequence)
+            || event.previous_hash != expected_prev
+        {
             return Err(ChainVerificationError {
                 sequence: event.sequence,
                 expected_previous_hash: expected_prev,
@@ -231,6 +242,7 @@ pub fn verify_chain(events: &[AuditEvent]) -> Result<(), ChainVerificationError>
         }
 
         expected_prev = event.hash.clone();
+        previous_sequence = event.sequence;
     }
 
     Ok(())
@@ -422,15 +434,19 @@ mod tests {
 
     /// Builds an event carrying every field the v1 hash ignored.
     fn make_rich_event() -> AuditEvent {
-        let mut event = make_event(AuditEventKind::HttpRequest).with_source(
-            crate::audit::event::AuditSource {
+        let mut event =
+            make_event(AuditEventKind::HttpRequest).with_source(crate::audit::event::AuditSource {
                 ip: Some("198.51.100.42".to_string()),
                 user_agent: Some("curl/8.0".to_string()),
                 subject: Some("operator-1".to_string()),
                 request_id: Some("req_abc".to_string()),
-            },
+            });
+        event = event.with_http(
+            "POST".to_string(),
+            "/admin/x".to_string(),
+            Some(200),
+            Some(12),
         );
-        event = event.with_http("POST".to_string(), "/admin/x".to_string(), Some(200), Some(12));
         event.metadata = Some(serde_json::json!({"roles": ["auditor"], "action": "readX"}));
         event
     }

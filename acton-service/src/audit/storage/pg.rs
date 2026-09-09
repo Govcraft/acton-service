@@ -218,10 +218,13 @@ impl AuditStorage for PgAuditStorage {
     }
 
     async fn verify_chain(&self, from_sequence: u64) -> Result<Option<u64>, Error> {
+        let query_from = i64::try_from(from_sequence.saturating_sub(1)).map_err(|_| {
+            Error::Internal("Audit verification sequence exceeds the storage range".to_string())
+        })?;
         let rows = sqlx::query_as::<_, AuditEventRow>(
             "SELECT * FROM audit_events WHERE sequence >= $1 ORDER BY sequence ASC",
         )
-        .bind(from_sequence as i64)
+        .bind(query_from)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| {
@@ -233,10 +236,7 @@ impl AuditStorage for PgAuditStorage {
 
         let events: Vec<AuditEvent> = rows.into_iter().map(Into::into).collect();
 
-        match crate::audit::chain::verify_chain(&events) {
-            Ok(()) => Ok(None),
-            Err(e) => Ok(Some(e.sequence)),
-        }
+        super::verify_stored_chain(&events, from_sequence)
     }
 }
 
@@ -358,5 +358,74 @@ impl From<AuditEventRow> for AuditEvent {
             previous_hash: row.previous_hash,
             sequence: row.sequence as u64,
         }
+    }
+}
+
+#[cfg(test)]
+mod verification_tests {
+    use super::*;
+    use crate::audit::chain::AuditChain;
+    use crate::audit::event::{AuditEventKind, AuditSeverity};
+
+    #[tokio::test]
+    #[ignore = "requires AUDIT_TEST_DATABASE_URL pointing to a dedicated PostgreSQL test database"]
+    async fn verifies_postgres_suffix_and_retention_boundaries() {
+        let url = std::env::var("AUDIT_TEST_DATABASE_URL").expect("dedicated test database URL");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .expect("connect to test database");
+        let schema = format!("audit_verify_{}", uuid::Uuid::new_v4().simple());
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("SET search_path TO {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        let storage = PgAuditStorage::new(pool.clone());
+        storage.initialize().await.unwrap();
+        assert!(storage.verify_chain(1).await.is_err());
+
+        let mut chain = AuditChain::new("postgres-verification-test".to_string());
+        let mut events = Vec::new();
+        for offset in 0..5 {
+            let mut event = AuditEvent::new(
+                AuditEventKind::HttpRequest,
+                AuditSeverity::Informational,
+                "postgres-verification-test".to_string(),
+            );
+            event.timestamp = DateTime::from_timestamp(1_700_000_000 + offset, 0).unwrap();
+            let event = chain.seal(event);
+            storage.append(&event).await.unwrap();
+            events.push(event);
+        }
+        for from in [0, 1, 2, 3, 5] {
+            assert_eq!(storage.verify_chain(from).await.unwrap(), None);
+        }
+        assert!(storage.verify_chain(6).await.is_err());
+        assert!(storage.verify_chain(u64::MAX).await.is_err());
+        assert_eq!(storage.purge_before(events[2].timestamp).await.unwrap(), 2);
+        assert!(storage.verify_chain(1).await.is_err());
+        assert!(storage.verify_chain(3).await.is_err());
+        assert_eq!(storage.verify_chain(4).await.unwrap(), None);
+
+        // Simulate privileged tampering that bypasses the immutability rule.
+        sqlx::query("DROP RULE audit_no_update ON audit_events")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE audit_events SET path = '/tampered' WHERE sequence = 4")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(storage.verify_chain(4).await.unwrap(), Some(4));
+        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
     }
 }

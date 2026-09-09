@@ -149,8 +149,10 @@ impl AuditStorage for MssqlAuditStorage {
     async fn purge_before(&self, cutoff: DateTime<Utc>) -> Result<u64, Error> {
         execute(&self.pool,"SET XACT_ABORT ON; BEGIN TRANSACTION; DISABLE TRIGGER audit_no_delete ON audit_events; DELETE FROM audit_events WHERE [timestamp]<@P1; ENABLE TRIGGER audit_no_delete ON audit_events; COMMIT TRANSACTION",&[&cutoff]).await
     }
-    async fn verify_chain(&self, from: u64) -> Result<Option<u64>, Error> {
-        let from = from as i64;
+    async fn verify_chain(&self, from_sequence: u64) -> Result<Option<u64>, Error> {
+        let from = i64::try_from(from_sequence.saturating_sub(1)).map_err(|_| {
+            Error::Internal("Audit verification sequence exceeds the storage range".to_string())
+        })?;
         let events: Vec<_> = query(
             &self.pool,
             "SELECT * FROM audit_events WHERE sequence>=@P1 ORDER BY sequence",
@@ -160,9 +162,7 @@ impl AuditStorage for MssqlAuditStorage {
         .iter()
         .map(decode)
         .collect::<Result<_, _>>()?;
-        Ok(crate::audit::chain::verify_chain(&events)
-            .err()
-            .map(|e| e.sequence))
+        super::verify_stored_chain(&events, from_sequence)
     }
 }
 

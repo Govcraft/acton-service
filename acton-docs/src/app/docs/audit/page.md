@@ -216,18 +216,28 @@ Every audit event is sealed into a BLAKE3 hash chain. Each event's hash covers:
 
 ### Verifying the Chain
 
+Use the storage method for partial ranges. It fetches the immediate predecessor
+alongside the requested events and verifies its content hash, consecutive
+sequence numbers, and every hash and link in the range.
+
 ```rust
-use acton_service::audit::{verify_chain, AuditEvent};
-
-// Fetch events from storage
-let events: Vec<AuditEvent> = storage.query_range(from, to, 1000).await?;
-
-// Verify the hash chain is intact
-match verify_chain(&events) {
-    Ok(()) => println!("Chain integrity verified"),
-    Err(e) => eprintln!("Tamper detected: {}", e),
+// Sequence 1 starts at genesis; sequence 0 is an alias for 1.
+match storage.verify_chain(from_sequence).await {
+    Ok(None) => println!("Requested range is consistent with its stored anchor"),
+    Ok(Some(sequence)) => eprintln!("Broken event at sequence {sequence}"),
+    Err(error) => eprintln!("Verification unavailable: {error}"),
 }
 ```
+
+An empty range, missing requested start, or unavailable predecessor returns an
+error. If retention has purged the predecessor, verification at that boundary
+requires a trusted checkpoint; the built-in adapters do not store checkpoints.
+A later range can still be checked against its retained predecessor.
+
+The standalone `audit::verify_chain(&events)` function requires a complete,
+consecutive chain starting at sequence 1 with no predecessor. Its empty-slice
+result is vacuously successful and does not establish that any history exists.
+Neither method proves completeness against an independently trusted chain head.
 
 The chain detects:
 - **Modified events**: Hash won't match recalculated value

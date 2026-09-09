@@ -343,10 +343,13 @@ impl AuditStorage for SurrealAuditStorage {
     }
 
     async fn verify_chain(&self, from_sequence: u64) -> Result<Option<u64>, Error> {
+        let query_from = i64::try_from(from_sequence.saturating_sub(1)).map_err(|_| {
+            Error::Internal("Audit verification sequence exceeds the storage range".to_string())
+        })?;
         let mut result = self
             .client
             .query("SELECT * FROM audit_events WHERE sequence >= $seq ORDER BY sequence ASC")
-            .bind(("seq", from_sequence as i64))
+            .bind(("seq", query_from))
             .await
             .map_err(|e| {
                 Error::Internal(format!("Failed to fetch events for verification: {}", e))
@@ -358,10 +361,7 @@ impl AuditStorage for SurrealAuditStorage {
 
         let events: Vec<AuditEvent> = rows.into_iter().map(Into::into).collect();
 
-        match crate::audit::chain::verify_chain(&events) {
-            Ok(()) => Ok(None),
-            Err(e) => Ok(Some(e.sequence)),
-        }
+        super::verify_stored_chain(&events, from_sequence)
     }
 }
 
