@@ -38,6 +38,7 @@ pub struct JwtAuth {
     key_manager: Option<Arc<KeyManager>>,
     /// Path prefixes that bypass token authentication.
     public_paths: Arc<[String]>,
+    optional_auth: Option<fn(&http::Method, &str) -> bool>,
 }
 
 impl JwtAuth {
@@ -111,7 +112,19 @@ impl JwtAuth {
             #[cfg(feature = "auth")]
             key_manager: None,
             public_paths: config.public_paths.clone().into(),
+            optional_auth: None,
         })
+    }
+
+    /// Permit absent credentials when the application predicate matches.
+    ///
+    /// Matching requests continue without claims; downstream authorization must
+    /// enforce anonymous access. A present `Authorization` header is always
+    /// validated unless an existing public-path, infrastructure, or verified
+    /// mTLS caller bypass applies.
+    pub fn with_optional_auth(mut self, predicate: fn(&http::Method, &str) -> bool) -> Self {
+        self.optional_auth = Some(predicate);
+        self
     }
 
     /// Set the token revocation checker
@@ -161,6 +174,15 @@ impl JwtAuth {
                 .public_paths
                 .iter()
                 .any(|p| path.starts_with(p.as_str()))
+        {
+            return Ok(next.run(request).await);
+        }
+
+        // Absence is distinct from malformed or invalid supplied credentials.
+        if !request.headers().contains_key(http::header::AUTHORIZATION)
+            && auth
+                .optional_auth
+                .is_some_and(|predicate| predicate(request.method(), path))
         {
             return Ok(next.run(request).await);
         }

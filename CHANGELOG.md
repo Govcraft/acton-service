@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.40.0] - 2026-09-09
+
+### Added
+
+- `ServiceBuilder::with_optional_token_auth` selects HTTP routes where absent
+  bearer credentials continue to downstream authorization. PASETO and JWT
+  still validate supplied credentials, retain authenticated claims, and run in
+  the existing audit, rate-limit, and key-rotation pipeline. Matching routes
+  receive no synthetic identity. Direct middleware users can opt in with
+  `PasetoAuth::with_optional_auth` and `JwtAuth::with_optional_auth`.
+
 ## [acton-service-v0.39.0] - 2026-08-28
 
 This release adds a SAML 2.0 service provider so services can federate with
