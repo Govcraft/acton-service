@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.42.0] - 2026-09-09
+
+### Changed
+
+- AuditEvent.id is now an mti-backed audit_ TypeID using UUIDv7 for new events. Legacy UUID input and stored UUID bytes remain supported without changing historical v1/v2 hashes. Public JSON identifiers now use canonical TypeID strings.
+
+### Fixed
+
+- Use SurrealDB 3 record creation syntax and native record ID decoding so persisted audit events retain their original identities and hashes.
+- Surface audit query statement errors and preserve delete protection across retention failures.
+- Add an embedded SurrealDB regression covering complete event round-trips, bounded browsing, verification, duplicate-write errors, and retention.
+
 ## [acton-service-v0.41.0] - 2026-09-09
 
 ### Added

@@ -66,8 +66,9 @@ fn decode(row: &tiberius::Row) -> Result<AuditEvent, Error> {
     };
     Ok(AuditEvent {
         id: row
-            .get("id")
-            .ok_or_else(|| Error::Internal("missing id".to_string()))?,
+            .get::<uuid::Uuid, _>("id")
+            .ok_or_else(|| Error::Internal("missing id".to_string()))?
+            .into(),
         timestamp: row
             .get("timestamp")
             .ok_or_else(|| Error::Internal("missing timestamp".to_string()))?,
@@ -95,7 +96,7 @@ fn decode(row: &tiberius::Row) -> Result<AuditEvent, Error> {
 #[async_trait]
 impl AuditStorage for MssqlAuditStorage {
     async fn append(&self, e: &AuditEvent) -> Result<(), Error> {
-        let id = e.id;
+        let id = e.id.as_uuid();
         let kind = e.kind.to_string();
         let severity = e.severity.as_syslog_severity() as i16;
         let status = e.status_code.map(|v| v as i16);

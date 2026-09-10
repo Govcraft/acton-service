@@ -114,7 +114,7 @@ impl AuditStorage for PgAuditStorage {
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
             "#,
         )
-        .bind(event.id)
+        .bind(event.id.as_uuid())
         .bind(event.timestamp)
         .bind(event.kind.to_string())
         .bind(event.severity.as_syslog_severity() as i16)
@@ -364,7 +364,7 @@ impl From<AuditEventRow> for AuditEvent {
         };
 
         AuditEvent {
-            id: row.id,
+            id: row.id.into(),
             timestamp: row.timestamp,
             kind,
             severity,
@@ -438,6 +438,9 @@ mod verification_tests {
             );
             event.timestamp =
                 DateTime::from_timestamp(1_700_000_000 + offset, 123_456_789).unwrap();
+            if offset == 0 {
+                event.id = "dca93650-9d2c-4ca8-a00f-79a63467c187".parse().unwrap();
+            }
             let event = chain.seal(event);
             storage.append(&event).await.unwrap();
             assert_eq!(

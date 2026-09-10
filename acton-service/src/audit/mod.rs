@@ -27,6 +27,7 @@ pub mod config_audit;
 #[cfg(feature = "auth")]
 pub mod decorators;
 pub mod event;
+pub mod id;
 pub(crate) mod failure_tracker;
 pub mod logger;
 pub mod middleware;
@@ -51,6 +52,7 @@ pub use decorators::AuditedOAuthProvider;
 #[cfg(feature = "auth")]
 pub use decorators::{AuditedApiKeyStorage, AuditedRefreshStorage};
 pub use event::{AuditEvent, AuditEventKind, AuditSeverity, AuditSource};
+pub use id::{AuditEventId, AuditEventIdError};
 pub use logger::AuditLogger;
 pub use middleware::{audit_layer, AuditRoute};
 pub use storage::AuditStorage;

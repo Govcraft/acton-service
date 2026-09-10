@@ -182,7 +182,7 @@ fn compute_hash_v2(event: &AuditEvent) -> String {
 
     frame(Some(event.sequence.to_le_bytes().as_ref()));
     frame(event.previous_hash.as_deref().map(str::as_bytes));
-    frame(Some(event.id.as_bytes()));
+    frame(Some(event.id.as_uuid().as_bytes()));
     frame(Some(event.timestamp.to_rfc3339().as_bytes()));
     frame(Some(event.kind.to_string().as_bytes()));
     frame(Some(&[event.severity.as_syslog_severity()]));
@@ -278,7 +278,7 @@ fn compute_hash_v1(event: &AuditEvent) -> String {
         hasher.update(prev.as_bytes());
     }
 
-    hasher.update(event.id.as_bytes());
+    hasher.update(event.id.as_uuid().as_bytes());
     hasher.update(event.timestamp.to_rfc3339().as_bytes());
     hasher.update(event.kind.to_string().as_bytes());
     hasher.update(&[event.severity.as_syslog_severity()]);
@@ -551,9 +551,27 @@ mod tests {
         // Historic exact timestamps still verify if storage preserved them.
         event.sequence = 1;
         event.hash = Some(compute_hash_v2(&event));
-        assert!(verify_chain(&[event.clone()]).is_ok());
+        assert!(verify_chain(std::slice::from_ref(&event)).is_ok());
         // Precision already lost by historic storage is not guessed or repaired.
         event.timestamp = event.timestamp.trunc_subsecs(6);
         assert!(verify_chain(&[event]).is_err());
+    }
+    #[test]
+    fn legacy_uuid_archives_preserve_v1_and_v2_hashes_after_typeid_conversion() {
+        for archived in [
+            include_str!("fixtures/legacy-v1.json"),
+            include_str!("fixtures/legacy-v2.json"),
+        ] {
+            let event: AuditEvent = serde_json::from_str(archived).unwrap();
+            let hash = event.hash.clone();
+            assert_eq!(event.id.as_uuid().get_version_num(), 4);
+            assert!(event.id.as_str().starts_with("audit_"));
+            assert!(verify_chain(std::slice::from_ref(&event)).is_ok());
+            let encoded = serde_json::to_string(&event).unwrap();
+            let restored: AuditEvent = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(restored.hash, hash);
+            assert_eq!(restored.id, event.id);
+            assert!(verify_chain(&[restored]).is_ok());
+        }
     }
 }
