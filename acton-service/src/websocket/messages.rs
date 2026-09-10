@@ -160,7 +160,7 @@ mod tests {
     #[test]
     fn test_leave_room_request() {
         let conn_id = ConnectionId::new();
-        let request = LeaveRoomRequest::new("test-room", conn_id);
+        let request = LeaveRoomRequest::new("test-room", conn_id.clone());
         assert_eq!(request.room_id.as_str(), "test-room");
         assert_eq!(request.connection_id, conn_id);
     }
@@ -169,7 +169,7 @@ mod tests {
     fn test_broadcast_excluding_sender() {
         let sender_id = ConnectionId::new();
         let msg = Message::Text("hello".into());
-        let broadcast = BroadcastToRoom::excluding_sender("room1", msg, sender_id);
+        let broadcast = BroadcastToRoom::excluding_sender("room1", msg, sender_id.clone());
         assert_eq!(broadcast.exclude_sender, Some(sender_id));
     }
 }

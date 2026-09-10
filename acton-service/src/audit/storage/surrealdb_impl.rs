@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use surrealdb::types::SurrealValue;
+use surrealdb::types::{RecordId, RecordIdKey, SurrealValue};
 
 use super::AuditStorage;
 use crate::audit::event::{AuditEvent, AuditEventKind, AuditSeverity, AuditSource};
@@ -59,6 +59,7 @@ impl SurrealAuditStorage {
                 "#,
             )
             .await
+            .and_then(|response| response.check())
             .map_err(|e| Error::Internal(format!("Failed to initialize audit schema: {}", e)))?;
 
         Ok(())
@@ -90,7 +91,7 @@ struct AuditRecord {
 /// Deserializable record from SurrealDB queries
 #[derive(Deserialize, SurrealValue)]
 struct AuditRow {
-    id: serde_json::Value,
+    id: RecordId,
     timestamp: String,
     kind: String,
     severity: i64,
@@ -109,39 +110,31 @@ struct AuditRow {
     sequence: i64,
 }
 
-impl From<AuditRow> for AuditEvent {
-    fn from(row: AuditRow) -> Self {
-        // Extract the UUID from the SurrealDB record ID
-        let id_str = match &row.id {
-            serde_json::Value::String(s) => {
-                // Handle "audit_events:uuid" format
-                s.split(':').next_back().unwrap_or(s).to_string()
-            }
-            serde_json::Value::Object(obj) => {
-                // Handle { "tb": "audit_events", "id": { "String": "uuid" } } format
-                obj.get("id")
-                    .and_then(|v| match v {
-                        serde_json::Value::String(s) => Some(s.clone()),
-                        serde_json::Value::Object(inner) => inner
-                            .get("String")
-                            .and_then(|s| s.as_str().map(String::from)),
-                        _ => None,
-                    })
-                    .unwrap_or_default()
-            }
-            _ => String::new(),
-        };
-        let id = uuid::Uuid::parse_str(&id_str).unwrap_or_else(|_| uuid::Uuid::new_v4());
+impl TryFrom<AuditRow> for AuditEvent {
+    type Error = Error;
 
+    fn try_from(row: AuditRow) -> Result<Self, Error> {
+        let RecordIdKey::String(id_str) = row.id.key else {
+            return Err(Error::Internal(
+                "Audit record ID must contain a UUID string key".into(),
+            ));
+        };
+        let id = uuid::Uuid::parse_str(&id_str)
+            .map_err(|e| Error::Internal(format!("Invalid stored audit UUID: {e}")))?;
         let timestamp = DateTime::parse_from_rfc3339(&row.timestamp)
             .map(|dt| dt.with_timezone(&Utc))
-            .unwrap_or_else(|_| Utc::now());
+            .map_err(|e| Error::Internal(format!("Invalid stored audit timestamp: {e}")))?;
+        let metadata = row
+            .metadata
+            .map(|value| serde_json::from_str(&value))
+            .transpose()
+            .map_err(|e| Error::Internal(format!("Invalid stored audit metadata: {e}")))?;
 
         let kind = parse_event_kind(&row.kind);
         let severity = parse_severity(row.severity as i16);
 
-        AuditEvent {
-            id,
+        Ok(AuditEvent {
+            id: id.into(),
             timestamp,
             kind,
             severity,
@@ -156,11 +149,11 @@ impl From<AuditRow> for AuditEvent {
             status_code: row.status_code.map(|c| c as u16),
             duration_ms: row.duration_ms.map(|d| d as u64),
             service_name: row.service_name,
-            metadata: row.metadata.and_then(|s| serde_json::from_str(&s).ok()),
+            metadata,
             hash: Some(row.hash),
             previous_hash: row.previous_hash,
             sequence: row.sequence as u64,
-        }
+        })
     }
 }
 
@@ -168,7 +161,7 @@ impl From<AuditRow> for AuditEvent {
 impl AuditStorage for SurrealAuditStorage {
     async fn append(&self, event: &AuditEvent) -> Result<(), Error> {
         let record = AuditRecord {
-            id: event.id.to_string(),
+            id: event.id.as_uuid().to_string(),
             timestamp: event.timestamp.to_rfc3339(),
             kind: event.kind.to_string(),
             severity: event.severity.as_syslog_severity() as i64,
@@ -191,13 +184,14 @@ impl AuditStorage for SurrealAuditStorage {
         };
 
         // Use owned String for the record ID to satisfy .bind() requirements
-        let record_id = event.id.to_string();
+        let record_id = event.id.as_uuid().to_string();
 
         self.client
-            .query("CREATE type::thing('audit_events', $id) CONTENT $data")
+            .query("CREATE type::record('audit_events', $id) CONTENT $data")
             .bind(("id", record_id))
             .bind(("data", record))
             .await
+            .and_then(|response| response.check())
             .map_err(|e| Error::Internal(format!("Failed to append audit event: {}", e)))?;
 
         Ok(())
@@ -208,13 +202,14 @@ impl AuditStorage for SurrealAuditStorage {
             .client
             .query("SELECT * FROM audit_events ORDER BY sequence DESC LIMIT 1")
             .await
+            .and_then(|response| response.check())
             .map_err(|e| Error::Internal(format!("Failed to query latest audit event: {}", e)))?;
 
         let rows: Vec<AuditRow> = result
             .take(0)
             .map_err(|e| Error::Internal(format!("Failed to deserialize audit event: {}", e)))?;
 
-        Ok(rows.into_iter().next().map(Into::into))
+        rows.into_iter().next().map(TryInto::try_into).transpose()
     }
 
     async fn query_sequence(
@@ -237,13 +232,14 @@ impl AuditStorage for SurrealAuditStorage {
             .bind(("to", to))
             .bind(("limit", limit))
             .await
+            .and_then(|response| response.check())
             .map_err(|e| Error::Internal(format!("Failed to query audit events: {}", e)))?;
 
         let rows: Vec<AuditRow> = result
             .take(0)
             .map_err(|e| Error::Internal(format!("Failed to deserialize audit events: {}", e)))?;
 
-        Ok(rows.into_iter().map(Into::into).collect())
+        rows.into_iter().map(TryInto::try_into).collect()
     }
 
     async fn query_range(
@@ -262,13 +258,14 @@ impl AuditStorage for SurrealAuditStorage {
             .bind(("to", to_str))
             .bind(("limit", limit as i64))
             .await
+            .and_then(|response| response.check())
             .map_err(|e| Error::Internal(format!("Failed to query audit events: {}", e)))?;
 
         let rows: Vec<AuditRow> = result
             .take(0)
             .map_err(|e| Error::Internal(format!("Failed to deserialize audit events: {}", e)))?;
 
-        Ok(rows.into_iter().map(Into::into).collect())
+        rows.into_iter().map(TryInto::try_into).collect()
     }
 
     async fn query_before(
@@ -284,6 +281,7 @@ impl AuditStorage for SurrealAuditStorage {
             .bind(("cutoff", cutoff_str))
             .bind(("limit", limit as i64))
             .await
+            .and_then(|response| response.check())
             .map_err(|e| {
                 Error::Internal(format!("Failed to query audit events before cutoff: {}", e))
             })?;
@@ -292,31 +290,11 @@ impl AuditStorage for SurrealAuditStorage {
             .take(0)
             .map_err(|e| Error::Internal(format!("Failed to deserialize audit events: {}", e)))?;
 
-        Ok(rows.into_iter().map(Into::into).collect())
+        rows.into_iter().map(TryInto::try_into).collect()
     }
 
     async fn purge_before(&self, cutoff: DateTime<Utc>) -> Result<u64, Error> {
         let cutoff_str = cutoff.to_rfc3339();
-
-        // Temporarily allow deletes
-        self.client
-            .query(
-                r#"
-                DEFINE TABLE audit_events SCHEMAFUL
-                    PERMISSIONS
-                        FOR select FULL
-                        FOR create FULL
-                        FOR update NONE
-                        FOR delete FULL
-                "#,
-            )
-            .await
-            .map_err(|e| {
-                Error::Internal(format!(
-                    "Failed to temporarily allow deletes on audit_events: {}",
-                    e
-                ))
-            })?;
 
         // Count events to delete first (DELETE doesn't return count directly)
         let mut count_result = self
@@ -324,6 +302,7 @@ impl AuditStorage for SurrealAuditStorage {
             .query("SELECT count() AS total FROM audit_events WHERE timestamp < $cutoff GROUP ALL")
             .bind(("cutoff", cutoff_str.clone()))
             .await
+            .and_then(|response| response.check())
             .map_err(|e| {
                 Error::Internal(format!("Failed to count audit events for purge: {}", e))
             })?;
@@ -333,22 +312,46 @@ impl AuditStorage for SurrealAuditStorage {
             total: i64,
         }
 
-        let count_rows: Vec<CountRow> = count_result.take(0).unwrap_or_default();
+        let count_rows: Vec<CountRow> = count_result
+            .take(0)
+            .map_err(|e| Error::Internal(format!("Failed to decode audit purge count: {e}")))?;
         let total = count_rows.first().map(|r| r.total).unwrap_or(0);
+
+        // Temporarily allow deletes
+        self.client
+            .query(
+                r#"
+                DEFINE TABLE OVERWRITE audit_events SCHEMAFUL
+                    PERMISSIONS
+                        FOR select FULL
+                        FOR create FULL
+                        FOR update NONE
+                        FOR delete FULL
+                "#,
+            )
+            .await
+            .and_then(|response| response.check())
+            .map_err(|e| {
+                Error::Internal(format!(
+                    "Failed to temporarily allow deletes on audit_events: {}",
+                    e
+                ))
+            })?;
 
         // Perform the delete
         let delete_result = self
             .client
             .query("DELETE FROM audit_events WHERE timestamp < $cutoff")
             .bind(("cutoff", cutoff_str))
-            .await;
+            .await
+            .and_then(|response| response.check());
 
         // Reinstate immutability regardless of delete outcome
         let reinstate_result = self
             .client
             .query(
                 r#"
-                DEFINE TABLE audit_events SCHEMAFUL
+                DEFINE TABLE OVERWRITE audit_events SCHEMAFUL
                     PERMISSIONS
                         FOR select FULL
                         FOR create FULL
@@ -356,14 +359,14 @@ impl AuditStorage for SurrealAuditStorage {
                         FOR delete NONE
                 "#,
             )
-            .await;
+            .await
+            .and_then(|response| response.check());
 
-        if let Err(e) = reinstate_result {
-            tracing::error!(
-                "CRITICAL: Failed to reinstate audit_events delete protection: {}",
-                e
-            );
-        }
+        reinstate_result.map_err(|e| {
+            Error::Internal(format!(
+                "Failed to reinstate audit_events delete protection: {e}"
+            ))
+        })?;
 
         delete_result
             .map_err(|e| Error::Internal(format!("Failed to purge audit events: {}", e)))?;
@@ -380,6 +383,7 @@ impl AuditStorage for SurrealAuditStorage {
             .query("SELECT * FROM audit_events WHERE sequence >= $seq ORDER BY sequence ASC")
             .bind(("seq", query_from))
             .await
+            .and_then(|response| response.check())
             .map_err(|e| {
                 Error::Internal(format!("Failed to fetch events for verification: {}", e))
             })?;
@@ -388,7 +392,10 @@ impl AuditStorage for SurrealAuditStorage {
             .take(0)
             .map_err(|e| Error::Internal(format!("Failed to deserialize audit events: {}", e)))?;
 
-        let events: Vec<AuditEvent> = rows.into_iter().map(Into::into).collect();
+        let events: Vec<AuditEvent> = rows
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<_, _>>()?;
 
         super::verify_stored_chain(&events, from_sequence)
     }
@@ -466,5 +473,133 @@ impl super::lazy::InitializableStorage for SurrealAuditStorage {
 
     fn backend_name() -> &'static str {
         "SurrealDB"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audit::{storage::AuditVerification, AuditChain};
+
+    #[tokio::test]
+    async fn embedded_surreal_round_trip_paging_verification_and_retention() {
+        let client = surrealdb::engine::any::connect("mem://").await.unwrap();
+        client
+            .use_ns("audit_test")
+            .use_db("audit_test")
+            .await
+            .unwrap();
+        let storage = SurrealAuditStorage::new(Arc::new(client));
+        storage.initialize().await.unwrap();
+        storage.initialize().await.unwrap();
+        let mut chain = AuditChain::new("surreal-test".into());
+        let mut events = Vec::new();
+        for offset in 0..5 {
+            let mut event = AuditEvent::new(
+                AuditEventKind::HttpRequest,
+                AuditSeverity::Informational,
+                "surreal-test".into(),
+            );
+            event.timestamp =
+                DateTime::from_timestamp(1_700_000_000 + offset, 123_456_789).unwrap();
+            event.metadata = Some(
+                serde_json::json!({"action":"read","nested":{"value":3,"tags":["one","two"],"optional":null}}),
+            );
+            event.source = AuditSource {
+                ip: Some("127.0.0.1".into()),
+                user_agent: Some("regression-client/1".into()),
+                subject: Some("user_test".into()),
+                request_id: Some("req_test".into()),
+            };
+            event.method = Some("PATCH".into());
+            event.path = Some("/entities/project/one?revision=2".into());
+            event.status_code = Some(200);
+            event.duration_ms = Some(123);
+            event.kind = AuditEventKind::Custom("project.updated".into());
+            if offset == 0 {
+                event.id = "dca93650-9d2c-4ca8-a00f-79a63467c187".parse().unwrap();
+            }
+            let event = chain.seal(event);
+            storage.append(&event).await.unwrap();
+            events.push(event);
+        }
+        assert!(
+            storage.append(&events[0]).await.is_err(),
+            "duplicate record statement errors must reach the caller"
+        );
+        let last = storage.latest().await.unwrap().unwrap();
+        assert_eq!(last.id, events[4].id);
+        assert_eq!(last.timestamp, events[4].timestamp);
+        assert_eq!(last.metadata, events[4].metadata);
+        assert_eq!(
+            serde_json::to_value(&last).unwrap(),
+            serde_json::to_value(&events[4]).unwrap()
+        );
+        assert_eq!(storage.sequence_bounds().await.unwrap(), Some((1, 5)));
+        assert_eq!(
+            storage
+                .query_sequence(2, 4, 2)
+                .await
+                .unwrap()
+                .iter()
+                .map(|e| e.sequence)
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        assert_eq!(
+            storage.verify_chain_range(2, 4).await.unwrap(),
+            AuditVerification::Consistent
+        );
+        assert_eq!(storage.verify_chain(1).await.unwrap(), None);
+        assert_eq!(
+            storage
+                .query_before(events[2].timestamp, 10)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(storage.purge_before(events[2].timestamp).await.unwrap(), 2);
+        assert_eq!(storage.sequence_bounds().await.unwrap(), Some((3, 5)));
+        assert_eq!(
+            storage.verify_chain_range(3, 5).await.unwrap(),
+            AuditVerification::Incomplete
+        );
+        assert_eq!(
+            storage.verify_chain_range(4, 5).await.unwrap(),
+            AuditVerification::Consistent
+        );
+    }
+    #[tokio::test]
+    async fn legacy_v1_and_v2_archives_round_trip_in_surreal_storage() {
+        for archived in [
+            include_str!("../fixtures/legacy-v1.json"),
+            include_str!("../fixtures/legacy-v2.json"),
+        ] {
+            let client = surrealdb::engine::any::connect("mem://").await.unwrap();
+            client.use_ns("legacy").use_db("legacy").await.unwrap();
+            let storage = SurrealAuditStorage::new(Arc::new(client));
+            storage.initialize().await.unwrap();
+            let legacy: AuditEvent = serde_json::from_str(archived).unwrap();
+            storage.append(&legacy).await.unwrap();
+            let restored = storage.latest().await.unwrap().unwrap();
+            assert_eq!(
+                serde_json::to_value(&restored).unwrap(),
+                serde_json::to_value(&legacy).unwrap()
+            );
+            let mut chain =
+                AuditChain::resume(legacy.service_name.clone(), legacy.hash.clone().unwrap(), 1);
+            let modern = chain.seal(AuditEvent::new(
+                AuditEventKind::HttpRequest,
+                AuditSeverity::Informational,
+                legacy.service_name,
+            ));
+            assert_eq!(modern.id.as_uuid().get_version_num(), 7);
+            storage.append(&modern).await.unwrap();
+            assert_eq!(
+                storage.verify_chain_range(1, 2).await.unwrap(),
+                AuditVerification::Consistent
+            );
+        }
     }
 }

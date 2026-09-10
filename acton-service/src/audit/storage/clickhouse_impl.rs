@@ -113,7 +113,7 @@ struct AuditQueryRow {
 impl From<&AuditEvent> for AuditInsertRow {
     fn from(event: &AuditEvent) -> Self {
         Self {
-            id: event.id,
+            id: event.id.as_uuid(),
             timestamp: event.timestamp.timestamp_millis(),
             kind: event.kind.to_string(),
             severity: event.severity.as_syslog_severity(),
@@ -195,7 +195,7 @@ impl From<AuditQueryRow> for AuditEvent {
         let metadata = row.metadata.and_then(|m| serde_json::from_str(&m).ok());
 
         AuditEvent {
-            id: row.id,
+            id: row.id.into(),
             timestamp,
             kind,
             severity,
@@ -372,7 +372,7 @@ mod tests {
         timestamp: DateTime<Utc>,
     ) -> AuditEvent {
         AuditEvent {
-            id: uuid::Uuid::new_v4(),
+            id: uuid::Uuid::new_v4().into(),
             timestamp,
             kind,
             severity,
@@ -409,7 +409,7 @@ mod tests {
         );
         let row = AuditInsertRow::from(&event);
 
-        assert_eq!(row.id, event.id);
+        assert_eq!(row.id, event.id.as_uuid());
         assert_eq!(row.source_ip, Some("192.168.1.1".to_string()));
         assert_eq!(row.source_user_agent, Some("test-agent/1.0".to_string()));
         assert_eq!(row.source_subject, Some("user:alice".to_string()));
@@ -521,7 +521,7 @@ mod tests {
     fn test_insert_row_handles_all_optional_fields_none() {
         let ts = Utc::now();
         let event = AuditEvent {
-            id: uuid::Uuid::new_v4(),
+            id: uuid::Uuid::new_v4().into(),
             timestamp: ts,
             kind: AuditEventKind::AuthLogout,
             severity: AuditSeverity::Informational,

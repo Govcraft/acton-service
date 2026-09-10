@@ -219,9 +219,10 @@ let count = broadcaster.connection_count().await;
 let channels = broadcaster.channel_count().await;
 
 // Register connection with metadata
+// New connection IDs are UUIDv7-backed sseconn_ TypeIDs from mti.
 let id = ConnectionId::new();
-broadcaster.register(id).await;
-broadcaster.register_with_channels(id, vec!["channel1".into()]).await;
+broadcaster.register(id.clone()).await;
+broadcaster.register_with_channels(id.clone(), vec!["channel1".into()]).await;
 
 // Unregister on disconnect
 broadcaster.unregister(&id).await;
@@ -482,7 +483,7 @@ async fn events(
     Extension(broadcaster): Extension<Arc<SseBroadcaster>>,
 ) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
     let id = ConnectionId::new();
-    broadcaster.register(id).await;
+    broadcaster.register(id.clone()).await;
 
     // Create stream with cleanup on drop
     let rx = broadcaster.subscribe();

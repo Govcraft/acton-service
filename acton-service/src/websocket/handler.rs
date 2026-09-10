@@ -1,26 +1,36 @@
 //! WebSocket handler utilities and connection management
 
 use axum::extract::ws::Message;
+use mti::prelude::{MagicTypeId, MagicTypeIdExt, V7};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
 /// Unique identifier for a WebSocket connection
-#[derive(Clone, Copy, Eq)]
-pub struct ConnectionId(Uuid);
+#[derive(Clone, Eq)]
+pub struct ConnectionId(MagicTypeId);
 
 impl ConnectionId {
+    /// TypeID prefix for this connection transport.
+    pub const PREFIX: &'static str = "wsconn";
+
+    /// Canonical TypeID representation.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
     /// Create a new unique connection ID
     #[must_use]
     pub fn new() -> Self {
-        Self(Uuid::new_v4())
+        Self(Self::PREFIX.create_type_id::<V7>())
     }
 
     /// Get the underlying UUID
     #[must_use]
     pub fn as_uuid(&self) -> Uuid {
-        self.0
+        self.0.suffix().to_uuid()
     }
 }
 
@@ -56,7 +66,7 @@ impl Hash for ConnectionId {
 
 impl From<Uuid> for ConnectionId {
     fn from(uuid: Uuid) -> Self {
-        Self(uuid)
+        Self(Self::PREFIX.create_type_id_with_suffix::<V7>(uuid.into()))
     }
 }
 
@@ -144,6 +154,19 @@ impl WebSocketConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connection_ids_use_v7_and_preserve_legacy_uuid_bits() {
+        let id = ConnectionId::new();
+        assert!(id
+            .as_str()
+            .starts_with(&format!("{}_", ConnectionId::PREFIX)));
+        assert_eq!(id.as_uuid().get_version_num(), 7);
+        let legacy = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let converted = ConnectionId::from(legacy);
+        assert_eq!(converted.as_uuid(), legacy);
+        assert_ne!(converted, id);
+    }
 
     #[test]
     fn test_connection_id_uniqueness() {

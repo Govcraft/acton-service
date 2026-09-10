@@ -123,7 +123,7 @@ impl AuditStorage for TursoAuditStorage {
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
             "#,
             libsql::params![
-                event.id.to_string(),
+                event.id.as_uuid().to_string(),
                 event.timestamp.to_rfc3339(),
                 event.kind.to_string(),
                 event.severity.as_syslog_severity() as i64,
@@ -369,7 +369,7 @@ fn row_to_event(row: &libsql::Row) -> Result<AuditEvent, Error> {
         .map_err(|e| Error::Internal(format!("Failed to read sequence: {}", e)))?;
 
     Ok(AuditEvent {
-        id,
+        id: id.into(),
         timestamp,
         kind,
         severity,
@@ -503,6 +503,9 @@ mod tests {
                 );
                 event.timestamp = DateTime::from_timestamp(1_700_000_000 + offset, 0)
                     .expect("valid test timestamp");
+                if offset == 0 {
+                    event.id = "dca93650-9d2c-4ca8-a00f-79a63467c187".parse().unwrap();
+                }
                 chain.seal(event)
             })
             .collect()
@@ -599,5 +602,32 @@ mod tests {
             AuditVerification::Consistent
         );
         assert!(storage.query_sequence(1, u64::MAX, 1).await.is_err());
+    }
+    #[tokio::test]
+    async fn legacy_archives_and_new_typeids_share_a_valid_stored_chain() {
+        for archived in [
+            include_str!("../fixtures/legacy-v1.json"),
+            include_str!("../fixtures/legacy-v2.json"),
+        ] {
+            let legacy: AuditEvent = serde_json::from_str(archived).unwrap();
+            let (storage, _directory) = storage_with_events(std::slice::from_ref(&legacy)).await;
+            let restored = storage.latest().await.unwrap().unwrap();
+            assert_eq!(
+                serde_json::to_value(&restored).unwrap(),
+                serde_json::to_value(&legacy).unwrap()
+            );
+            let mut chain =
+                AuditChain::resume(legacy.service_name.clone(), legacy.hash.clone().unwrap(), 1);
+            let modern = chain.seal(AuditEvent::new(
+                AuditEventKind::HttpRequest,
+                AuditSeverity::Informational,
+                legacy.service_name,
+            ));
+            storage.append(&modern).await.unwrap();
+            assert_eq!(
+                storage.verify_chain_range(1, 2).await.unwrap(),
+                super::super::AuditVerification::Consistent
+            );
+        }
     }
 }

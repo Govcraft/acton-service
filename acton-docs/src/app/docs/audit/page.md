@@ -420,6 +420,14 @@ Severity levels map to RFC 5424 syslog severity values:
 | `Informational` | 6 | Informational messages |
 | `Debug` | 7 | Debug-level messages |
 
+## Audit identifiers
+
+Starting with 0.42.0, `AuditEvent.id` uses the `AuditEventId` newtype backed by `mti::MagicTypeId`. Newly generated IDs have the `audit_` prefix and UUIDv7 payloads. JSON, logs, and display output use the canonical TypeID string.
+
+Deserialization also accepts legacy UUID strings. Conversion preserves all 128 UUID bits, including older UUIDv4 identities, and never generates a replacement ID. Storage keeps its existing native UUID or UUID-string encoding through `AuditEventId::as_uuid()`. Both v1 and v2 audit hashes still cover the original 16 UUID bytes, so converting an archived event to a TypeID does not alter its hash. Clients that validated audit IDs as UUID strings must accept the `audit_` TypeID format.
+
+Use `AuditEventId::new()` when constructing audit events directly, or convert an existing UUID with `AuditEventId::from(uuid)` when importing historical events.
+
 ## Timestamp precision
 
 Starting with 0.41.0, sealing truncates event timestamps to milliseconds before hashing. This is the common precision preserved by every built-in storage adapter, including ClickHouse. Verification continues to hash each stored timestamp exactly as recorded. Older events whose timestamp precision was already lost in storage remain unverifiable; this release does not reconstruct missing fractional digits or reinterpret historical hashes. A range anchored to such an older event may therefore report a broken predecessor.

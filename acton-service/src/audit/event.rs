@@ -3,9 +3,9 @@
 //! Core types for representing audit trail events including authentication,
 //! HTTP requests, and custom application events.
 
+use super::id::AuditEventId;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 /// A single audit trail event
 ///
@@ -14,7 +14,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEvent {
     /// Unique event identifier
-    pub id: Uuid,
+    pub id: AuditEventId,
     /// When the event occurred
     pub timestamp: DateTime<Utc>,
     /// Category of the event
@@ -47,7 +47,7 @@ impl AuditEvent {
     /// Create a new audit event with the given kind and severity
     pub fn new(kind: AuditEventKind, severity: AuditSeverity, service_name: String) -> Self {
         Self {
-            id: Uuid::new_v4(),
+            id: AuditEventId::new(),
             timestamp: Utc::now(),
             kind,
             severity,
