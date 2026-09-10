@@ -679,14 +679,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_verification_key_from_cache() {
-        let key = sample_metadata("kid-verify", KeyStatus::Active, "svc");
+        let key = sample_metadata(
+            "550e8400-e29b-41d4-a716-446655440000",
+            KeyStatus::Active,
+            "svc",
+        );
         let storage: Arc<dyn KeyRotationStorage> = Arc::new(MockStorage::with_keys(vec![key]));
         let mgr = KeyManager::new(storage, "svc", test_config());
         mgr.refresh_cache().await.unwrap();
 
-        let result = mgr.get_verification_key("kid-verify").await.unwrap();
+        let result = mgr
+            .get_verification_key("550e8400-e29b-41d4-a716-446655440000")
+            .await
+            .unwrap();
         assert!(result.is_some());
-        assert_eq!(result.unwrap().kid, "kid-verify");
+        assert_eq!(result.unwrap().kid, "550e8400-e29b-41d4-a716-446655440000");
     }
 
     #[tokio::test]

@@ -566,6 +566,14 @@ mod tests {
         let jti: mti::prelude::MagicTypeId = validated_claims.jti.unwrap().parse().unwrap();
         assert_eq!(jti.prefix().as_str(), "token");
         assert_eq!(jti.suffix().to_uuid().get_version_num(), 7);
+
+        let mut legacy_generator = generator;
+        legacy_generator.config.include_jti = false;
+        let mut legacy_claims = claims;
+        legacy_claims.jti = Some("550e8400-e29b-41d4-a716-446655440000".to_string());
+        let legacy_token = legacy_generator.generate_token(&legacy_claims).unwrap();
+        let validated = validator.validate_token(&legacy_token).unwrap();
+        assert_eq!(validated.jti, legacy_claims.jti);
     }
 
     #[test]
