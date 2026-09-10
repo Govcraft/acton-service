@@ -1,0 +1,7 @@
+# Browser request correlation patch
+
+The HTTP ServiceBuilder installs request tracking before later authentication and audit layers, so Axum executes consumers before ID generation. Extract the existing tracking/context layers into a private `apply_request_tracking(Router, &Config<T>) -> Router` helper and call it after attaching all HTTP auth/audit consumers. Preserve configuration switches and supplied IDs; do not move the remaining general middleware or change authorization decisions.
+
+JWT and PASETO validation events retain the existing kind and severity, add method and URI path through `AuditEvent::with_http`, and leave response status/duration unset because the request has not completed. Do not capture bearer credentials or query strings. Existing event serialization and hash algorithms remain unchanged.
+
+Add an actual ServiceBuilder regression with a loopback syslog capture and no injected RequestContext or client request-ID header. Verify generated response correlation equals token and HTTP event correlation, method/path coverage, and missing/invalid-token denial correlation. Repeat with a supplied ID and with HTTP request auditing disabled to prove auth correlation is independent of that switch. Exercise JWT and PASETO. Use event-driven receive with a timeout, not sleeps. Run focused nextest first, then the affected service/auth/audit tests and Clippy with warnings denied. Patch version 0.43.1 fixes implemented behavior without changing the public query contract.

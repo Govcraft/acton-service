@@ -1847,12 +1847,14 @@ where
         }
 
         // Inject AuditLogger as a request extension so auth middleware can access it.
-        // Applied last in layer order (runs first in execution), making it available
+        // Applied outside authentication, making it available
         // to all subsequent middleware including token auth.
         #[cfg(feature = "audit")]
         if let Some(ref logger) = audit_logger {
             app = app.layer(axum::Extension(logger.clone()));
         }
+
+        app = Self::apply_request_tracking(app, &config);
 
         // Whether each listener's TLS came from the caller rather than from
         // configuration. Captured before the overrides are taken below, so the
@@ -2537,11 +2539,19 @@ where
             }
         }
 
-        // Request context - resolves client IP, request ID, and user agent once for
-        // every downstream consumer. Added here so it executes immediately after the
-        // request-tracking layers below (later-added layer = outer = runs first) and
-        // before auth/audit, which would otherwise see a request ID that has not been
-        // generated yet and no ConnectInfo-derived IP (issue #17).
+        // Panic recovery (innermost layer) - configurable
+        if config.middleware.catch_panic {
+            app = app.layer(CatchPanicLayer::new());
+        }
+
+        app
+    }
+
+    /// Initialize request correlation before authentication and audit consumers.
+    fn apply_request_tracking(mut app: Router, config: &Config<T>) -> Router {
+        // Resolve client IP, request ID, and user agent once for every
+        // downstream consumer. Later-added layers run first, so request ID
+        // generation below precedes context resolution and all auth/audit layers.
         app = app.layer(axum::middleware::from_fn_with_state(
             config.service.trust_forwarded_headers,
             crate::middleware::request_context::request_context_middleware,
@@ -2556,11 +2566,6 @@ where
         }
         if config.middleware.request_tracking.request_id_enabled {
             app = app.layer(request_id_layer());
-        }
-
-        // Panic recovery (innermost layer) - configurable
-        if config.middleware.catch_panic {
-            app = app.layer(CatchPanicLayer::new());
         }
 
         app
@@ -4476,5 +4481,165 @@ mod optional_auth_tests {
         )
         .unwrap();
         assert_optional_auth(TokenConfig::Jwt(config), token).await;
+    }
+}
+
+#[cfg(all(test, feature = "audit", feature = "auth"))]
+mod audit_request_tracking_tests {
+    use super::*;
+    use crate::{
+        audit::{config::SyslogConfig, AuditConfig},
+        auth::{
+            config::TokenGenerationConfig,
+            tokens::{paseto_generator::PasetoGenerator, ClaimsBuilder, TokenGenerator},
+        },
+        config::{PasetoConfig, TokenConfig},
+        middleware::RequestContext,
+    };
+    use axum::{body::Body, http::Request, routing::get, Extension};
+    use tokio::{net::UdpSocket, time::timeout};
+    use tower::ServiceExt;
+
+    async fn assert_request_correlation(token_config: TokenConfig, token: &str, audit_http: bool) {
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let mut config = Config::<()> {
+            token: Some(token_config),
+            audit: Some(AuditConfig {
+                audit_all_requests: audit_http,
+                audit_config_events: false,
+                syslog: SyslogConfig {
+                    address: socket.local_addr().unwrap().to_string(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        config.middleware.cors_mode = "disabled".into();
+        let routes = VersionedRoutes::WithoutState(Router::new().route(
+            "/api/v1/correlation",
+            get(|Extension(context): Extension<RequestContext>| async move {
+                [("x-handler-request-id", context.request_id.unwrap())]
+            }),
+        ));
+        let mut service = ServiceBuilder::new()
+            .with_config(config)
+            .with_routes(routes)
+            .try_build()
+            .unwrap();
+        for (credential, supplied_id, kind, status) in [
+            (Some(token), None, "auth.token.validated", 200),
+            (
+                Some(token),
+                Some("client-request-123"),
+                "auth.token.validated",
+                200,
+            ),
+            (None, None, "auth.token.missing", 401),
+            (Some("invalid-token"), None, "auth.token.invalid", 401),
+        ] {
+            let mut request =
+                Request::builder().uri("/api/v1/correlation?secret_query=never-log-this");
+            if let Some(credential) = credential {
+                request =
+                    request.header(http::header::AUTHORIZATION, format!("Bearer {credential}"));
+            }
+            if let Some(request_id) = supplied_id {
+                request = request.header("x-request-id", request_id);
+            }
+            let response = service
+                .app
+                .clone()
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), status);
+            let request_id = response
+                .headers()
+                .get("x-request-id")
+                .unwrap()
+                .to_str()
+                .unwrap();
+            assert!(!request_id.is_empty());
+            if let Some(supplied_id) = supplied_id {
+                assert_eq!(request_id, supplied_id);
+            }
+            if status == 200 {
+                assert_eq!(response.headers()["x-handler-request-id"], request_id);
+            }
+            let mut expected_kinds = vec![kind];
+            if audit_http && status == 200 {
+                expected_kinds.push("http.request");
+            }
+            for expected_kind in expected_kinds {
+                let mut packet = [0_u8; 16384];
+                let length = timeout(Duration::from_secs(5), socket.recv(&mut packet))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let message = std::str::from_utf8(&packet[..length]).unwrap();
+                for field in [
+                    format!("kind=\"{expected_kind}\""),
+                    format!("request_id=\"{request_id}\""),
+                    "method=\"GET\"".into(),
+                    "path=\"/api/v1/correlation\"".into(),
+                ] {
+                    assert!(message.contains(&field), "missing {field}: {message}");
+                }
+                if status == 200 {
+                    assert!(message.contains("subject=\"user:test\""), "{message}");
+                }
+                assert!(!message.contains(token));
+                assert!(!message.contains("secret_query"));
+                assert!(!message.contains("never-log-this"));
+            }
+        }
+        if let Some(mut runtime) = service.agent_runtime.take() {
+            runtime.shutdown_all().await.unwrap();
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn paseto_audit_correlates_default_browser_requests() {
+        let key = [42_u8; 32];
+        let key_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(key_file.path(), key).unwrap();
+        let config = TokenConfig::Paseto(PasetoConfig {
+            key_path: key_file.path().into(),
+            ..Default::default()
+        });
+        let claims = ClaimsBuilder::new().subject("user:test").build().unwrap();
+        let generator = PasetoGenerator::with_symmetric_key(key, TokenGenerationConfig::default());
+        let token = generator.generate_token(&claims).unwrap();
+        for audit_http in [true, false] {
+            assert_request_correlation(config.clone(), &token, audit_http).await;
+        }
+    }
+
+    #[cfg(feature = "jwt")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn jwt_audit_correlates_default_browser_requests() {
+        crate::crypto::ensure_jwt_crypto_provider();
+        let key = [42_u8; 32];
+        let key_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(key_file.path(), key).unwrap();
+        let config = TokenConfig::Jwt(crate::config::JwtConfig {
+            public_key_path: key_file.path().into(),
+            algorithm: "HS256".into(),
+            issuer: None,
+            audience: None,
+            public_paths: vec![],
+        });
+        let mut claims = ClaimsBuilder::new().subject("user:test").build().unwrap();
+        claims.exp = chrono::Utc::now().timestamp() + 3600;
+        let token = jsonwebtoken::encode(
+            &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
+            &claims,
+            &jsonwebtoken::EncodingKey::from_secret(&key),
+        )
+        .unwrap();
+        for audit_http in [true, false] {
+            assert_request_correlation(config.clone(), &token, audit_http).await;
+        }
     }
 }
