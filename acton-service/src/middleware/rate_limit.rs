@@ -122,10 +122,22 @@ impl RateLimit {
                         if let Some(ref logger) = audit_logger {
                             if logger.config().audit_auth_events {
                                 logger
-                                    .log_auth(
-                                        crate::audit::event::AuditEventKind::HttpRequestDenied,
-                                        crate::audit::event::AuditSeverity::Warning,
-                                        audit_source,
+                                    .log(
+                                        crate::audit::event::AuditEvent::new(
+                                            crate::audit::event::AuditEventKind::HttpRequestDenied,
+                                            crate::audit::event::AuditSeverity::Warning,
+                                            logger.service_name().to_string(),
+                                        )
+                                        .with_source(audit_source)
+                                        .with_http(
+                                            request.method().to_string(),
+                                            request.uri().path().to_string(),
+                                            Some(429),
+                                            None,
+                                        )
+                                        .with_metadata(
+                                            serde_json::json!({"reason": "rate_limit_exceeded"}),
+                                        ),
                                     )
                                     .await;
                             }

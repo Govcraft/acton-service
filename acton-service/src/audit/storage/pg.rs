@@ -69,6 +69,22 @@ impl PgAuditStorage {
         .await
         .map_err(|e| Error::Internal(format!("Failed to create audit timestamp index: {}", e)))?;
 
+        // Concurrent construction avoids blocking append traffic on existing stores.
+        // Each field expression is framework-owned, never user-provided SQL.
+        for (name, expression) in [
+            ("kind", "kind"),
+            ("subject", "source_subject"),
+            ("request", "source_request_id"),
+            ("schema", "(metadata->>'schema')"),
+            ("entity", "(metadata->>'entity_id')"),
+            ("actor", "(metadata->>'actor')"),
+            ("user", "(metadata->>'user')"),
+        ] {
+            sqlx::query(&format!("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_audit_events_{name}_sequence ON audit_events ({expression}, sequence)"))
+                .execute(&self.pool).await
+                .map_err(|e| Error::Internal(format!("Failed to create audit investigation index: {e}")))?;
+        }
+
         // Enforce immutability: silently discard UPDATE/DELETE
         sqlx::query(
             r#"
@@ -147,6 +163,65 @@ impl AuditStorage for PgAuditStorage {
         .map_err(|e| Error::Internal(format!("Failed to fetch latest audit event: {}", e)))?;
 
         Ok(row.map(Into::into))
+    }
+
+    async fn query_filtered(&self, q: &super::AuditQuery) -> Result<Vec<AuditEvent>, Error> {
+        q.validate()?;
+        let (comparison, direction) = match q.order {
+            super::AuditOrder::NewestFirst => ("<", "DESC"),
+            super::AuditOrder::OldestFirst => (">", "ASC"),
+        };
+        let kind = q.kind.as_ref().map(ToString::to_string);
+        let severity = q.severity.map(|v| i16::from(v.as_syslog_severity()));
+        let status_code = q.status_code.map(|v| v as i16);
+        let ceiling = q.through_sequence.map(|v| v as i64);
+        let cursor = q.cursor.map(|v| v as i64);
+        let limit = q.limit as i64;
+        let statement = format!(
+            r#"SELECT * FROM audit_events WHERE ($1::timestamptz IS NULL OR timestamp >= $1::timestamptz)
+ AND ($2::timestamptz IS NULL OR timestamp <= $2::timestamptz)
+ AND ($3::text IS NULL OR kind = $3::text)
+ AND ($4::smallint IS NULL OR severity = $4::smallint)
+ AND ($5::text IS NULL OR source_subject = $5::text)
+ AND ($6::text IS NULL OR source_request_id = $6::text)
+ AND ($7::text IS NULL OR service_name = $7::text)
+ AND ($8::text IS NULL OR (($16::text[] IS NULL OR kind = ANY($16::text[]))
+ AND (jsonb_typeof(metadata->'schema') = 'string' AND metadata->>'schema' = $8::text)))
+ AND ($9::text IS NULL OR (($16::text[] IS NULL OR kind = ANY($16::text[]))
+ AND (jsonb_typeof(metadata->'entity_id') = 'string' AND metadata->>'entity_id' = $9::text)))
+ AND ($10::text IS NULL OR (($16::text[] IS NULL OR kind = ANY($16::text[]))
+ AND (jsonb_typeof(metadata->'tenant_id') = 'string' AND metadata->>'tenant_id' = $10::text)))
+ AND ($11::smallint IS NULL OR status_code = $11::smallint)
+ AND ($12::bigint IS NULL OR sequence <= $12::bigint)
+ AND ($13::text IS NULL OR source_subject = $13::text OR (($16::text[] IS NULL OR kind = ANY($16::text[]))
+ AND ((jsonb_typeof(metadata->'user') = 'string' AND metadata->>'user' = $13::text) OR (jsonb_typeof(metadata->'actor') = 'string' AND metadata->>'actor' = $13::text))))
+ AND ($14::bigint IS NULL OR sequence {comparison} $14::bigint)
+ ORDER BY sequence {direction} LIMIT $15"#
+        );
+        // Re-plan optional filters for their actual values instead of allowing
+        // a cached generic plan to degrade selective searches into table scans.
+        let rows = sqlx::query_as::<_, AuditEventRow>(&statement)
+            .persistent(false)
+            .bind(q.from)
+            .bind(q.to)
+            .bind(&kind)
+            .bind(severity)
+            .bind(&q.subject)
+            .bind(&q.request_id)
+            .bind(&q.service_name)
+            .bind(&q.schema)
+            .bind(&q.entity_id)
+            .bind(&q.tenant_id)
+            .bind(status_code)
+            .bind(ceiling)
+            .bind(&q.actor)
+            .bind(cursor)
+            .bind(limit)
+            .bind(&q.metadata_kinds)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to query audit events: {e}")))?;
+        Ok(rows.into_iter().map(Into::into).collect())
     }
 
     async fn query_sequence(
@@ -310,6 +385,7 @@ impl From<AuditEventRow> for AuditEvent {
         use crate::audit::event::{AuditEventKind, AuditSeverity, AuditSource};
 
         let kind = match row.kind.as_str() {
+            "auth.token.validated" => AuditEventKind::AuthTokenValidated,
             "auth.login.success" => AuditEventKind::AuthLoginSuccess,
             "auth.login.failed" => AuditEventKind::AuthLoginFailed,
             "auth.token.missing" => AuditEventKind::AuthTokenMissing,
@@ -438,8 +514,15 @@ mod verification_tests {
             );
             event.timestamp =
                 DateTime::from_timestamp(1_700_000_000 + offset, 123_456_789).unwrap();
+            event.metadata =
+                Some(serde_json::json!({"actor":"actor_a","schema":"case","entity_id":"case_a"}));
+            event.source.request_id = Some("req_a".into());
+            event.status_code = Some(403);
             if offset == 0 {
                 event.id = "dca93650-9d2c-4ca8-a00f-79a63467c187".parse().unwrap();
+            }
+            if offset == 4 {
+                event.kind = AuditEventKind::AuthTokenValidated;
             }
             let event = chain.seal(event);
             storage.append(&event).await.unwrap();
@@ -467,6 +550,58 @@ mod verification_tests {
             0
         );
         assert_eq!(storage.sequence_bounds().await.unwrap(), Some((1, 5)));
+        let mut q = super::super::AuditQuery {
+            through_sequence: Some(4),
+            limit: 2,
+            actor: Some("actor_a".into()),
+            schema: Some("case".into()),
+            entity_id: Some("case_a".into()),
+            status_code: Some(403),
+            request_id: Some("req_a".into()),
+            kind: Some(AuditEventKind::HttpRequest),
+            severity: Some(AuditSeverity::Informational),
+            from: Some(events[0].timestamp),
+            to: Some(events[4].timestamp),
+            ..Default::default()
+        };
+        assert_eq!(
+            storage
+                .query_filtered(&q)
+                .await
+                .unwrap()
+                .iter()
+                .map(|e| e.sequence)
+                .collect::<Vec<_>>(),
+            vec![4, 3]
+        );
+        q.cursor = Some(3);
+        assert_eq!(
+            storage
+                .query_filtered(&q)
+                .await
+                .unwrap()
+                .iter()
+                .map(|e| e.sequence)
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+        q.order = super::super::AuditOrder::OldestFirst;
+        assert_eq!(
+            storage
+                .query_filtered(&q)
+                .await
+                .unwrap()
+                .iter()
+                .map(|e| e.sequence)
+                .collect::<Vec<_>>(),
+            vec![4]
+        );
+        q.metadata_kinds = Some(vec![]);
+        assert!(storage.query_filtered(&q).await.unwrap().is_empty());
+        q.metadata_kinds = Some(vec!["http.request".into()]);
+        assert_eq!(storage.query_filtered(&q).await.unwrap().len(), 1);
+        q.actor = Some("actor_a' OR 1=1 --".into());
+        assert!(storage.query_filtered(&q).await.unwrap().is_empty());
         assert_eq!(
             storage
                 .query_sequence(2, 4, 2)

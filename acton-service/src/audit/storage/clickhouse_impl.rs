@@ -137,6 +137,7 @@ impl From<&AuditEvent> for AuditInsertRow {
 impl From<AuditQueryRow> for AuditEvent {
     fn from(row: AuditQueryRow) -> Self {
         let kind = match row.kind.as_str() {
+            "auth.token.validated" => AuditEventKind::AuthTokenValidated,
             "auth.login.success" => AuditEventKind::AuthLoginSuccess,
             "auth.login.failed" => AuditEventKind::AuthLoginFailed,
             "auth.token.missing" => AuditEventKind::AuthTokenMissing,
@@ -611,6 +612,7 @@ mod tests {
     fn test_query_row_maps_all_known_event_kinds() {
         let ts_millis = Utc::now().timestamp_millis();
         let kinds = vec![
+            ("auth.token.validated", "auth.token.validated"),
             ("auth.login.success", "auth.login.success"),
             ("auth.login.failed", "auth.login.failed"),
             ("auth.logout", "auth.logout"),

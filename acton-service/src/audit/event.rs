@@ -100,6 +100,8 @@ impl AuditEvent {
 pub enum AuditEventKind {
     /// Successful authentication
     AuthLoginSuccess,
+    /// Bearer token validated for a protected request, not a new login.
+    AuthTokenValidated,
     /// Failed authentication attempt
     ///
     /// Reserved for credential-submission failures from application login
@@ -179,6 +181,7 @@ pub enum AuditEventKind {
 impl std::fmt::Display for AuditEventKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::AuthTokenValidated => write!(f, "auth.token.validated"),
             Self::AuthLoginSuccess => write!(f, "auth.login.success"),
             Self::AuthLoginFailed => write!(f, "auth.login.failed"),
             Self::AuthTokenMissing => write!(f, "auth.token.missing"),
@@ -239,6 +242,7 @@ impl AuditEventKind {
             return Some(Self::Custom(name.to_string()));
         }
         match s {
+            "auth.token.validated" => Some(Self::AuthTokenValidated),
             "auth.login.success" => Some(Self::AuthLoginSuccess),
             "auth.login.failed" => Some(Self::AuthLoginFailed),
             "auth.token.missing" => Some(Self::AuthTokenMissing),
@@ -389,6 +393,7 @@ mod tests {
     #[test]
     fn every_kind_round_trips_through_its_wire_string() {
         let kinds = vec![
+            AuditEventKind::AuthTokenValidated,
             AuditEventKind::AuthLoginSuccess,
             AuditEventKind::AuthLoginFailed,
             AuditEventKind::AuthTokenMissing,

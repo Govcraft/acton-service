@@ -398,6 +398,7 @@ fn row_to_event(row: &libsql::Row) -> Result<AuditEvent, Error> {
 
 fn parse_event_kind(s: &str) -> AuditEventKind {
     match s {
+        "auth.token.validated" => AuditEventKind::AuthTokenValidated,
         "auth.login.success" => AuditEventKind::AuthLoginSuccess,
         "auth.login.failed" => AuditEventKind::AuthLoginFailed,
         "auth.token.missing" => AuditEventKind::AuthTokenMissing,
@@ -503,6 +504,9 @@ mod tests {
                 );
                 event.timestamp = DateTime::from_timestamp(1_700_000_000 + offset, 0)
                     .expect("valid test timestamp");
+                if offset == 4 {
+                    event.kind = AuditEventKind::AuthTokenValidated;
+                }
                 if offset == 0 {
                     event.id = "dca93650-9d2c-4ca8-a00f-79a63467c187".parse().unwrap();
                 }

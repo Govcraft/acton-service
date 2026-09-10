@@ -212,6 +212,71 @@ impl AuditStorage for SurrealAuditStorage {
         rows.into_iter().next().map(TryInto::try_into).transpose()
     }
 
+    async fn query_filtered(&self, q: &super::AuditQuery) -> Result<Vec<AuditEvent>, Error> {
+        q.validate()?;
+        let (comparison, direction) = match q.order {
+            super::AuditOrder::NewestFirst => ("<", "DESC"),
+            super::AuditOrder::OldestFirst => (">", "ASC"),
+        };
+        let mut cursor = q.cursor.map(|v| v as i64);
+        let mut matches = Vec::new();
+        // Immutable legacy metadata is JSON text. Decode only bounded candidates,
+        // never alter historical records or silently return an incomplete page.
+        for _ in 0..10 {
+            let statement = format!(
+                r#"SELECT * FROM audit_events WHERE ($cursor = NONE OR sequence {comparison} $cursor)
+ AND ($ceiling = NONE OR sequence <= $ceiling)
+ AND ($from = NONE OR <datetime>timestamp >= <datetime>$from)
+ AND ($to = NONE OR <datetime>timestamp <= <datetime>$to)
+ AND ($kind = NONE OR kind = $kind)
+ AND ($severity = NONE OR severity = $severity)
+ AND ($subject = NONE OR source_subject = $subject)
+ AND ($request = NONE OR source_request_id = $request)
+ AND ($service = NONE OR service_name = $service)
+ ORDER BY sequence {direction} LIMIT 1000"#
+            );
+            let mut result = self
+                .client
+                .query(statement)
+                .bind(("cursor", cursor))
+                .bind(("ceiling", q.through_sequence.map(|v| v as i64)))
+                .bind(("from", q.from.map(|v| v.to_rfc3339())))
+                .bind(("to", q.to.map(|v| v.to_rfc3339())))
+                .bind(("kind", q.kind.as_ref().map(ToString::to_string)))
+                .bind((
+                    "severity",
+                    q.severity.map(|v| i64::from(v.as_syslog_severity())),
+                ))
+                .bind(("subject", q.subject.clone()))
+                .bind(("request", q.request_id.clone()))
+                .bind(("service", q.service_name.clone()))
+                .await
+                .and_then(|r| r.check())
+                .map_err(|e| Error::Internal(format!("Failed to query audit events: {e}")))?;
+            let rows: Vec<AuditRow> = result
+                .take(0)
+                .map_err(|e| Error::Internal(format!("Failed to decode audit events: {e}")))?;
+            let exhausted = rows.len() < 1000;
+            for row in rows {
+                let event: AuditEvent = row.try_into()?;
+                cursor = Some(event.sequence as i64);
+                if q.matches(&event) {
+                    matches.push(event);
+                    if matches.len() == q.limit {
+                        return Ok(matches);
+                    }
+                }
+            }
+            if exhausted {
+                return Ok(matches);
+            }
+        }
+        Err(Error::Internal(
+            "Audit metadata query exceeded 10000 candidates; narrow the time or event filters"
+                .into(),
+        ))
+    }
+
     async fn query_sequence(
         &self,
         from: u64,
@@ -403,6 +468,7 @@ impl AuditStorage for SurrealAuditStorage {
 
 fn parse_event_kind(s: &str) -> AuditEventKind {
     match s {
+        "auth.token.validated" => AuditEventKind::AuthTokenValidated,
         "auth.login.success" => AuditEventKind::AuthLoginSuccess,
         "auth.login.failed" => AuditEventKind::AuthLoginFailed,
         "auth.token.missing" => AuditEventKind::AuthTokenMissing,
@@ -503,7 +569,7 @@ mod tests {
             event.timestamp =
                 DateTime::from_timestamp(1_700_000_000 + offset, 123_456_789).unwrap();
             event.metadata = Some(
-                serde_json::json!({"action":"read","nested":{"value":3,"tags":["one","two"],"optional":null}}),
+                serde_json::json!({"schema":"case","action":"read","nested":{"value":3,"tags":["one","two"],"optional":null}}),
             );
             event.source = AuditSource {
                 ip: Some("127.0.0.1".into()),
@@ -519,6 +585,9 @@ mod tests {
             if offset == 0 {
                 event.id = "dca93650-9d2c-4ca8-a00f-79a63467c187".parse().unwrap();
             }
+            if offset == 4 {
+                event.kind = AuditEventKind::AuthTokenValidated;
+            }
             let event = chain.seal(event);
             storage.append(&event).await.unwrap();
             events.push(event);
@@ -527,6 +596,49 @@ mod tests {
             storage.append(&events[0]).await.is_err(),
             "duplicate record statement errors must reach the caller"
         );
+        let mut q = super::super::AuditQuery {
+            limit: 2,
+            through_sequence: Some(4),
+            actor: Some("user_test".into()),
+            request_id: Some("req_test".into()),
+            from: Some(events[0].timestamp),
+            to: Some(events[4].timestamp),
+            ..Default::default()
+        };
+        let first = storage.query_filtered(&q).await.unwrap();
+        assert_eq!(
+            first.iter().map(|e| e.sequence).collect::<Vec<_>>(),
+            vec![4, 3]
+        );
+        q.cursor = Some(3);
+        assert_eq!(
+            storage
+                .query_filtered(&q)
+                .await
+                .unwrap()
+                .iter()
+                .map(|e| e.sequence)
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+        q.order = super::super::AuditOrder::OldestFirst;
+        assert_eq!(
+            storage
+                .query_filtered(&q)
+                .await
+                .unwrap()
+                .iter()
+                .map(|e| e.sequence)
+                .collect::<Vec<_>>(),
+            vec![4]
+        );
+        q.actor = None;
+        q.schema = Some("case".into());
+        q.metadata_kinds = Some(vec![]);
+        assert!(storage.query_filtered(&q).await.unwrap().is_empty());
+        q.metadata_kinds = Some(vec!["custom.project.updated".into()]);
+        q.schema = Some("does-not-exist".into());
+        assert!(storage.query_filtered(&q).await.unwrap().is_empty());
         let last = storage.latest().await.unwrap().unwrap();
         assert_eq!(last.id, events[4].id);
         assert_eq!(last.timestamp, events[4].timestamp);
