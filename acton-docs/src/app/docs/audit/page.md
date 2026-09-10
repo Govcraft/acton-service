@@ -509,3 +509,14 @@ Ensure your syslog/SIEM retention policies match your compliance requirements.
 - **[Observability](/docs/observability)** - OpenTelemetry tracing and OTLP export
 - **[Configuration](/docs/configuration)** - Environment and file-based configuration
 - **[Health Checks](/docs/health-checks)** - Service health monitoring
+
+
+## Investigating retained events
+
+`AuditStorage::query_filtered(&AuditQuery)` returns exact matches in sequence order. The default is newest first with a 100-event limit; valid limits are 1 through 1000. Set `AuditOrder::OldestFirst` for ascending results. A cursor excludes its sequence, and `through_sequence` fixes an inclusive upper boundary for paging while new events arrive. Keep filters, order and snapshot ceiling unchanged between pages. Sequence order reflects append order, which can differ from timestamp order.
+
+Filters include inclusive timestamps, kind, severity, source subject, request ID, service, status, and the metadata keys `schema`, `entity_id`, and `tenant_id`. The actor filter matches source subject or metadata `user` or `actor`; these are recorded claims, not proof of identity. Set `metadata_kinds` to an exact wire-kind allowlist when only known event schemas may supply metadata filters. An empty allowlist disables metadata matches while retaining source-subject matching. Filters do not change persisted events or hashes.
+
+PostgreSQL and SQL Server filter in the database. PostgreSQL initializes investigation indexes concurrently, which avoids blocking inserts but can consume time and I/O on a large existing store. SurrealDB filters common fields in the database and decodes at most 10000 candidates to evaluate historical JSON metadata. If that budget is exhausted before a complete page or the end is reached, it returns an error; narrow the time range or event kind and retry. Custom storage implementations return an explicit unsupported error until they implement the new method.
+
+Successful bearer validation now emits `auth.token.validated`. Application login events continue to use `auth.login.success`; existing stored events and hashes are preserved. HTTP bearer and policy denials include method, path, status, and a fixed reason code without bearer credentials. gRPC policy denials record gRPC status 7 in metadata.

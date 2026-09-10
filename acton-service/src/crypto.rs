@@ -34,3 +34,10 @@ pub fn ensure_default_crypto_provider() {
         let _ = rustls::crypto::ring::default_provider().install_default();
     });
 }
+
+/// Select the JWT provider enabled by the workspace even when a transitive
+/// dependency enables another provider. Preserve an explicitly installed default.
+#[cfg(feature = "jwt")]
+pub(crate) fn ensure_jwt_crypto_provider() {
+    let _ = jsonwebtoken::crypto::rust_crypto::DEFAULT_PROVIDER.install_default();
+}

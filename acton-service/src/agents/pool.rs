@@ -88,18 +88,43 @@ fn pool_health(
     }
 }
 
+#[cfg(any(
+    feature = "database",
+    feature = "mssql",
+    feature = "cache",
+    feature = "events",
+    feature = "turso",
+    feature = "surrealdb",
+    feature = "clickhouse"
+))]
+use acton_reactive::prelude::*;
+#[cfg(any(
+    feature = "database",
+    feature = "mssql",
+    feature = "cache",
+    feature = "events",
+    feature = "turso",
+    feature = "surrealdb",
+    feature = "clickhouse"
+))]
+use std::sync::Arc;
+#[cfg(any(
+    feature = "database",
+    feature = "mssql",
+    feature = "cache",
+    feature = "events",
+    feature = "turso",
+    feature = "surrealdb",
+    feature = "clickhouse"
+))]
+use tokio::sync::RwLock;
+
 // ============================================================================
 // Microsoft SQL Server Pool Agent
 // ============================================================================
 
 #[cfg(feature = "mssql")]
 use super::messages::{MssqlPoolConnected, MssqlPoolConnectionFailed};
-#[cfg(all(feature = "mssql", not(feature = "database")))]
-use acton_reactive::prelude::*;
-#[cfg(all(feature = "mssql", not(feature = "database")))]
-use std::sync::Arc;
-#[cfg(all(feature = "mssql", not(feature = "database")))]
-use tokio::sync::RwLock;
 #[cfg(all(feature = "mssql", not(feature = "database")))]
 use tokio_util::sync::CancellationToken;
 
@@ -221,12 +246,6 @@ impl MssqlPoolAgent {
 
 #[cfg(feature = "database")]
 use super::messages::{DatabasePoolConnected, DatabasePoolConnectionFailed};
-#[cfg(feature = "database")]
-use acton_reactive::prelude::*;
-#[cfg(feature = "database")]
-use std::sync::Arc;
-#[cfg(feature = "database")]
-use tokio::sync::RwLock;
 #[cfg(feature = "database")]
 use tokio_util::sync::CancellationToken;
 
@@ -472,12 +491,6 @@ impl DatabasePoolAgent {
 
 #[cfg(feature = "cache")]
 use super::messages::{RedisPoolConnected, RedisPoolConnectionFailed};
-#[cfg(all(feature = "cache", not(feature = "database")))]
-use acton_reactive::prelude::*;
-#[cfg(all(feature = "cache", not(feature = "database")))]
-use std::sync::Arc;
-#[cfg(all(feature = "cache", not(feature = "database")))]
-use tokio::sync::RwLock;
 
 /// Shared pool storage type for Redis connections
 #[cfg(feature = "cache")]
@@ -667,12 +680,6 @@ impl RedisPoolAgent {
 
 #[cfg(feature = "events")]
 use super::messages::{NatsClientConnected, NatsClientConnectionFailed};
-#[cfg(all(feature = "events", not(feature = "database"), not(feature = "cache")))]
-use acton_reactive::prelude::*;
-#[cfg(all(feature = "events", not(feature = "database"), not(feature = "cache")))]
-use std::sync::Arc;
-#[cfg(all(feature = "events", not(feature = "database"), not(feature = "cache")))]
-use tokio::sync::RwLock;
 
 /// Shared client storage type for NATS connections
 #[cfg(feature = "events")]
@@ -866,27 +873,6 @@ impl NatsPoolAgent {
 
 #[cfg(feature = "turso")]
 use super::messages::{TursoDbConnected, TursoDbConnectionFailed};
-#[cfg(all(
-    feature = "turso",
-    not(feature = "database"),
-    not(feature = "events"),
-    not(feature = "cache")
-))]
-use acton_reactive::prelude::*;
-#[cfg(all(
-    feature = "turso",
-    not(feature = "database"),
-    not(feature = "cache"),
-    not(feature = "events")
-))]
-use std::sync::Arc;
-#[cfg(all(
-    feature = "turso",
-    not(feature = "database"),
-    not(feature = "cache"),
-    not(feature = "events")
-))]
-use tokio::sync::RwLock;
 #[cfg(all(feature = "turso", not(feature = "database")))]
 use tokio_util::sync::CancellationToken;
 
@@ -1129,30 +1115,6 @@ use super::messages::{SurrealDbConnected, SurrealDbConnectionFailed};
 #[cfg(all(
     feature = "surrealdb",
     not(feature = "database"),
-    not(feature = "events"),
-    not(feature = "cache"),
-    not(feature = "turso")
-))]
-use acton_reactive::prelude::*;
-#[cfg(all(
-    feature = "surrealdb",
-    not(feature = "database"),
-    not(feature = "cache"),
-    not(feature = "events"),
-    not(feature = "turso")
-))]
-use std::sync::Arc;
-#[cfg(all(
-    feature = "surrealdb",
-    not(feature = "database"),
-    not(feature = "cache"),
-    not(feature = "events"),
-    not(feature = "turso")
-))]
-use tokio::sync::RwLock;
-#[cfg(all(
-    feature = "surrealdb",
-    not(feature = "database"),
     not(feature = "turso")
 ))]
 use tokio_util::sync::CancellationToken;
@@ -1390,33 +1352,6 @@ impl SurrealDbAgent {
 
 #[cfg(feature = "clickhouse")]
 use super::messages::{ClickHouseClientConnected, ClickHouseClientConnectionFailed};
-#[cfg(all(
-    feature = "clickhouse",
-    not(feature = "database"),
-    not(feature = "events"),
-    not(feature = "cache"),
-    not(feature = "turso"),
-    not(feature = "surrealdb")
-))]
-use acton_reactive::prelude::*;
-#[cfg(all(
-    feature = "clickhouse",
-    not(feature = "database"),
-    not(feature = "cache"),
-    not(feature = "events"),
-    not(feature = "turso"),
-    not(feature = "surrealdb")
-))]
-use std::sync::Arc;
-#[cfg(all(
-    feature = "clickhouse",
-    not(feature = "database"),
-    not(feature = "cache"),
-    not(feature = "events"),
-    not(feature = "turso"),
-    not(feature = "surrealdb")
-))]
-use tokio::sync::RwLock;
 
 /// Shared client storage type for ClickHouse connections
 #[cfg(feature = "clickhouse")]

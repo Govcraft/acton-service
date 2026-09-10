@@ -380,10 +380,20 @@ impl CedarAuthz {
                 if let Some(ref logger) = audit_logger {
                     if logger.config().audit_auth_events {
                         logger
-                            .log_auth(
-                                crate::audit::event::AuditEventKind::AuthPermissionDenied,
-                                crate::audit::event::AuditSeverity::Warning,
-                                audit_source,
+                            .log(
+                                crate::audit::event::AuditEvent::new(
+                                    crate::audit::event::AuditEventKind::AuthPermissionDenied,
+                                    crate::audit::event::AuditSeverity::Warning,
+                                    logger.service_name().to_string(),
+                                )
+                                .with_source(audit_source)
+                                .with_http(
+                                    request.method().to_string(),
+                                    request.uri().path().to_string(),
+                                    Some(403),
+                                    None,
+                                )
+                                .with_metadata(serde_json::json!({"reason": "policy_denied"})),
                             )
                             .await;
                     }
@@ -899,10 +909,17 @@ async fn authorize_grpc_request(
                             .map(String::from),
                     };
                     logger
-                        .log_auth(
-                            crate::audit::event::AuditEventKind::AuthPermissionDenied,
-                            crate::audit::event::AuditSeverity::Warning,
-                            source,
+                        .log(
+                            crate::audit::event::AuditEvent::new(
+                                crate::audit::event::AuditEventKind::AuthPermissionDenied,
+                                crate::audit::event::AuditSeverity::Warning,
+                                logger.service_name().to_string(),
+                            )
+                            .with_source(source)
+                            .with_http("POST".to_string(), method_path.to_string(), None, None)
+                            .with_metadata(
+                                serde_json::json!({"reason": "policy_denied", "grpc_status": 7}),
+                            ),
                         )
                         .await;
                 }

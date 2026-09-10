@@ -13,7 +13,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use super::event::AuditEvent;
+use super::event::{AuditEvent, AuditEventKind, AuditSeverity};
 use crate::error::Error;
 
 #[cfg(any(
@@ -139,6 +139,150 @@ pub enum AuditVerification {
     Incomplete,
 }
 
+/// Stable audit sequence ordering, independent of clock adjustments.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AuditOrder {
+    /// Highest sequence first.
+    #[default]
+    NewestFirst,
+    /// Lowest sequence first.
+    OldestFirst,
+}
+
+/// Bounded investigation filters. All specified filters must match.
+#[derive(Debug, Clone)]
+pub struct AuditQuery {
+    /// Inclusive earliest timestamp.
+    pub from: Option<DateTime<Utc>>,
+    /// Inclusive latest timestamp.
+    pub to: Option<DateTime<Utc>>,
+    /// Exact event kind.
+    pub kind: Option<AuditEventKind>,
+    /// Exact severity.
+    pub severity: Option<AuditSeverity>,
+    /// Exact source subject.
+    pub subject: Option<String>,
+    /// Exact source subject or metadata user or actor.
+    pub actor: Option<String>,
+    /// Exact source request identifier.
+    pub request_id: Option<String>,
+    /// Exact service name.
+    pub service_name: Option<String>,
+    /// Optional exact wire kinds whose metadata may participate in filters.
+    /// Source subject matching remains available for every kind.
+    pub metadata_kinds: Option<Vec<String>>,
+    /// Exact metadata schema.
+    pub schema: Option<String>,
+    /// Exact metadata entity_id.
+    pub entity_id: Option<String>,
+    /// Exact metadata tenant_id.
+    pub tenant_id: Option<String>,
+    /// Exact HTTP status.
+    pub status_code: Option<u16>,
+    /// Exclusive sequence cursor in the requested direction.
+    pub cursor: Option<u64>,
+    /// Inclusive snapshot sequence ceiling.
+    pub through_sequence: Option<u64>,
+    /// Sequence ordering.
+    pub order: AuditOrder,
+    /// Maximum returned events, from 1 through 1000.
+    pub limit: usize,
+}
+impl Default for AuditQuery {
+    fn default() -> Self {
+        Self {
+            from: None,
+            to: None,
+            kind: None,
+            severity: None,
+            subject: None,
+            actor: None,
+            request_id: None,
+            service_name: None,
+            metadata_kinds: None,
+            schema: None,
+            entity_id: None,
+            tenant_id: None,
+            status_code: None,
+            cursor: None,
+            through_sequence: None,
+            order: AuditOrder::NewestFirst,
+            limit: 100,
+        }
+    }
+}
+impl AuditQuery {
+    /// Reject invalid bounds before touching storage.
+    pub fn validate(&self) -> Result<(), Error> {
+        if !(1..=1000).contains(&self.limit)
+            || self.from.zip(self.to).is_some_and(|(a, b)| a > b)
+            || self.cursor.is_some_and(|v| v > i64::MAX as u64)
+            || self.through_sequence.is_some_and(|v| v > i64::MAX as u64)
+        {
+            return Err(Error::Internal(
+                "Invalid audit query bounds (limit must be 1..=1000)".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Test the exact filters against a decoded event without changing its contents.
+    pub fn matches(&self, e: &AuditEvent) -> bool {
+        let metadata_allowed = self
+            .metadata_kinds
+            .as_ref()
+            .is_none_or(|kinds| kinds.contains(&e.kind.to_string()));
+        let meta = |key: &str| {
+            if !metadata_allowed {
+                return None;
+            }
+            e.metadata
+                .as_ref()
+                .and_then(|m| m.get(key))
+                .and_then(serde_json::Value::as_str)
+        };
+        self.from.is_none_or(|v| e.timestamp >= v)
+            && self.to.is_none_or(|v| e.timestamp <= v)
+            && self.kind.as_ref().is_none_or(|v| e.kind == *v)
+            && self.severity.is_none_or(|v| e.severity == v)
+            && self
+                .subject
+                .as_deref()
+                .is_none_or(|v| e.source.subject.as_deref() == Some(v))
+            && self.actor.as_deref().is_none_or(|v| {
+                e.source.subject.as_deref() == Some(v)
+                    || meta("user") == Some(v)
+                    || meta("actor") == Some(v)
+            })
+            && self
+                .request_id
+                .as_deref()
+                .is_none_or(|v| e.source.request_id.as_deref() == Some(v))
+            && self
+                .service_name
+                .as_ref()
+                .is_none_or(|v| e.service_name == *v)
+            && self
+                .schema
+                .as_deref()
+                .is_none_or(|v| meta("schema") == Some(v))
+            && self
+                .entity_id
+                .as_deref()
+                .is_none_or(|v| meta("entity_id") == Some(v))
+            && self
+                .tenant_id
+                .as_deref()
+                .is_none_or(|v| meta("tenant_id") == Some(v))
+            && self.status_code.is_none_or(|v| e.status_code == Some(v))
+            && self.through_sequence.is_none_or(|v| e.sequence <= v)
+            && self.cursor.is_none_or(|v| match self.order {
+                AuditOrder::NewestFirst => e.sequence < v,
+                AuditOrder::OldestFirst => e.sequence > v,
+            })
+    }
+}
+
 /// Trait for audit event persistence backends
 ///
 /// Implementations MUST enforce append-only semantics at the database level
@@ -150,6 +294,15 @@ pub trait AuditStorage: Send + Sync {
     /// The event must have `hash`, `previous_hash`, and `sequence` already set
     /// by `AuditChain::seal()`.
     async fn append(&self, event: &AuditEvent) -> Result<(), Error>;
+
+    /// Return a bounded, filtered page in stable sequence order.
+    /// Custom adapters explicitly report unsupported; no unbounded fallback occurs.
+    /// SurrealDB caps examination at 10000 candidates and errors if exhausted.
+    async fn query_filtered(&self, _query: &AuditQuery) -> Result<Vec<AuditEvent>, Error> {
+        Err(Error::Internal(
+            "Filtered audit queries are unsupported by this storage".into(),
+        ))
+    }
 
     /// Get the most recent event (for chain resumption on startup)
     async fn latest(&self) -> Result<Option<AuditEvent>, Error>;
@@ -483,6 +636,16 @@ mod bounded_tests {
     }
 
     #[tokio::test]
+    async fn custom_storage_reports_filtered_query_unsupported() {
+        assert!(memory()
+            .query_filtered(&AuditQuery::default())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("unsupported"));
+    }
+
+    #[tokio::test]
     async fn bounded_checks_ignore_later_corruption_but_check_predecessor() {
         let mut storage = memory();
         storage.0[4].path = Some("tampered".into());
@@ -566,5 +729,65 @@ mod bounded_tests {
         assert!(crate::state::AppState::<()>::default()
             .audit_storage()
             .is_none());
+    }
+}
+
+#[cfg(test)]
+mod query_tests {
+    use super::*;
+    #[test]
+    fn query_rejects_invalid_ranges_and_preserves_exact_filter_semantics() {
+        let mut q = AuditQuery::default();
+        assert!(q.validate().is_ok());
+        for limit in [0, 1001, usize::MAX] {
+            q.limit = limit;
+            assert!(q.validate().is_err());
+        }
+        q = AuditQuery {
+            cursor: Some(u64::MAX),
+            ..AuditQuery::default()
+        };
+        assert!(q.validate().is_err());
+        let mut e = AuditEvent::new(
+            AuditEventKind::AuthTokenValidated,
+            AuditSeverity::Notice,
+            "test".into(),
+        );
+        e.sequence = 5;
+        e.metadata =
+            Some(serde_json::json!({"user":"user_a","schema":"case","entity_id":"case_a"}));
+        q = AuditQuery {
+            actor: Some("user_a".into()),
+            schema: Some("case".into()),
+            entity_id: Some("case_a".into()),
+            cursor: Some(6),
+            through_sequence: Some(5),
+            ..AuditQuery::default()
+        };
+        assert!(q.matches(&e));
+        q.cursor = Some(5);
+        assert!(!q.matches(&e));
+        q.order = AuditOrder::OldestFirst;
+        q.cursor = Some(4);
+        assert!(q.matches(&e));
+        q.through_sequence = Some(4);
+        assert!(!q.matches(&e));
+        q.through_sequence = None;
+        q.subject = Some("user_a".into());
+        assert!(!q.matches(&e));
+        e.source.subject = Some("user_a".into());
+        assert!(q.matches(&e));
+        q.metadata_kinds = Some(vec![]);
+        assert!(!q.matches(&e)); // Resource metadata cannot match disallowed kinds.
+        q.schema = None;
+        q.entity_id = None;
+        assert!(q.matches(&e)); // The source subject remains available.
+        e.source.subject = None;
+        assert!(!q.matches(&e));
+        q.metadata_kinds = Some(vec!["auth.token.validated".into()]);
+        q.subject = None;
+        assert!(q.matches(&e));
+        q.actor = Some("USER_A".into());
+        assert!(!q.matches(&e));
     }
 }

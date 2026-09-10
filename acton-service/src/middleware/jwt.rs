@@ -218,10 +218,22 @@ impl JwtAuth {
                 if let Some(ref logger) = audit_logger {
                     if logger.config().audit_auth_events {
                         logger
-                            .log_auth(
-                                crate::audit::event::AuditEventKind::AuthTokenMissing,
-                                crate::audit::event::AuditSeverity::Informational,
-                                audit_source,
+                            .log(
+                                crate::audit::event::AuditEvent::new(
+                                    crate::audit::event::AuditEventKind::AuthTokenMissing,
+                                    crate::audit::event::AuditSeverity::Informational,
+                                    logger.service_name().to_string(),
+                                )
+                                .with_source(audit_source)
+                                .with_http(
+                                    request.method().to_string(),
+                                    request.uri().path().to_string(),
+                                    Some(401),
+                                    None,
+                                )
+                                .with_metadata(
+                                    serde_json::json!({"reason": "bearer_token_missing"}),
+                                ),
                             )
                             .await;
                     }
@@ -238,10 +250,22 @@ impl JwtAuth {
                 if let Some(ref logger) = audit_logger {
                     if logger.config().audit_auth_events {
                         logger
-                            .log_auth(
-                                crate::audit::event::AuditEventKind::AuthTokenInvalid,
-                                crate::audit::event::AuditSeverity::Warning,
-                                audit_source,
+                            .log(
+                                crate::audit::event::AuditEvent::new(
+                                    crate::audit::event::AuditEventKind::AuthTokenInvalid,
+                                    crate::audit::event::AuditSeverity::Warning,
+                                    logger.service_name().to_string(),
+                                )
+                                .with_source(audit_source)
+                                .with_http(
+                                    request.method().to_string(),
+                                    request.uri().path().to_string(),
+                                    Some(401),
+                                    None,
+                                )
+                                .with_metadata(
+                                    serde_json::json!({"reason": "bearer_token_invalid"}),
+                                ),
                             )
                             .await;
                     }
@@ -266,7 +290,15 @@ impl JwtAuth {
                                 logger.service_name().to_string(),
                             )
                             .with_source(source)
-                            .with_metadata(serde_json::json!({ "jti": jti }));
+                            .with_http(
+                                request.method().to_string(),
+                                request.uri().path().to_string(),
+                                Some(401),
+                                None,
+                            )
+                            .with_metadata(
+                                serde_json::json!({ "jti": jti, "reason": "bearer_token_revoked" }),
+                            );
                             logger.log(event).await;
                         }
                     }
@@ -287,7 +319,7 @@ impl JwtAuth {
                 source.subject = Some(claims.sub.clone());
                 logger
                     .log_auth(
-                        crate::audit::event::AuditEventKind::AuthLoginSuccess,
+                        crate::audit::event::AuditEventKind::AuthTokenValidated,
                         crate::audit::event::AuditSeverity::Notice,
                         source,
                     )
@@ -304,6 +336,7 @@ impl JwtAuth {
 
 impl TokenValidator for JwtAuth {
     fn validate_token(&self, token: &str) -> Result<Claims, Error> {
+        crate::crypto::ensure_jwt_crypto_provider();
         // If key_manager is configured, try to use rotated keys first
         #[cfg(feature = "auth")]
         if let Some(ref km) = self.key_manager {

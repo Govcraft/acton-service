@@ -121,6 +121,7 @@ impl JwtGenerator {
     }
 
     fn generate_internal(&self, claims: &Claims, expires_in: Duration) -> Result<String, Error> {
+        crate::crypto::ensure_jwt_crypto_provider();
         let now = Utc::now();
         let exp = now.timestamp() + expires_in.as_secs() as i64;
 

@@ -31,6 +31,7 @@ fn req(row: &tiberius::Row, name: &str) -> Result<String, Error> {
 }
 fn kind(value: &str) -> AuditEventKind {
     match value {
+        "auth.token.validated" => AuditEventKind::AuthTokenValidated,
         "auth.login.success" => AuditEventKind::AuthLoginSuccess,
         "auth.login.failed" => AuditEventKind::AuthLoginFailed,
         "auth.token.missing" => AuditEventKind::AuthTokenMissing,
@@ -150,6 +151,73 @@ impl AuditStorage for MssqlAuditStorage {
     async fn purge_before(&self, cutoff: DateTime<Utc>) -> Result<u64, Error> {
         execute(&self.pool,"SET XACT_ABORT ON; BEGIN TRANSACTION; DISABLE TRIGGER audit_no_delete ON audit_events; DELETE FROM audit_events WHERE [timestamp]<@P1; ENABLE TRIGGER audit_no_delete ON audit_events; COMMIT TRANSACTION",&[&cutoff]).await
     }
+    async fn query_filtered(&self, q: &super::AuditQuery) -> Result<Vec<AuditEvent>, Error> {
+        q.validate()?;
+        let (comparison, direction) = match q.order {
+            super::AuditOrder::NewestFirst => ("<", "DESC"),
+            super::AuditOrder::OldestFirst => (">", "ASC"),
+        };
+        let kind = q.kind.as_ref().map(ToString::to_string);
+        let severity = q.severity.map(|v| i16::from(v.as_syslog_severity()));
+        let status_code = q.status_code.map(|v| v as i16);
+        let ceiling = q.through_sequence.map(|v| v as i64);
+        let cursor = q.cursor.map(|v| v as i64);
+        let limit = q.limit as i64;
+        let metadata_kinds = q
+            .metadata_kinds
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| Error::Internal(format!("Invalid metadata kind filter: {e}")))?;
+        let statement = format!(
+            r#"SELECT TOP (@P15) * FROM audit_events WHERE (@P1 IS NULL OR [timestamp] >= @P1)
+ AND (@P2 IS NULL OR [timestamp] <= @P2)
+ AND (@P3 IS NULL OR kind COLLATE Latin1_General_100_BIN2 = @P3)
+ AND (@P4 IS NULL OR severity = @P4)
+ AND (@P5 IS NULL OR source_subject COLLATE Latin1_General_100_BIN2 = @P5)
+ AND (@P6 IS NULL OR source_request_id COLLATE Latin1_General_100_BIN2 = @P6)
+ AND (@P7 IS NULL OR service_name COLLATE Latin1_General_100_BIN2 = @P7)
+ AND (@P8 IS NULL OR ((@P16 IS NULL OR kind COLLATE Latin1_General_100_BIN2 IN (SELECT [value] COLLATE Latin1_General_100_BIN2 FROM OPENJSON(@P16)))
+ AND EXISTS (SELECT 1 FROM OPENJSON(metadata) WHERE [key] COLLATE Latin1_General_100_BIN2 = 'schema' AND [type] = 1 AND [value] COLLATE Latin1_General_100_BIN2 = @P8)))
+ AND (@P9 IS NULL OR ((@P16 IS NULL OR kind COLLATE Latin1_General_100_BIN2 IN (SELECT [value] COLLATE Latin1_General_100_BIN2 FROM OPENJSON(@P16)))
+ AND EXISTS (SELECT 1 FROM OPENJSON(metadata) WHERE [key] COLLATE Latin1_General_100_BIN2 = 'entity_id' AND [type] = 1 AND [value] COLLATE Latin1_General_100_BIN2 = @P9)))
+ AND (@P10 IS NULL OR ((@P16 IS NULL OR kind COLLATE Latin1_General_100_BIN2 IN (SELECT [value] COLLATE Latin1_General_100_BIN2 FROM OPENJSON(@P16)))
+ AND EXISTS (SELECT 1 FROM OPENJSON(metadata) WHERE [key] COLLATE Latin1_General_100_BIN2 = 'tenant_id' AND [type] = 1 AND [value] COLLATE Latin1_General_100_BIN2 = @P10)))
+ AND (@P11 IS NULL OR status_code = @P11)
+ AND (@P12 IS NULL OR sequence <= @P12)
+ AND (@P13 IS NULL OR source_subject COLLATE Latin1_General_100_BIN2 = @P13 OR ((@P16 IS NULL OR kind COLLATE Latin1_General_100_BIN2 IN (SELECT [value] COLLATE Latin1_General_100_BIN2 FROM OPENJSON(@P16)))
+ AND (EXISTS (SELECT 1 FROM OPENJSON(metadata) WHERE [key] COLLATE Latin1_General_100_BIN2 = 'user' AND [type] = 1 AND [value] COLLATE Latin1_General_100_BIN2 = @P13) OR EXISTS (SELECT 1 FROM OPENJSON(metadata) WHERE [key] COLLATE Latin1_General_100_BIN2 = 'actor' AND [type] = 1 AND [value] COLLATE Latin1_General_100_BIN2 = @P13))))
+ AND (@P14 IS NULL OR sequence {comparison} @P14)
+ ORDER BY sequence {direction}"#
+        );
+        query(
+            &self.pool,
+            &statement,
+            &[
+                &q.from,
+                &q.to,
+                &kind,
+                &severity,
+                &q.subject,
+                &q.request_id,
+                &q.service_name,
+                &q.schema,
+                &q.entity_id,
+                &q.tenant_id,
+                &status_code,
+                &ceiling,
+                &q.actor,
+                &cursor,
+                &limit,
+                &metadata_kinds,
+            ],
+        )
+        .await?
+        .iter()
+        .map(decode)
+        .collect()
+    }
+
     async fn query_sequence(
         &self,
         from: u64,
@@ -192,5 +260,88 @@ impl InitializableStorage for MssqlAuditStorage {
     }
     fn backend_name() -> &'static str {
         "Microsoft SQL Server"
+    }
+}
+
+#[cfg(test)]
+mod investigation_tests {
+    use super::*;
+    use crate::audit::{
+        storage::{AuditOrder, AuditQuery},
+        AuditChain,
+    };
+
+    #[tokio::test]
+    #[ignore = "requires AUDIT_TEST_MSSQL_URL pointing to a dedicated empty SQL Server database"]
+    async fn mssql_investigation_filters_and_cursor_preserve_hashes() {
+        let url = std::env::var("AUDIT_TEST_MSSQL_URL").expect("dedicated SQL Server URL");
+        let config = serde_json::from_value(serde_json::json!({"url":url})).unwrap();
+        let pool = crate::mssql::create_pool(&config).await.unwrap();
+        let storage = MssqlAuditStorage::new(pool);
+        storage.initialize().await.unwrap();
+        assert!(storage.latest().await.unwrap().is_none());
+        let mut chain = AuditChain::new("test".into());
+        for sequence in 1..=5 {
+            let mut e = AuditEvent::new(
+                AuditEventKind::AuthTokenValidated,
+                AuditSeverity::Notice,
+                "test".into(),
+            );
+            e.timestamp = DateTime::from_timestamp(1_700_000_000 + sequence, 0).unwrap();
+            e.metadata =
+                Some(serde_json::json!({"actor":"actor_a","schema":"case","entity_id":"case_a"}));
+            e.source.request_id = Some("req_a".into());
+            e.status_code = Some(403);
+            storage.append(&chain.seal(e)).await.unwrap();
+        }
+        assert_eq!(storage.verify_chain(1).await.unwrap(), None);
+        let mut q = AuditQuery {
+            limit: 2,
+            through_sequence: Some(4),
+            actor: Some("actor_a".into()),
+            schema: Some("case".into()),
+            entity_id: Some("case_a".into()),
+            status_code: Some(403),
+            request_id: Some("req_a".into()),
+            metadata_kinds: Some(vec!["auth.token.validated".into()]),
+            ..Default::default()
+        };
+        assert_eq!(
+            storage
+                .query_filtered(&q)
+                .await
+                .unwrap()
+                .iter()
+                .map(|e| e.sequence)
+                .collect::<Vec<_>>(),
+            vec![4, 3]
+        );
+        q.cursor = Some(3);
+        assert_eq!(
+            storage
+                .query_filtered(&q)
+                .await
+                .unwrap()
+                .iter()
+                .map(|e| e.sequence)
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+        q.order = AuditOrder::OldestFirst;
+        assert_eq!(
+            storage
+                .query_filtered(&q)
+                .await
+                .unwrap()
+                .iter()
+                .map(|e| e.sequence)
+                .collect::<Vec<_>>(),
+            vec![4]
+        );
+        q.metadata_kinds = Some(vec![]);
+        assert!(storage.query_filtered(&q).await.unwrap().is_empty());
+        q.metadata_kinds = None;
+        q.actor = Some("ACTOR_A".into());
+        assert!(storage.query_filtered(&q).await.unwrap().is_empty());
     }
 }

@@ -4452,6 +4452,7 @@ mod optional_auth_tests {
     #[cfg(feature = "jwt")]
     #[tokio::test]
     async fn optional_jwt_auth_preserves_verification_through_service_builder() {
+        crate::crypto::ensure_jwt_crypto_provider();
         let key = [42_u8; 32];
         let key_file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(key_file.path(), key).unwrap();

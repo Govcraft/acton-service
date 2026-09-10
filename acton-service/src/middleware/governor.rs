@@ -250,10 +250,22 @@ impl GovernorRateLimit {
                                 super::request_context::audit_source_for_request(&request);
                             source.subject = claims.as_ref().map(|c| c.sub.clone());
                             logger
-                                .log_auth(
-                                    crate::audit::event::AuditEventKind::HttpRequestDenied,
-                                    crate::audit::event::AuditSeverity::Warning,
-                                    source,
+                                .log(
+                                    crate::audit::event::AuditEvent::new(
+                                        crate::audit::event::AuditEventKind::HttpRequestDenied,
+                                        crate::audit::event::AuditSeverity::Warning,
+                                        logger.service_name().to_string(),
+                                    )
+                                    .with_source(source)
+                                    .with_http(
+                                        request.method().to_string(),
+                                        request.uri().path().to_string(),
+                                        Some(429),
+                                        None,
+                                    )
+                                    .with_metadata(
+                                        serde_json::json!({"reason": "rate_limit_exceeded"}),
+                                    ),
                                 )
                                 .await;
                         }
