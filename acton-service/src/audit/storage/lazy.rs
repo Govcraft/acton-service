@@ -121,6 +121,15 @@ impl<S: InitializableStorage> AuditStorage for LazyAuditStorage<S> {
         self.resolve().await?.query_range(from, to, limit).await
     }
 
+    async fn query_sequence(
+        &self,
+        from: u64,
+        to: u64,
+        limit: usize,
+    ) -> Result<Vec<AuditEvent>, Error> {
+        self.resolve().await?.query_sequence(from, to, limit).await
+    }
+
     async fn verify_chain(&self, from_sequence: u64) -> Result<Option<u64>, Error> {
         self.resolve().await?.verify_chain(from_sequence).await
     }

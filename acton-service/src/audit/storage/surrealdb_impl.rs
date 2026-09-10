@@ -217,6 +217,35 @@ impl AuditStorage for SurrealAuditStorage {
         Ok(rows.into_iter().next().map(Into::into))
     }
 
+    async fn query_sequence(
+        &self,
+        from: u64,
+        to: u64,
+        limit: usize,
+    ) -> Result<Vec<AuditEvent>, Error> {
+        let from = i64::try_from(from)
+            .map_err(|_| Error::Internal("Audit sequence exceeds storage range".into()))?;
+        let to = i64::try_from(to)
+            .map_err(|_| Error::Internal("Audit sequence exceeds storage range".into()))?;
+        let limit = i64::try_from(limit)
+            .map_err(|_| Error::Internal("Audit query limit exceeds storage range".into()))?;
+
+        let mut result = self
+            .client
+            .query("SELECT * FROM audit_events WHERE sequence >= $from AND sequence <= $to ORDER BY sequence ASC LIMIT $limit")
+            .bind(("from", from))
+            .bind(("to", to))
+            .bind(("limit", limit))
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to query audit events: {}", e)))?;
+
+        let rows: Vec<AuditRow> = result
+            .take(0)
+            .map_err(|e| Error::Internal(format!("Failed to deserialize audit events: {}", e)))?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
     async fn query_range(
         &self,
         from: DateTime<Utc>,

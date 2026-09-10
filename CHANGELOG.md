@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.41.0] - 2026-09-09
+
+### Added
+
+- Expose the active audit storage through application state.
+- Add bounded sequence browsing, retained sequence bounds, and typed bounded chain verification across all audit storage adapters.
+
+### Fixed
+
+- Seal new events at millisecond timestamp precision so database rounding cannot invalidate their hashes. Historical hashes retain their original verification semantics.
+- Install PostgreSQL audit immutability rules on the actual table even when another schema has identically named rules.
+
 ## [acton-service-v0.40.1] - 2026-09-09
 
 ### Fixed

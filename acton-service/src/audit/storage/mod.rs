@@ -87,14 +87,6 @@ pub(crate) fn parse_custom_kind(s: &str) -> String {
 
 /// Verify a requested range fetched together with its immediate predecessor.
 /// A stored predecessor anchors local consistency, not externally trusted history.
-#[cfg(any(
-    test,
-    feature = "database",
-    feature = "turso",
-    feature = "surrealdb",
-    feature = "clickhouse",
-    feature = "mssql"
-))]
 fn verify_stored_chain(events: &[AuditEvent], from_sequence: u64) -> Result<Option<u64>, Error> {
     let start = from_sequence.max(1);
     let first_requested = events
@@ -136,6 +128,17 @@ fn verify_stored_chain(events: &[AuditEvent], from_sequence: u64) -> Result<Opti
     )
 }
 
+/// Result of bounded verification against the locally stored predecessor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuditVerification {
+    /// All requested events and their predecessor are locally consistent.
+    Consistent,
+    /// The first event whose content, sequence, or link is broken.
+    Broken { sequence: u64 },
+    /// A requested endpoint or predecessor is unavailable.
+    Incomplete,
+}
+
 /// Trait for audit event persistence backends
 ///
 /// Implementations MUST enforce append-only semantics at the database level
@@ -158,6 +161,58 @@ pub trait AuditStorage: Send + Sync {
         to: DateTime<Utc>,
         limit: usize,
     ) -> Result<Vec<AuditEvent>, Error>;
+
+    /// Query an inclusive sequence interval in ascending order, capped by `limit`.
+    /// Unsupported custom adapters return an error instead of silently scanning.
+    async fn query_sequence(
+        &self,
+        _from: u64,
+        _to: u64,
+        _limit: usize,
+    ) -> Result<Vec<AuditEvent>, Error> {
+        Err(Error::Internal(
+            "Sequence audit queries are unsupported by this storage".into(),
+        ))
+    }
+
+    /// Return retained first and last sequence numbers, or `None` for empty storage.
+    /// Concurrent retention may move the lower bound after this observation.
+    async fn sequence_bounds(&self) -> Result<Option<(u64, u64)>, Error> {
+        let Some(last) = self.latest().await? else {
+            return Ok(None);
+        };
+        Ok(self
+            .query_sequence(1, last.sequence, 1)
+            .await?
+            .first()
+            .map(|first| (first.sequence, last.sequence)))
+    }
+
+    /// Verify an inclusive interval using at most 10,001 stored events.
+    /// Zero starts at genesis. The immediate predecessor is checked as a local
+    /// anchor; consistency does not authenticate earlier history or completeness
+    /// against an external head. Missing endpoints/anchor return `Incomplete`.
+    async fn verify_chain_range(&self, from: u64, to: u64) -> Result<AuditVerification, Error> {
+        let from = from.max(1);
+        let count = to
+            .checked_sub(from)
+            .and_then(|n| n.checked_add(1))
+            .filter(|count| *count <= 10_000)
+            .ok_or_else(|| {
+                Error::Internal("Audit verification requires 1 to 10000 events".into())
+            })?;
+        let events = self
+            .query_sequence(from.saturating_sub(1).max(1), to, count as usize + 1)
+            .await?;
+        if events.last().map(|event| event.sequence) != Some(to) {
+            return Ok(AuditVerification::Incomplete);
+        }
+        match verify_stored_chain(&events, from) {
+            Ok(None) => Ok(AuditVerification::Consistent),
+            Ok(Some(sequence)) => Ok(AuditVerification::Broken { sequence }),
+            Err(_) => Ok(AuditVerification::Incomplete),
+        }
+    }
 
     /// Verify chain integrity from a given sequence number
     ///
@@ -367,5 +422,149 @@ mod verification_tests {
         );
         events[2] = gap.seal(events[2].clone());
         assert_eq!(verify_stored_chain(&events[..3], 2).unwrap(), Some(4));
+    }
+}
+
+#[cfg(test)]
+mod bounded_tests {
+    use super::*;
+    use crate::audit::{AuditChain, AuditEventKind, AuditSeverity};
+
+    struct Memory(Vec<AuditEvent>);
+
+    #[async_trait]
+    impl AuditStorage for Memory {
+        async fn append(&self, _: &AuditEvent) -> Result<(), Error> {
+            Ok(())
+        }
+        async fn latest(&self) -> Result<Option<AuditEvent>, Error> {
+            Ok(self.0.last().cloned())
+        }
+        async fn query_range(
+            &self,
+            _: DateTime<Utc>,
+            _: DateTime<Utc>,
+            _: usize,
+        ) -> Result<Vec<AuditEvent>, Error> {
+            unreachable!()
+        }
+        async fn verify_chain(&self, _: u64) -> Result<Option<u64>, Error> {
+            unreachable!()
+        }
+        async fn query_sequence(
+            &self,
+            from: u64,
+            to: u64,
+            limit: usize,
+        ) -> Result<Vec<AuditEvent>, Error> {
+            Ok(self
+                .0
+                .iter()
+                .filter(|event| (from..=to).contains(&event.sequence))
+                .take(limit)
+                .cloned()
+                .collect())
+        }
+    }
+
+    fn memory() -> Memory {
+        let mut chain = AuditChain::new("bounded-test".into());
+        Memory(
+            (0..5)
+                .map(|_| {
+                    chain.seal(AuditEvent::new(
+                        AuditEventKind::HttpRequest,
+                        AuditSeverity::Informational,
+                        "bounded-test".into(),
+                    ))
+                })
+                .collect(),
+        )
+    }
+
+    #[tokio::test]
+    async fn bounded_checks_ignore_later_corruption_but_check_predecessor() {
+        let mut storage = memory();
+        storage.0[4].path = Some("tampered".into());
+        assert_eq!(
+            storage.verify_chain_range(2, 4).await.unwrap(),
+            AuditVerification::Consistent
+        );
+        assert_eq!(
+            storage.verify_chain_range(2, 5).await.unwrap(),
+            AuditVerification::Broken { sequence: 5 }
+        );
+        storage.0[0].hash = None;
+        assert_eq!(
+            storage.verify_chain_range(2, 4).await.unwrap(),
+            AuditVerification::Broken { sequence: 1 }
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_endpoints_and_retained_anchor_are_incomplete() {
+        let mut storage = memory();
+        assert_eq!(
+            storage.verify_chain_range(0, 3).await.unwrap(),
+            AuditVerification::Consistent
+        );
+        assert_eq!(
+            storage.verify_chain_range(3, 6).await.unwrap(),
+            AuditVerification::Incomplete
+        );
+        assert_eq!(
+            storage.verify_chain_range(6, 7).await.unwrap(),
+            AuditVerification::Incomplete
+        );
+        storage.0.drain(..2);
+        assert_eq!(storage.sequence_bounds().await.unwrap(), Some((3, 5)));
+        assert_eq!(
+            storage.verify_chain_range(3, 5).await.unwrap(),
+            AuditVerification::Incomplete
+        );
+        assert_eq!(
+            storage.verify_chain_range(4, 5).await.unwrap(),
+            AuditVerification::Consistent
+        );
+        storage.0.clear();
+        assert_eq!(storage.sequence_bounds().await.unwrap(), None);
+        assert_eq!(
+            storage.verify_chain_range(1, 1).await.unwrap(),
+            AuditVerification::Incomplete
+        );
+    }
+
+    #[tokio::test]
+    async fn internal_gap_is_broken_and_invalid_ranges_are_rejected() {
+        let mut storage = memory();
+        storage.0.remove(2);
+        assert_eq!(
+            storage.verify_chain_range(2, 5).await.unwrap(),
+            AuditVerification::Broken { sequence: 4 }
+        );
+        assert!(storage.verify_chain_range(3, 2).await.is_err());
+        assert!(storage.verify_chain_range(1, 10_001).await.is_err());
+        assert!(storage.verify_chain_range(1, u64::MAX).await.is_err());
+    }
+    #[tokio::test]
+    async fn application_state_preserves_shared_storage_identity() {
+        let storage: std::sync::Arc<dyn AuditStorage> = std::sync::Arc::new(memory());
+        let state = crate::state::AppState::<()>::builder()
+            .without_tracing()
+            .audit_storage(storage.clone())
+            .build()
+            .await
+            .unwrap();
+        assert!(std::sync::Arc::ptr_eq(
+            state.audit_storage().unwrap(),
+            &storage
+        ));
+        assert!(std::sync::Arc::ptr_eq(
+            state.clone().audit_storage().unwrap(),
+            &storage
+        ));
+        assert!(crate::state::AppState::<()>::default()
+            .audit_storage()
+            .is_none());
     }
 }

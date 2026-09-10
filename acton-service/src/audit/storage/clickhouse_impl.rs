@@ -249,6 +249,25 @@ impl AuditStorage for ClickHouseAuditStorage {
         Ok(rows.into_iter().next().map(Into::into))
     }
 
+    async fn query_sequence(
+        &self,
+        from: u64,
+        to: u64,
+        limit: usize,
+    ) -> Result<Vec<AuditEvent>, Error> {
+        let rows = self
+            .client
+            .query("SELECT ?fields FROM audit_events WHERE sequence >= ? AND sequence <= ? ORDER BY sequence ASC LIMIT ?")
+            .bind(from)
+            .bind(to)
+            .bind(limit as u64)
+            .fetch_all::<AuditQueryRow>()
+            .await
+            .map_err(|e| Error::ClickHouse(format!("Failed to query audit events: {}", e)))?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
     async fn query_range(
         &self,
         from: DateTime<Utc>,

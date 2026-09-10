@@ -420,6 +420,22 @@ Severity levels map to RFC 5424 syslog severity values:
 | `Informational` | 6 | Informational messages |
 | `Debug` | 7 | Debug-level messages |
 
+## Timestamp precision
+
+Starting with 0.41.0, sealing truncates event timestamps to milliseconds before hashing. This is the common precision preserved by every built-in storage adapter, including ClickHouse. Verification continues to hash each stored timestamp exactly as recorded. Older events whose timestamp precision was already lost in storage remain unverifiable; this release does not reconstruct missing fractional digits or reinterpret historical hashes. A range anchored to such an older event may therefore report a broken predecessor.
+
+## Reading and verifying stored events
+
+`AppState::audit_storage()` returns the same storage handle used by the active audit agent. It is absent when the agent has no persistent storage or did not start. Call `ensure_ready()` before reporting storage availability: a lazy database connection can still be pending or unavailable.
+
+`AuditStorage::sequence_bounds()` reports the retained first and latest sequences. Capture the latest sequence as a page snapshot, then call `query_sequence(from, snapshot, limit)` for inclusive, ascending pages. Advance `from` to one past the last returned sequence. New appends do not enter that snapshot; retention can remove earlier events between requests. These storage methods do not authorize callers, so applications must enforce their own access policy before exposing events or bounds.
+
+`verify_chain_range(from, to)` verifies an inclusive interval of at most 10,000 requested events plus its immediate predecessor. It returns `AuditVerification::Consistent`, `Broken { sequence }`, or `Incomplete`. Empty intervals in storage, missing endpoints, and missing predecessor anchors are incomplete. Database failures and unsupported custom adapters return an error. Sequence zero is an alias for genesis, sequence one.
+
+A consistent result establishes local consistency against the stored predecessor. It does not authenticate history before that predecessor, prove completeness against an external chain head, or supply a trusted retention checkpoint. A corrupt predecessor can be reported as broken even though it precedes the requested interval.
+
+Custom `AuditStorage` implementations retain compatibility through default methods. Implement `query_sequence` to enable the default bounds and bounded verification methods. `AppStateBuilder::audit_storage` attaches application-managed storage without spawning an audit agent.
+
 ## Best Practices
 
 **DO:**
