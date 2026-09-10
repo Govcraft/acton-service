@@ -596,6 +596,16 @@ mod tests {
             storage.append(&events[0]).await.is_err(),
             "duplicate record statement errors must reach the caller"
         );
+        assert_eq!(
+            storage
+                .query_filtered(&Default::default())
+                .await
+                .unwrap()
+                .iter()
+                .map(|e| e.sequence)
+                .collect::<Vec<_>>(),
+            vec![5, 4, 3, 2, 1]
+        );
         let mut q = super::super::AuditQuery {
             limit: 2,
             through_sequence: Some(4),
@@ -637,6 +647,7 @@ mod tests {
         q.metadata_kinds = Some(vec![]);
         assert!(storage.query_filtered(&q).await.unwrap().is_empty());
         q.metadata_kinds = Some(vec!["custom.project.updated".into()]);
+        assert_eq!(storage.query_filtered(&q).await.unwrap().len(), 1);
         q.schema = Some("does-not-exist".into());
         assert!(storage.query_filtered(&q).await.unwrap().is_empty());
         let last = storage.latest().await.unwrap().unwrap();
