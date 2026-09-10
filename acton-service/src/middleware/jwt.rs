@@ -336,6 +336,7 @@ impl JwtAuth {
 
 impl TokenValidator for JwtAuth {
     fn validate_token(&self, token: &str) -> Result<Claims, Error> {
+        crate::crypto::ensure_jwt_crypto_provider();
         // If key_manager is configured, try to use rotated keys first
         #[cfg(feature = "auth")]
         if let Some(ref km) = self.key_manager {

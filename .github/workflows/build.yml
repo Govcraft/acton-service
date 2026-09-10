@@ -235,7 +235,7 @@ jobs:
           - backend: turso
             features: --no-default-features --features "audit,turso,http,observability,crypto-aws-lc-rs"
           - backend: surrealdb
-            features: --no-default-features --features "audit,surrealdb,http,observability,crypto-aws-lc-rs"
+            features: --no-default-features --features "audit,surrealdb,auth,jwt,http,observability,crypto-aws-lc-rs"
           - backend: clickhouse
             features: --features "audit,clickhouse"
     steps:
