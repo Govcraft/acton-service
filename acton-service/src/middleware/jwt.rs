@@ -317,13 +317,19 @@ impl JwtAuth {
             if logger.config().audit_auth_events {
                 let mut source = audit_source;
                 source.subject = Some(claims.sub.clone());
-                logger
-                    .log_auth(
-                        crate::audit::event::AuditEventKind::AuthTokenValidated,
-                        crate::audit::event::AuditSeverity::Notice,
-                        source,
-                    )
-                    .await;
+                let event = crate::audit::event::AuditEvent::new(
+                    crate::audit::event::AuditEventKind::AuthTokenValidated,
+                    crate::audit::event::AuditSeverity::Notice,
+                    logger.service_name().to_string(),
+                )
+                .with_source(source)
+                .with_http(
+                    request.method().to_string(),
+                    request.uri().path().to_string(),
+                    None,
+                    None,
+                );
+                logger.log(event).await;
             }
         }
 

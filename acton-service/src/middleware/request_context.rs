@@ -16,7 +16,7 @@
 //!
 //! This middleware must run **after** `request_id_layer()` (so a generated
 //! `x-request-id` is visible) and **before** the auth, audit, Cedar, and
-//! governor layers. `ServiceBuilder::apply_middleware` wires it at that
+//! governor layers. `ServiceBuilder` wires it at that
 //! position automatically; services that assemble a `Router` by hand are
 //! responsible for the same ordering, and consumers fall back to header-only
 //! extraction when the extension is absent.
