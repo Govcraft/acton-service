@@ -16,6 +16,8 @@
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use chrono::Utc;
+use mti::prelude::{MagicTypeIdExt, V7};
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -223,7 +225,7 @@ impl KeyManager {
     /// - 32 cryptographically random bytes (suitable for PASETO v4.local)
     /// - Base64-encoded for storage
     /// - BLAKE3-hashed for integrity verification
-    /// - UUID v7 kid for time-sortable identification
+    /// - UUIDv7-backed signkey TypeID for time-sortable identification
     pub async fn rotate(&self) -> Result<SigningKeyMetadata, Error> {
         let now = Utc::now();
 
@@ -233,7 +235,7 @@ impl KeyManager {
 
         let key_material_b64 = BASE64.encode(key_bytes);
         let key_hash = blake3::hash(&key_bytes).to_hex().to_string();
-        let kid = uuid::Uuid::now_v7().to_string();
+        let kid = "signkey".create_type_id::<V7>().to_string();
 
         let new_key = SigningKeyMetadata {
             kid: kid.clone(),
@@ -756,9 +758,10 @@ mod tests {
         assert!(!new_key.kid.is_empty());
         assert!(!new_key.key_hash.is_empty());
 
-        // Verify the key is a valid UUID v7
-        let parsed = uuid::Uuid::parse_str(&new_key.kid);
-        assert!(parsed.is_ok());
+        // Verify the key identifier is a UUIDv7 TypeID.
+        let parsed: mti::prelude::MagicTypeId = new_key.kid.parse().unwrap();
+        assert_eq!(parsed.prefix().as_str(), "signkey");
+        assert_eq!(parsed.suffix().to_uuid().get_version_num(), 7);
 
         // Verify key material is valid base64 that decodes to 32 bytes
         let decoded = BASE64.decode(&new_key.key_material).unwrap();

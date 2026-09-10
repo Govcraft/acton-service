@@ -3,6 +3,8 @@
 //! Generates JWT tokens for authentication. This complements the existing
 //! `JwtAuth` validator.
 
+use mti::prelude::{MagicTypeIdExt, V7};
+
 use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
@@ -123,7 +125,7 @@ impl JwtGenerator {
         let exp = now.timestamp() + expires_in.as_secs() as i64;
 
         let jti = if self.config.include_jti {
-            Some(uuid::Uuid::new_v4().to_string())
+            Some("token".create_type_id::<V7>().to_string())
         } else {
             claims.jti.clone()
         };
@@ -216,5 +218,49 @@ fn create_encoding_key(key_bytes: &[u8], algorithm: Algorithm) -> Result<Encodin
         _ => Err(Error::Config(Box::new(figment::Error::from(
             "Unsupported algorithm for key creation",
         )))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jsonwebtoken::{decode, DecodingKey, Validation};
+
+    #[test]
+    fn generated_jti_is_v7_typeid_and_supplied_legacy_jti_is_preserved() {
+        let secret = b"synthetic-test-signing-secret-with-enough-bytes";
+        let mut generator = JwtGenerator {
+            encoding_key: Arc::new(EncodingKey::from_secret(secret)),
+            algorithm: Algorithm::HS256,
+            config: TokenGenerationConfig::default(),
+            issuer: None,
+            audience: None,
+            key_manager: None,
+        };
+        let claims: Claims = serde_json::from_value(serde_json::json!({
+            "sub": "legacy-user", "exp": 0,
+            "jti": "550e8400-e29b-41d4-a716-446655440000"
+        }))
+        .unwrap();
+        let token = generator.generate_token(&claims).unwrap();
+        let decoded = decode::<JwtClaims>(
+            &token,
+            &DecodingKey::from_secret(secret),
+            &Validation::new(Algorithm::HS256),
+        )
+        .unwrap();
+        let id: mti::prelude::MagicTypeId = decoded.claims.jti.unwrap().parse().unwrap();
+        assert_eq!(id.prefix().as_str(), "token");
+        assert_eq!(id.suffix().to_uuid().get_version_num(), 7);
+
+        generator.config.include_jti = false;
+        let token = generator.generate_token(&claims).unwrap();
+        let decoded = decode::<JwtClaims>(
+            &token,
+            &DecodingKey::from_secret(secret),
+            &Validation::new(Algorithm::HS256),
+        )
+        .unwrap();
+        assert_eq!(decoded.claims.jti, claims.jti);
     }
 }

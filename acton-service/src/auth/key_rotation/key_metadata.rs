@@ -150,7 +150,7 @@ impl FromStr for KeyStatus {
 /// verification of the key material.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SigningKeyMetadata {
-    /// Unique key identifier (UUID-based, time-sortable)
+    /// Unique key identifier (new keys use a UUIDv7-backed `signkey_` TypeID; legacy IDs remain valid)
     pub kid: String,
 
     /// Cryptographic format of this key

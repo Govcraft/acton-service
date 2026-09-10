@@ -1,23 +1,33 @@
 //! SSE connection tracking and management.
 
+use mti::prelude::{MagicTypeId, MagicTypeIdExt, V7};
 use std::fmt;
 use uuid::Uuid;
 
 /// Unique identifier for an SSE connection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ConnectionId(Uuid);
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConnectionId(MagicTypeId);
 
 impl ConnectionId {
+    /// TypeID prefix for this connection transport.
+    pub const PREFIX: &'static str = "sseconn";
+
+    /// Canonical TypeID representation.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
     /// Create a new unique connection ID.
     #[must_use]
     pub fn new() -> Self {
-        Self(Uuid::new_v4())
+        Self(Self::PREFIX.create_type_id::<V7>())
     }
 
     /// Get the underlying UUID.
     #[must_use]
     pub fn as_uuid(&self) -> Uuid {
-        self.0
+        self.0.suffix().to_uuid()
     }
 }
 
@@ -35,7 +45,7 @@ impl fmt::Display for ConnectionId {
 
 impl From<Uuid> for ConnectionId {
     fn from(uuid: Uuid) -> Self {
-        Self(uuid)
+        Self(Self::PREFIX.create_type_id_with_suffix::<V7>(uuid.into()))
     }
 }
 
@@ -116,6 +126,15 @@ impl Default for SseConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connection_ids_use_v7_and_preserve_legacy_uuid_bits() {
+        let id = ConnectionId::new();
+        assert!(id.as_str().starts_with("sseconn_"));
+        assert_eq!(id.as_uuid().get_version_num(), 7);
+        let legacy = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        assert_eq!(ConnectionId::from(legacy).as_uuid(), legacy);
+    }
 
     #[test]
     fn test_connection_id() {

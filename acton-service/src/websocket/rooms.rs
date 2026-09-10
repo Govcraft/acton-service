@@ -191,13 +191,13 @@ impl RoomManager {
             let request = envelope.message();
             let room_id = request.room_id.clone();
             let member = request.member.clone();
-            let connection_id = member.connection_id;
+            let connection_id = member.connection_id.clone();
 
             // Check connection room limit
             let connection_rooms = agent
                 .model
                 .connection_rooms
-                .entry(connection_id)
+                .entry(connection_id.clone())
                 .or_default();
 
             if connection_rooms.len() >= agent.model.max_rooms_per_connection {
@@ -227,7 +227,7 @@ impl RoomManager {
             }
 
             // Add member to room
-            room.members.insert(connection_id, member);
+            room.members.insert(connection_id.clone(), member);
             room.touch();
             connection_rooms.insert(room_id.clone());
 
@@ -245,11 +245,11 @@ impl RoomManager {
         agent.mutate_on::<LeaveRoomRequest>(|agent, envelope| {
             let request = envelope.message();
             let room_id = &request.room_id;
-            let connection_id = request.connection_id;
+            let connection_id = &request.connection_id;
 
             // Remove from room
             if let Some(room) = agent.model.rooms.get_mut(room_id) {
-                room.members.remove(&connection_id);
+                room.members.remove(connection_id);
                 room.touch();
 
                 tracing::info!(
@@ -267,7 +267,7 @@ impl RoomManager {
             }
 
             // Update connection tracking
-            if let Some(rooms) = agent.model.connection_rooms.get_mut(&connection_id) {
+            if let Some(rooms) = agent.model.connection_rooms.get_mut(connection_id) {
                 rooms.remove(room_id);
             }
 
@@ -279,7 +279,7 @@ impl RoomManager {
             let request = envelope.message();
             let room_id = &request.room_id;
             let message = request.message.clone();
-            let exclude_sender = request.exclude_sender;
+            let exclude_sender = request.exclude_sender.as_ref();
 
             if let Some(room) = agent.model.rooms.get(room_id) {
                 // Collect senders (filtering out excluded connection)
@@ -288,7 +288,7 @@ impl RoomManager {
                     .values()
                     .filter(|m| {
                         exclude_sender
-                            .map(|id| m.connection_id != id)
+                            .map(|id| &m.connection_id != id)
                             .unwrap_or(true)
                     })
                     .map(|m| m.sender.clone())
@@ -318,13 +318,13 @@ impl RoomManager {
 
         // Handle connection disconnect (leave all rooms)
         agent.mutate_on::<ConnectionDisconnected>(|agent, envelope| {
-            let connection_id = envelope.message().connection_id;
+            let connection_id = &envelope.message().connection_id;
 
             // Get all rooms this connection was in
-            if let Some(room_ids) = agent.model.connection_rooms.remove(&connection_id) {
+            if let Some(room_ids) = agent.model.connection_rooms.remove(connection_id) {
                 for room_id in room_ids {
                     if let Some(room) = agent.model.rooms.get_mut(&room_id) {
-                        room.members.remove(&connection_id);
+                        room.members.remove(connection_id);
 
                         // Clean up empty rooms
                         if room.is_empty() {

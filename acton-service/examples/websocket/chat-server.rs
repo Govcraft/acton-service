@@ -83,7 +83,9 @@ async fn handle_socket(socket: WebSocket, broadcaster: Arc<Broadcaster>) {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Message>(32);
 
     // Register this connection with the broadcaster
-    broadcaster.register(connection_id, tx.clone()).await;
+    broadcaster
+        .register(connection_id.clone(), tx.clone())
+        .await;
 
     tracing::info!(connection_id = %connection_id, "New WebSocket connection");
 
@@ -116,7 +118,7 @@ async fn handle_socket(socket: WebSocket, broadcaster: Arc<Broadcaster>) {
                 Ok(msg) => {
                     handle_incoming_message(
                         msg,
-                        connection_id,
+                        &connection_id,
                         &conn_id_str,
                         &tx,
                         &broadcaster_clone,
@@ -156,7 +158,7 @@ async fn handle_socket(socket: WebSocket, broadcaster: Arc<Broadcaster>) {
 /// Handle an incoming chat message
 async fn handle_incoming_message(
     msg: IncomingMessage,
-    connection_id: ConnectionId,
+    connection_id: &ConnectionId,
     conn_id_str: &str,
     tx: &tokio::sync::mpsc::Sender<Message>,
     broadcaster: &Broadcaster,
@@ -178,7 +180,7 @@ async fn handle_incoming_message(
             };
             let _ = broadcaster
                 .broadcast_except(
-                    &[connection_id],
+                    std::slice::from_ref(connection_id),
                     Message::Text(serde_json::to_string(&notification).unwrap().into()),
                 )
                 .await;
@@ -208,7 +210,7 @@ async fn handle_incoming_message(
             };
             let _ = broadcaster
                 .broadcast_except(
-                    &[connection_id],
+                    std::slice::from_ref(connection_id),
                     Message::Text(serde_json::to_string(&broadcast_msg).unwrap().into()),
                 )
                 .await;

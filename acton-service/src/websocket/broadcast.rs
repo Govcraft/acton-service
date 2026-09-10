@@ -37,7 +37,7 @@ pub enum BroadcastTarget {
 /// let broadcaster = Broadcaster::new();
 ///
 /// // Register a connection
-/// broadcaster.register(connection_id, sender).await;
+/// broadcaster.register(connection_id.clone(), sender).await;
 ///
 /// // Broadcast to all
 /// broadcaster.broadcast_all(Message::Text("Hello everyone!".into())).await;
@@ -66,7 +66,7 @@ impl Broadcaster {
     /// * `id` - The connection's unique identifier
     /// * `sender` - Channel for sending messages to the connection
     pub async fn register(&self, id: ConnectionId, sender: mpsc::Sender<Message>) {
-        self.connections.write().await.insert(id, sender);
+        self.connections.write().await.insert(id.clone(), sender);
         tracing::debug!(connection_id = %id, "Connection registered with broadcaster");
     }
 
@@ -180,7 +180,7 @@ impl Broadcaster {
 
     /// Get a list of all registered connection IDs
     pub async fn connection_ids(&self) -> Vec<ConnectionId> {
-        self.connections.read().await.keys().copied().collect()
+        self.connections.read().await.keys().cloned().collect()
     }
 }
 
@@ -206,7 +206,7 @@ mod tests {
         let id = ConnectionId::new();
         let (tx, _rx) = mpsc::channel(32);
 
-        broadcaster.register(id, tx).await;
+        broadcaster.register(id.clone(), tx).await;
         assert!(broadcaster.has_connection(&id).await);
         assert_eq!(broadcaster.connection_count().await, 1);
 
@@ -224,8 +224,8 @@ mod tests {
         let (tx1, mut rx1) = mpsc::channel(32);
         let (tx2, mut rx2) = mpsc::channel(32);
 
-        broadcaster.register(id1, tx1).await;
-        broadcaster.register(id2, tx2).await;
+        broadcaster.register(id1.clone(), tx1).await;
+        broadcaster.register(id2.clone(), tx2).await;
 
         let sent = broadcaster
             .broadcast_all(Message::Text("hello".into()))
@@ -246,8 +246,8 @@ mod tests {
         let (tx1, mut rx1) = mpsc::channel(32);
         let (tx2, mut rx2) = mpsc::channel(32);
 
-        broadcaster.register(id1, tx1).await;
-        broadcaster.register(id2, tx2).await;
+        broadcaster.register(id1.clone(), tx1).await;
+        broadcaster.register(id2.clone(), tx2).await;
 
         let sent = broadcaster
             .broadcast_except(&[id1], Message::Text("hello".into()))
@@ -265,7 +265,7 @@ mod tests {
         let id = ConnectionId::new();
         let (tx, mut rx) = mpsc::channel(32);
 
-        broadcaster.register(id, tx).await;
+        broadcaster.register(id.clone(), tx).await;
 
         let success = broadcaster
             .send_to(&id, Message::Text("direct".into()))

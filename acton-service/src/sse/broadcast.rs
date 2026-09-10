@@ -187,7 +187,7 @@ impl SseBroadcaster {
     /// Register a connection.
     pub async fn register(&self, id: ConnectionId) {
         self.connections.write().await.insert(
-            id,
+            id.clone(),
             ConnectionInfo {
                 subscribed_channels: Vec::new(),
             },
@@ -198,7 +198,7 @@ impl SseBroadcaster {
     /// Register a connection with channel subscriptions.
     pub async fn register_with_channels(&self, id: ConnectionId, channels: Vec<String>) {
         self.connections.write().await.insert(
-            id,
+            id.clone(),
             ConnectionInfo {
                 subscribed_channels: channels,
             },
@@ -314,7 +314,7 @@ mod tests {
 
         assert_eq!(broadcaster.connection_count().await, 0);
 
-        broadcaster.register(id).await;
+        broadcaster.register(id.clone()).await;
         assert_eq!(broadcaster.connection_count().await, 1);
 
         broadcaster.unregister(&id).await;

@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Generated WebSocket and SSE connection IDs, token IDs, and signing-key IDs now use UUIDv7-backed mti TypeIDs. Connection identifiers are Clone rather than Copy; legacy UUID conversion remains available.
 - AuditEvent.id is now an mti-backed audit_ TypeID using UUIDv7 for new events. Legacy UUID input and stored UUID bytes remain supported without changing historical v1/v2 hashes. Public JSON identifiers now use canonical TypeID strings.
 
 ### Fixed
