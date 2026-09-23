@@ -206,7 +206,10 @@ mod tests {
         assert_eq!(outcomes[0], ("a".to_string(), CheckOutcome::Ready));
         assert_eq!(
             outcomes[1],
-            ("b".to_string(), CheckOutcome::Degraded("impaired".to_string()))
+            (
+                "b".to_string(),
+                CheckOutcome::Degraded("impaired".to_string())
+            )
         );
         assert_eq!(
             outcomes[2],
@@ -246,14 +249,8 @@ mod tests {
         let outcomes = checks.readiness_outcomes().await;
         // Two stalled checks cost one shared deadline, not two.
         assert!(started.elapsed() < Duration::from_millis(1_500));
-        assert_eq!(
-            outcomes[0].1,
-            CheckOutcome::Unready(TIMED_OUT.to_string())
-        );
-        assert_eq!(
-            outcomes[1].1,
-            CheckOutcome::Unready(TIMED_OUT.to_string())
-        );
+        assert_eq!(outcomes[0].1, CheckOutcome::Unready(TIMED_OUT.to_string()));
+        assert_eq!(outcomes[1].1, CheckOutcome::Unready(TIMED_OUT.to_string()));
         assert_eq!(outcomes[2].1, CheckOutcome::Ready);
     }
 }
