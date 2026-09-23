@@ -152,4 +152,40 @@ mod tests {
         let result = engine.render("service/main.rs.jinja", &context);
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn a_scaffold_depends_on_this_release_unless_given_a_path() {
+        // The embedded template only: a user's customized copy would override it.
+        let engine = TemplateEngine { config_dir: None };
+        let render = |path: &str| {
+            engine
+                .render(
+                    "service/Cargo.toml.jinja",
+                    &json!({
+                        "name": "svc",
+                        "acton_service_version": crate::templates::ACTON_SERVICE_VERSION,
+                        "acton_service_path": path,
+                        "features": ["http"],
+                        "grpc": false,
+                        "graphql": false,
+                    }),
+                )
+                .expect("renders")
+        };
+
+        let published = render("");
+        assert!(
+            published.contains(&format!(
+                r#"acton-service = {{ version = "{}", features = ["http"] }}"#,
+                crate::templates::ACTON_SERVICE_VERSION
+            )),
+            "{published}"
+        );
+
+        let local = render("../acton-service");
+        assert!(
+            local.contains(r#"acton-service = { path = "../acton-service", features = ["http"] }"#),
+            "{local}"
+        );
+    }
 }

@@ -3,6 +3,7 @@ use colored::Colorize;
 use std::fs;
 use std::path::Path;
 
+use crate::templates::acton_service_dependency;
 use crate::utils;
 
 pub async fn execute(service: String, output: Option<String>, dry_run: bool) -> Result<()> {
@@ -128,7 +129,7 @@ fn show_success(output_path: &Path, service_name: &str, project_root: &Path) {
     println!("     ```");
     println!("  3. Add acton-service build dependency in Cargo.toml:");
     println!("     [build-dependencies]");
-    println!("     acton-service = {{ version = \"*\", features = [\"build\"] }}");
+    println!("     {}", acton_service_dependency(&["grpc"]));
     println!("  4. Run: cargo build --features grpc");
 
     if let Ok(relative_path) = output_path.strip_prefix(std::env::current_dir().unwrap_or_default())
