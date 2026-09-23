@@ -1,3 +1,4 @@
+use crate::templates::acton_service_dependency;
 use anyhow::Result;
 use colored::Colorize;
 
@@ -217,10 +218,12 @@ fn show_build_setup() {
 
 fn show_cargo_setup() {
     println!("   [dependencies]");
-    println!(r#"   acton-service = {{ version = "0.2", features = ["grpc"] }}"#);
+    println!("   {}", acton_service_dependency(&["grpc"]));
     println!();
     println!("   [build-dependencies]");
-    println!(r#"   acton-service = {{ version = "0.2", features = ["build-utils"] }}"#);
+    // `build_utils` compiles protos through the `grpc` feature; there is no
+    // separate build feature.
+    println!("   {}", acton_service_dependency(&["grpc"]));
 }
 
 fn show_service_implementation(
