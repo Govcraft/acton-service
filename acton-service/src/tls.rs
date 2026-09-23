@@ -55,6 +55,7 @@ use tokio_rustls::rustls::server::WebPkiClientVerifier;
 use tokio_rustls::rustls::{RootCertStore, ServerConfig};
 use tokio_rustls::server::TlsStream;
 use tokio_rustls::TlsAcceptor;
+use tokio_util::sync::CancellationToken;
 
 use crate::config::TlsConfig;
 use crate::error::Result;
@@ -871,7 +872,10 @@ pub struct TlsListener {
     rx: Option<mpsc::Receiver<(TlsStream<TcpStream>, SocketAddr)>>,
     /// The pump task, kept so `Drop` can abort it rather than let it outlive the
     /// listener holding the socket open.
-    pump: Option<tokio::task::JoinHandle<()>>,
+    pump: Option<tokio::task::AbortHandle>,
+    /// Cancelled when the pump stops while this listener is still alive. See
+    /// [`stopped`](Self::stopped).
+    stopped: CancellationToken,
 }
 
 impl Drop for TlsListener {
@@ -930,10 +934,20 @@ async fn handshake_pump(
                     let _ = tx.send((tls_stream, addr)).await;
                 }
                 Ok(Err(e)) => {
-                    tracing::warn!("TLS handshake failed from {}: {}", addr, e);
+                    let kind = HandshakeFailureKind::of(&e);
+                    count_handshake_failure(kind);
+                    tracing::warn!(
+                        kind = kind.as_str(),
+                        "TLS handshake failed from {}: {}",
+                        addr,
+                        e
+                    );
                 }
                 Err(_elapsed) => {
+                    let kind = HandshakeFailureKind::Timeout;
+                    count_handshake_failure(kind);
                     tracing::warn!(
+                        kind = kind.as_str(),
                         "TLS handshake from {} did not complete within {:?}; dropping the \
                          connection",
                         addr,
@@ -942,6 +956,127 @@ async fn handshake_pump(
                 }
             }
         });
+    }
+}
+
+/// Why a TLS handshake on a [`TlsListener`] failed, as a bounded label.
+///
+/// Every failed handshake is counted on the `tls.handshake_failures` counter
+/// (Prometheus: `tls_handshake_failures_total`) with this as its `kind`
+/// attribute, and logged at WARN with the same value in a `kind` field. The
+/// label set is small and fixed, so an operator can tell a plaintext probe on
+/// the TLS port from a client that presented no certificate or an untrusted
+/// one without reading error prose, and alert on each separately.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum HandshakeFailureKind {
+    /// The peer did not speak TLS at all: typically plaintext HTTP sent to an
+    /// HTTPS port. Label `plaintext`.
+    Plaintext,
+    /// Mutual TLS required a client certificate and the peer presented none.
+    /// Label `no_client_cert`.
+    NoClientCert,
+    /// The peer's certificate, or a revocation list checked against it, was
+    /// rejected: an untrusted issuer, an expired or revoked certificate, a
+    /// malformed chain. Label `bad_cert`.
+    BadCert,
+    /// The handshake did not finish within the listener's handshake timeout.
+    /// Label `timeout`.
+    Timeout,
+    /// The peer closed the connection before the handshake finished. Label
+    /// `eof`.
+    Eof,
+    /// Any other failure: no shared protocol version or cipher suite, a fatal
+    /// alert from the peer, a malformed handshake message. Label `other`.
+    Other,
+}
+
+impl HandshakeFailureKind {
+    /// The label recorded for this kind.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Plaintext => "plaintext",
+            Self::NoClientCert => "no_client_cert",
+            Self::BadCert => "bad_cert",
+            Self::Timeout => "timeout",
+            Self::Eof => "eof",
+            Self::Other => "other",
+        }
+    }
+
+    /// Classify the error a server-side handshake returned.
+    ///
+    /// Pure. Never returns [`Timeout`](Self::Timeout): a timed-out handshake
+    /// yields no error to classify, and the listener labels it directly.
+    #[must_use]
+    pub fn of(error: &io::Error) -> Self {
+        use tokio_rustls::rustls::{Error as TlsError, InvalidMessage};
+
+        if error.kind() == io::ErrorKind::UnexpectedEof {
+            return Self::Eof;
+        }
+        match error
+            .get_ref()
+            .and_then(|inner| inner.downcast_ref::<TlsError>())
+        {
+            Some(TlsError::InvalidMessage(InvalidMessage::InvalidContentType)) => Self::Plaintext,
+            Some(TlsError::NoCertificatesPresented) => Self::NoClientCert,
+            Some(TlsError::InvalidCertificate(_) | TlsError::InvalidCertRevocationList(_)) => {
+                Self::BadCert
+            }
+            _ => Self::Other,
+        }
+    }
+}
+
+impl std::fmt::Display for HandshakeFailureKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Count one failed handshake on `tls.handshake_failures{kind}`.
+///
+/// A no-op when no meter provider is installed or the build has no metrics.
+fn count_handshake_failure(kind: HandshakeFailureKind) {
+    #[cfg(feature = "_metrics")]
+    if let Some(meter) = crate::observability::get_meter() {
+        meter
+            .u64_counter("tls.handshake_failures")
+            .with_description("TLS handshakes that failed, by why they failed")
+            .build()
+            .add(1, &[opentelemetry::KeyValue::new("kind", kind.as_str())]);
+    }
+    #[cfg(not(feature = "_metrics"))]
+    let _ = kind;
+}
+
+/// Wait for the handshake pump to end, and mark the listener stopped if it
+/// ended any way other than being aborted.
+///
+/// The pump loops forever, so it ends only by panicking or by the listener's
+/// `Drop` aborting it. An abort is the listener going away on purpose; anything
+/// else leaves a listener that will never accept again, which must not be
+/// silent.
+async fn watch_pump(pump: tokio::task::JoinHandle<()>, stopped: CancellationToken, addr: String) {
+    match pump.await {
+        Err(e) if e.is_cancelled() => {}
+        Err(e) => {
+            tracing::error!(
+                listener = %addr,
+                "the TLS handshake pump panicked ({e}); this listener accepts no further \
+                 connections"
+            );
+            stopped.cancel();
+        }
+        Ok(()) => {
+            tracing::error!(
+                listener = %addr,
+                "the TLS handshake pump returned; this listener accepts no further connections"
+            );
+            stopped.cancel();
+        }
     }
 }
 
@@ -973,6 +1108,7 @@ impl TlsListener {
             handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
             rx: None,
             pump: None,
+            stopped: CancellationToken::new(),
         }
     }
 
@@ -991,6 +1127,21 @@ impl TlsListener {
     #[must_use]
     pub fn config_source(&self) -> &TlsConfigSource {
         &self.config_source
+    }
+
+    /// Resolves if this listener stops accepting while it is still alive.
+    ///
+    /// The handshake pump that feeds [`accept`](axum::serve::Listener::accept)
+    /// runs as its own task. If it ends (it can only panic; it never returns),
+    /// `accept` has nothing left to hand out and parks forever, which to
+    /// `axum::serve` looks exactly like a quiet listener. Await this beside the
+    /// serve future to turn that silent stop into an exit: `ActonService::serve`
+    /// does, and returns an error when it fires.
+    ///
+    /// Never resolves for a healthy listener, nor for one dropped on purpose.
+    /// Take it before handing the listener to `axum::serve`, which consumes it.
+    pub fn stopped(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
+        self.stopped.clone().cancelled_owned()
     }
 }
 
@@ -1011,10 +1162,16 @@ impl axum::serve::Listener for TlsListener {
                 self.handshake_timeout,
                 tx,
             ));
+            self.pump = Some(pump.abort_handle());
+            let addr = self
+                .tcp
+                .local_addr()
+                .map_or_else(|e| format!("<unknown: {e}>"), |a| a.to_string());
+            tokio::spawn(watch_pump(pump, self.stopped.clone(), addr));
             self.rx = Some(rx);
-            self.pump = Some(pump);
         }
 
+        let stopped = self.stopped.clone();
         let rx = self
             .rx
             .as_mut()
@@ -1024,12 +1181,16 @@ impl axum::serve::Listener for TlsListener {
             match rx.recv().await {
                 Some(conn) => conn,
                 // The pump loops forever holding a `tx`, so the channel can only
-                // close if the pump task itself is gone — unreachable in normal
-                // operation. Returning would hand axum a bogus connection and
-                // busy-loop its serve loop, so park this future forever instead;
-                // a graceful shutdown drops the whole listener rather than
-                // relying on `accept()` to resolve.
-                None => std::future::pending().await,
+                // close once the pump task is gone. Returning would hand axum a
+                // bogus connection and busy-loop its serve loop, so park this
+                // future forever instead, and report the stop through
+                // `stopped()` so whoever serves this listener can exit rather
+                // than wait on it. `watch_pump` usually reports first; this
+                // covers any exit it could not see.
+                None => {
+                    stopped.cancel();
+                    std::future::pending().await
+                }
             }
         }
     }
@@ -1204,9 +1365,7 @@ pub fn load_server_config(tls_config: &TlsConfig) -> Result<Arc<ServerConfig>> {
         }
     }
     .with_single_cert(cert_chain, key)
-    .map_err(|e| {
-        crate::error::Error::Tls(format!("Failed to build TLS server config: {}", e))
-    })?;
+    .map_err(|e| crate::error::Error::Tls(format!("Failed to build TLS server config: {}", e)))?;
 
     // Advertise ALPN so the listener answers a client's protocol offer during
     // the handshake. Without this rustls selects nothing, and a strict gRPC
@@ -1532,7 +1691,10 @@ mod tests {
                 crate::error::Error::Tls("cert_path '/etc/secret.pem' unreadable".to_string())
                     .into_response();
 
-            assert_eq!(response.status(), axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            );
         }
     }
 
@@ -2655,5 +2817,197 @@ mod tests {
         let certs = info.peer_certificates().expect("chain present");
         assert_eq!(certs.as_slice().len(), 1);
         assert_eq!(certs.leaf(), &leaf.der, "the leaf must be the first cert");
+    }
+
+    mod handshake_failure_kind {
+        use super::super::HandshakeFailureKind;
+        use std::io;
+        use tokio_rustls::rustls::{
+            CertRevocationListError, CertificateError, Error as TlsError, InvalidMessage,
+        };
+
+        fn wrapped(error: TlsError) -> io::Error {
+            io::Error::new(io::ErrorKind::InvalidData, error)
+        }
+
+        #[test]
+        fn a_record_that_is_not_tls_is_plaintext() {
+            let error = wrapped(TlsError::InvalidMessage(InvalidMessage::InvalidContentType));
+            assert_eq!(
+                HandshakeFailureKind::of(&error),
+                HandshakeFailureKind::Plaintext
+            );
+        }
+
+        #[test]
+        fn a_missing_client_certificate_is_no_client_cert() {
+            let error = wrapped(TlsError::NoCertificatesPresented);
+            assert_eq!(
+                HandshakeFailureKind::of(&error),
+                HandshakeFailureKind::NoClientCert
+            );
+        }
+
+        #[test]
+        fn a_rejected_certificate_or_crl_is_bad_cert() {
+            for error in [
+                TlsError::InvalidCertificate(CertificateError::UnknownIssuer),
+                TlsError::InvalidCertificate(CertificateError::Expired),
+                TlsError::InvalidCertificate(CertificateError::Revoked),
+                TlsError::InvalidCertRevocationList(CertRevocationListError::BadSignature),
+            ] {
+                let error = wrapped(error);
+                assert_eq!(
+                    HandshakeFailureKind::of(&error),
+                    HandshakeFailureKind::BadCert,
+                    "{error}"
+                );
+            }
+        }
+
+        #[test]
+        fn an_early_close_is_eof() {
+            let error = io::Error::new(io::ErrorKind::UnexpectedEof, "tls handshake eof");
+            assert_eq!(HandshakeFailureKind::of(&error), HandshakeFailureKind::Eof);
+        }
+
+        #[test]
+        fn anything_else_is_other() {
+            for error in [
+                wrapped(TlsError::InvalidMessage(
+                    InvalidMessage::InvalidEmptyPayload,
+                )),
+                wrapped(TlsError::PeerIncompatible(
+                    tokio_rustls::rustls::PeerIncompatible::Tls13RequiredForQuic,
+                )),
+                io::Error::new(io::ErrorKind::ConnectionReset, "reset"),
+                io::Error::new(io::ErrorKind::InvalidData, "not a rustls error"),
+            ] {
+                assert_eq!(
+                    HandshakeFailureKind::of(&error),
+                    HandshakeFailureKind::Other,
+                    "{error}"
+                );
+            }
+        }
+
+        #[test]
+        fn labels_are_stable() {
+            let labels = [
+                HandshakeFailureKind::Plaintext,
+                HandshakeFailureKind::NoClientCert,
+                HandshakeFailureKind::BadCert,
+                HandshakeFailureKind::Timeout,
+                HandshakeFailureKind::Eof,
+                HandshakeFailureKind::Other,
+            ]
+            .map(HandshakeFailureKind::as_str);
+            assert_eq!(
+                labels,
+                [
+                    "plaintext",
+                    "no_client_cert",
+                    "bad_cert",
+                    "timeout",
+                    "eof",
+                    "other"
+                ]
+            );
+            assert_eq!(HandshakeFailureKind::BadCert.to_string(), "bad_cert");
+        }
+    }
+
+    mod pump_supervision {
+        use super::super::{watch_pump, TlsConfigSource, TlsListener};
+        use super::{generate_cert, write_credentials};
+        use std::time::Duration;
+        use tokio::net::TcpListener;
+        use tokio_util::sync::CancellationToken;
+
+        const SETTLE: Duration = Duration::from_secs(5);
+
+        #[tokio::test]
+        async fn a_panicking_pump_marks_the_listener_stopped() {
+            let stopped = CancellationToken::new();
+            let pump = tokio::spawn(async { panic!("pump fault injected by the test") });
+            tokio::time::timeout(SETTLE, watch_pump(pump, stopped.clone(), "test".into()))
+                .await
+                .expect("the watcher returns once the pump ends");
+            assert!(stopped.is_cancelled());
+        }
+
+        #[tokio::test]
+        async fn an_aborted_pump_is_a_deliberate_stop_not_a_failure() {
+            let stopped = CancellationToken::new();
+            let pump = tokio::spawn(std::future::pending::<()>());
+            pump.abort();
+            tokio::time::timeout(SETTLE, watch_pump(pump, stopped.clone(), "test".into()))
+                .await
+                .expect("the watcher returns once the pump ends");
+            assert!(!stopped.is_cancelled());
+        }
+
+        async fn listener() -> TlsListener {
+            crate::crypto::ensure_default_crypto_provider();
+            let dir = tempfile::tempdir().expect("temp dir");
+            let tls_config = write_credentials(dir.path(), &generate_cert("localhost"));
+            let source =
+                TlsConfigSource::from_tls_config(&tls_config).expect("server config loads");
+            let tcp = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+            TlsListener::with_config_source(tcp, source)
+        }
+
+        /// The silent stop this guards against: with the pump gone, `accept()`
+        /// parks forever and `axum::serve` waits on it with nothing to say.
+        #[tokio::test]
+        async fn a_dead_pump_under_a_live_listener_resolves_stopped() {
+            use axum::serve::Listener as _;
+
+            let mut listener = listener().await;
+            let stopped = listener.stopped();
+            // The first accept spawns the pump; nothing connects, so it pends.
+            assert!(
+                tokio::time::timeout(Duration::from_millis(50), listener.accept())
+                    .await
+                    .is_err()
+            );
+            listener
+                .pump
+                .as_ref()
+                .expect("the first accept spawned the pump")
+                .abort();
+            // The next accept finds the channel closed and reports it.
+            let accept = listener.accept();
+            tokio::select! {
+                () = stopped => {}
+                _ = accept => panic!("accept cannot yield a connection with no pump"),
+                () = tokio::time::sleep(SETTLE) => panic!("stopped() never resolved"),
+            }
+        }
+
+        #[tokio::test]
+        async fn a_healthy_listener_never_resolves_stopped() {
+            use axum::serve::Listener as _;
+
+            let mut listener = listener().await;
+            let stopped = listener.stopped();
+            let _ = tokio::time::timeout(Duration::from_millis(50), listener.accept()).await;
+            assert!(tokio::time::timeout(Duration::from_millis(200), stopped)
+                .await
+                .is_err());
+        }
+
+        #[tokio::test]
+        async fn dropping_the_listener_is_not_a_stop() {
+            use axum::serve::Listener as _;
+
+            let mut listener = listener().await;
+            let stopped = listener.stopped();
+            let _ = tokio::time::timeout(Duration::from_millis(50), listener.accept()).await;
+            drop(listener);
+            assert!(tokio::time::timeout(Duration::from_millis(200), stopped)
+                .await
+                .is_err());
+        }
     }
 }

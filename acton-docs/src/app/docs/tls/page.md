@@ -345,6 +345,35 @@ silently ignoring them — a misspelled field like `reload_interval_sec`
 certificate rotation.
 {% /callout %}
 
+## Handshake failures
+
+Every failed handshake is logged at WARN, as before, now with a `kind` field,
+and counted on `tls.handshake_failures` with the same value as its `kind`
+attribute (Prometheus: `tls_handshake_failures_total{kind="..."}`):
+
+| `kind` | What the peer did |
+|---|---|
+| `plaintext` | Spoke something other than TLS, typically plain HTTP to the HTTPS port |
+| `no_client_cert` | Presented no certificate where mutual TLS requires one |
+| `bad_cert` | Presented a certificate the listener rejects: untrusted issuer, expired, revoked, malformed |
+| `timeout` | Did not finish within `handshake_timeout_secs` |
+| `eof` | Closed the connection mid-handshake |
+| `other` | Anything else: no shared protocol version or cipher suite, a fatal alert, a malformed handshake message |
+
+A steady trickle of `plaintext` is usually a load balancer health check or a
+scanner pointed at the wrong scheme; a jump in `bad_cert` after a CA rotation
+is a client fleet that has not picked up the new chain. Alert on each kind
+separately rather than on the total.
+
+## Handshake pump supervision
+
+The handshakes above run on a background task that feeds the listener. If
+that task ever stops, the listener can accept nothing further. `serve()`
+watches it: the other listeners drain and `serve()` returns an error naming
+the listener, rather than the process running on with a port that never
+answers. A `TlsListener` used directly with `axum::serve` exposes the same
+signal as `TlsListener::stopped()`.
+
 ## Outbound connect timeout
 
 The handshake timeout above bounds connections this service *accepts*. The

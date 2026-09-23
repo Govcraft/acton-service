@@ -104,6 +104,29 @@ This checklist covers security, observability, performance, and operational cons
 - [ ] Configure appropriate health check timeouts
 - [ ] Test service behavior when dependencies are unavailable
 
+## Startup and Shutdown
+
+`serve()` binds every listener and then accepts until shutdown. To publish the
+bound address first (a supervisor, a readiness file, a test harness using
+`port = 0`), split it:
+
+```rust
+let bound = service.bind().await?;       // binds, accepts nothing yet
+publish(bound.local_addr());
+bound.serve().await?;
+```
+
+Shutdown starts on SIGINT, SIGTERM, or the future passed to
+`ServiceBuilder::with_shutdown`, and every listener drains before `serve()`
+returns. `serve()` also returns an error, after draining the rest, when any
+listener, TLS handshake pump or the metrics exporter stops on its own. Treat a
+non-zero exit from `serve()` as a crash your process manager should restart,
+not as a clean stop.
+
+- [ ] Process manager restarts the service when `serve()` returns an error
+- [ ] Shutdown path tested: a signal or `with_shutdown` drains in-flight requests
+- [ ] `tls_handshake_failures_total` scraped and alerted per `kind`
+
 ## Observability Setup
 
 ### Logging

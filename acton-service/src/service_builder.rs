@@ -154,6 +154,16 @@ where
     readiness_checks: Vec<crate::checks::RegisteredCheck>,
     /// Shared deadline for one endpoint's registered checks.
     check_deadline: std::time::Duration,
+    /// Caller-bound socket for the HTTP (or single-port HTTP+gRPC) listener.
+    /// See [`ServiceBuilder::with_listener`].
+    listener: Option<tokio::net::TcpListener>,
+    /// Caller-bound socket for the Prometheus exporter. See
+    /// [`ServiceBuilder::with_metrics_listener`].
+    #[cfg(feature = "prometheus-metrics")]
+    metrics_listener: Option<tokio::net::TcpListener>,
+    /// Caller-supplied graceful-shutdown trigger. See
+    /// [`ServiceBuilder::with_shutdown`].
+    shutdown: Option<crate::supervise::ShutdownFuture>,
 }
 
 impl<T> ServiceBuilder<T>
@@ -202,7 +212,83 @@ where
             liveness_checks: Vec::new(),
             readiness_checks: Vec::new(),
             check_deadline: crate::checks::DEFAULT_CHECK_DEADLINE,
+            listener: None,
+            #[cfg(feature = "prometheus-metrics")]
+            metrics_listener: None,
+            shutdown: None,
         }
+    }
+
+    /// Serve the HTTP listener on a socket the caller already bound.
+    ///
+    /// `[service] bind` and `port` are then not used to bind it: the service
+    /// accepts on exactly this socket. In single-port gRPC mode the same socket
+    /// carries gRPC too; a separate-port gRPC listener still binds from
+    /// `[grpc]`. Use it to take a socket from a supervisor or a test harness,
+    /// or to bind before anything else can take the port.
+    ///
+    /// To learn an OS-assigned port without binding yourself, set
+    /// `port = 0` and read [`BoundService::local_addr`] after
+    /// [`ActonService::bind`] instead.
+    ///
+    /// ```rust,ignore
+    /// let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    /// let addr = listener.local_addr()?;
+    /// ServiceBuilder::new()
+    ///     .with_config(config)
+    ///     .with_routes(routes)
+    ///     .with_listener(listener)
+    ///     .build()
+    ///     .serve()
+    ///     .await?;
+    /// ```
+    #[must_use]
+    pub fn with_listener(mut self, listener: tokio::net::TcpListener) -> Self {
+        self.listener = Some(listener);
+        self
+    }
+
+    /// Serve the plaintext Prometheus exporter on a socket the caller bound.
+    ///
+    /// Turns the exporter on even without a `[middleware.metrics.exporter]`
+    /// table, and takes precedence over that table's `bind`/`port` when both
+    /// are present. The exporter is otherwise the one the table configures:
+    /// `GET /metrics` only, no TLS, no authentication, drained after the
+    /// service listeners. See [`crate::metrics_exporter`].
+    #[cfg(feature = "prometheus-metrics")]
+    #[must_use]
+    pub fn with_metrics_listener(mut self, listener: tokio::net::TcpListener) -> Self {
+        self.metrics_listener = Some(listener);
+        self
+    }
+
+    /// Shut down gracefully when `shutdown` resolves.
+    ///
+    /// In addition to SIGINT and SIGTERM, not instead of them: whichever comes
+    /// first starts the drain. Lets a service stop itself (a fatal condition in
+    /// a background task, an admin endpoint, the end of a test) without sending
+    /// its own process a signal.
+    ///
+    /// A future that has already resolved when [`BoundService::serve`] starts
+    /// stops the service before it accepts a single connection; `serve` then
+    /// returns `Ok(())`.
+    ///
+    /// ```rust,ignore
+    /// let stop = tokio_util::sync::CancellationToken::new();
+    /// let service = ServiceBuilder::new()
+    ///     .with_config(config)
+    ///     .with_routes(routes)
+    ///     .with_shutdown(stop.clone().cancelled_owned())
+    ///     .build();
+    /// // later, from anywhere: stop.cancel();
+    /// ```
+    #[must_use]
+    pub fn with_shutdown<F>(mut self, shutdown: F) -> Self
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.shutdown = Some(Box::pin(shutdown));
+        self
     }
 
     /// Register an app-defined **readiness** check folded into `/ready`.
@@ -1865,7 +1951,13 @@ where
         #[cfg(all(feature = "grpc", feature = "tls"))]
         let grpc_tls_from_override = self.grpc_tls_config_override.is_some();
 
-        let listener_addr = std::net::SocketAddr::new(config.service.bind, config.service.port);
+        // A caller-bound socket is the listener: its address, not the config's,
+        // is what the exporter collision check below must compare against.
+        let listener_addr = self
+            .listener
+            .as_ref()
+            .and_then(|l| l.local_addr().ok())
+            .unwrap_or_else(|| std::net::SocketAddr::new(config.service.bind, config.service.port));
 
         // Resolve the HTTP TLS config. A `[tls]` section with `enabled = true`
         // is the operator's explicit statement of intended posture, so a load
@@ -2138,16 +2230,26 @@ where
         #[cfg(not(feature = "grpc"))]
         let grpc_listener_addr: Option<std::net::SocketAddr> = None;
 
-        let metrics_exporter_addr = match crate::metrics_exporter::resolve_exporter_addr(
-            config.middleware.metrics.as_ref(),
-            listener_addr,
-            grpc_listener_addr,
-        ) {
-            Ok(addr) => addr,
-            Err(err) => {
-                tracing::error!("{}", err);
-                record_startup_error(&mut startup_error, err);
-                None
+        // A caller-bound exporter socket replaces the table's address, so the
+        // table is neither resolved nor checked for collisions.
+        #[cfg(feature = "prometheus-metrics")]
+        let exporter_socket_supplied = self.metrics_listener.is_some();
+        #[cfg(not(feature = "prometheus-metrics"))]
+        let exporter_socket_supplied = false;
+        let metrics_exporter_addr = if exporter_socket_supplied {
+            None
+        } else {
+            match crate::metrics_exporter::resolve_exporter_addr(
+                config.middleware.metrics.as_ref(),
+                listener_addr,
+                grpc_listener_addr,
+            ) {
+                Ok(addr) => addr,
+                Err(err) => {
+                    tracing::error!("{}", err);
+                    record_startup_error(&mut startup_error, err);
+                    None
+                }
             }
         };
         #[cfg(not(feature = "prometheus-metrics"))]
@@ -2250,6 +2352,10 @@ where
             tls_reload_on_sighup,
             agent_runtime: self.agent_runtime,
             startup_error,
+            listener: self.listener.take(),
+            #[cfg(feature = "prometheus-metrics")]
+            metrics_listener: self.metrics_listener.take(),
+            shutdown: self.shutdown.take(),
         }
     }
 
@@ -2663,7 +2769,8 @@ where
 /// Opaque service wrapper
 ///
 /// This type wraps the final Router and Config. It cannot be manipulated
-/// directly - the only way to use it is to call `serve()`.
+/// directly - the only way to use it is to call [`serve()`](Self::serve), or
+/// [`bind()`](Self::bind) and then [`BoundService::serve`].
 ///
 /// This prevents developers from:
 /// - Adding unversioned routes after construction
@@ -2714,6 +2821,15 @@ where
     /// before binding any listener, so a service that could not honour its
     /// configured security posture never accepts a connection.
     startup_error: Option<crate::error::Error>,
+    /// Caller-bound HTTP socket, used by `bind()` instead of binding
+    /// `listener_addr`.
+    listener: Option<tokio::net::TcpListener>,
+    /// Caller-bound exporter socket, used by `bind()` instead of binding
+    /// `metrics_exporter_addr`.
+    #[cfg(feature = "prometheus-metrics")]
+    metrics_listener: Option<tokio::net::TcpListener>,
+    /// Caller-supplied graceful-shutdown trigger.
+    shutdown: Option<crate::supervise::ShutdownFuture>,
 }
 
 impl<T> ActonService<T>
@@ -2848,6 +2964,23 @@ where
     /// - Single-port mode (default): Both HTTP and gRPC on same port, routed by content-type
     /// - Dual-port mode: HTTP on configured port, gRPC on separate port
     ///
+    /// Equivalent to [`bind`](Self::bind) followed by [`BoundService::serve`];
+    /// call those two separately to learn the bound addresses in between.
+    ///
+    /// # Shutdown
+    ///
+    /// Graceful shutdown starts on SIGINT, SIGTERM, or the future given to
+    /// [`ServiceBuilder::with_shutdown`], whichever comes first, and every
+    /// listener drains before `serve` returns.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error, after draining everything else, if any listener or
+    /// supporting task stops before shutdown was requested: the HTTP listener,
+    /// the separate-port gRPC listener, a TLS listener's handshake pump, or the
+    /// metrics exporter. A service must not run on serving less than it was
+    /// configured to. Also returns any error [`bind`](Self::bind) returns.
+    ///
     /// # Metrics exporter
     ///
     /// When `[middleware.metrics.exporter]` is configured, this also runs the
@@ -2866,7 +2999,31 @@ where
     ///
     /// service.serve().await?;
     /// ```
-    pub async fn serve(mut self) -> crate::error::Result<()> {
+    pub async fn serve(self) -> crate::error::Result<()> {
+        self.bind().await?.serve().await
+    }
+
+    /// Bind every listener without accepting a connection yet.
+    ///
+    /// Binds the metrics exporter (when configured), then the HTTP listener,
+    /// then the separate-port gRPC listener (in dual-port mode), and returns a
+    /// [`BoundService`] that reports each bound address. Nothing is spawned and
+    /// nothing is accepted until [`BoundService::serve`]; the kernel queues
+    /// connections in the meantime.
+    ///
+    /// With `port = 0` the operating system picks the port, and
+    /// [`BoundService::local_addr`] reports which: the race-free way for a
+    /// test or a supervisor to learn where the service listens.
+    ///
+    /// Dropping the [`BoundService`] closes every socket it holds.
+    ///
+    /// # Errors
+    ///
+    /// Returns the misconfiguration recorded by `build()` before binding
+    /// anything, or the first bind that fails.
+    pub async fn bind(mut self) -> crate::error::Result<BoundService<T>> {
+        use tokio::net::TcpListener;
+
         // Fail before any socket binds. A misconfiguration that would force a
         // weaker posture than configured (TLS that could not load, invalid token
         // auth) must never reach the point of accepting connections.
@@ -2874,290 +3031,52 @@ where
             return Err(e);
         }
 
+        // The exporter binds first, so a taken exporter port refuses startup
+        // before the service ports are held.
         #[cfg(feature = "prometheus-metrics")]
-        let exporter = match self.metrics_exporter_addr.take() {
-            Some(addr) => Some(crate::metrics_exporter::MetricsExporter::start(addr).await?),
-            None => None,
+        let exporter = match (
+            self.metrics_listener.take(),
+            self.metrics_exporter_addr.take(),
+        ) {
+            (Some(listener), _) => Some(listener),
+            (None, Some(addr)) => Some(crate::metrics_exporter::bind_exporter(addr).await?),
+            (None, None) => None,
         };
 
-        let result = self.serve_listeners().await;
-
-        #[cfg(feature = "prometheus-metrics")]
-        if let Some(exporter) = exporter {
-            exporter.shutdown().await;
-        }
-
-        result
-    }
-
-    /// The serve body proper: every service listener, every return path.
-    ///
-    /// Split from [`serve`](Self::serve) so that start-before/drain-after
-    /// bracketing (the startup-error check, the metrics exporter) lives in
-    /// exactly one place instead of being threaded through the five return
-    /// paths below.
-    #[cfg_attr(not(feature = "grpc"), allow(unused_mut))]
-    async fn serve_listeners(mut self) -> crate::error::Result<()> {
-        use tokio::net::TcpListener;
-        use tokio::signal;
-
-        // Start credential rotation before binding, so a certificate that
-        // rotates during startup is picked up rather than missed. The guard is
-        // held for the whole of `serve`; dropping it on any return path aborts
-        // the trigger tasks, which would otherwise outlive the listeners they
-        // rotate. Every serve path below is covered by this one call.
-        #[cfg(feature = "tls")]
-        let _tls_reload_tasks = self.install_tls_reload_triggers();
-
-        // Graceful shutdown signal
-        async fn shutdown_signal() {
-            let ctrl_c = async {
-                signal::ctrl_c()
-                    .await
-                    .expect("failed to install Ctrl+C handler");
-            };
-
-            #[cfg(unix)]
-            let terminate = async {
-                signal::unix::signal(signal::unix::SignalKind::terminate())
-                    .expect("failed to install signal handler")
-                    .recv()
-                    .await;
-            };
-
-            #[cfg(not(unix))]
-            let terminate = std::future::pending::<()>();
-
-            tokio::select! {
-                _ = ctrl_c => {},
-                _ = terminate => {},
-            }
-        }
+        let http = match self.listener.take() {
+            Some(listener) => listener,
+            None => TcpListener::bind(&self.listener_addr).await?,
+        };
+        let http_addr = http.local_addr()?;
 
         #[cfg(feature = "grpc")]
-        {
-            // Check if gRPC is enabled and services are provided
-            if let Some(ref grpc_config) = self.config.grpc {
-                if grpc_config.enabled && self.grpc_routes.is_some() {
-                    let grpc_routes = self.grpc_routes.take().unwrap();
-
-                    if grpc_config.use_separate_port {
-                        // Dual-port mode: HTTP and gRPC on separate ports.
-                        // The gRPC listener uses its own bind when set, else the
-                        // service-level bind.
-                        let grpc_port = grpc_config.port;
-                        let grpc_bind = grpc_config.effective_bind(self.config.service.bind);
-                        let grpc_addr = std::net::SocketAddr::new(grpc_bind, grpc_port);
-
-                        tracing::info!("Starting HTTP service on {}", self.listener_addr);
-                        tracing::info!("Starting gRPC service on {}", grpc_addr);
-
-                        let http_listener = TcpListener::bind(&self.listener_addr).await?;
-                        let grpc_listener = TcpListener::bind(&grpc_addr).await?;
-
-                        // The gRPC axum router (auth and Cedar layers were
-                        // applied at build time)
-                        let grpc_app = grpc_routes;
-
-                        // Spawn gRPC server on separate task (with optional
-                        // per-listener TLS, falling back to the HTTP TLS config).
-                        #[cfg(feature = "tls")]
-                        let grpc_tls_config = self.grpc_tls_config.clone();
-                        #[cfg(feature = "tls")]
-                        let grpc_tls_handshake_timeout = self.grpc_tls_handshake_timeout;
-
-                        let grpc_handle = tokio::spawn(async move {
-                            #[cfg(feature = "tls")]
-                            if let Some(ref tls_source) = grpc_tls_config {
-                                let tls_listener = crate::tls::TlsListener::with_config_source(
-                                    grpc_listener,
-                                    tls_source.clone(),
-                                )
-                                .with_handshake_timeout(grpc_tls_handshake_timeout);
-                                return axum::serve(
-                                    tls_listener,
-                                    grpc_app.into_make_service_with_connect_info::<
-                                        crate::tls::TlsConnectInfo,
-                                    >(),
-                                )
-                                    .with_graceful_shutdown(shutdown_signal())
-                                    .await;
-                            }
-
-                            axum::serve(grpc_listener, grpc_app)
-                                .with_graceful_shutdown(shutdown_signal())
-                                .await
-                        });
-
-                        // Run HTTP server (with optional TLS). The TLS listener
-                        // exposes `TlsConnectInfo` (remote address plus any
-                        // verified client certificate) as connect-info.
-                        #[cfg(feature = "tls")]
-                        if let Some(ref tls_source) = self.tls_config {
-                            let tls_listener = crate::tls::TlsListener::with_config_source(
-                                http_listener,
-                                tls_source.clone(),
-                            )
-                            .with_handshake_timeout(self.tls_handshake_timeout);
-                            tracing::info!("TLS enabled (HTTPS) for both HTTP and gRPC");
-                            let http_result = axum::serve(
-                                tls_listener,
-                                self.app.into_make_service_with_connect_info::<
-                                    crate::tls::TlsConnectInfo,
-                                >(),
-                            )
-                                .with_graceful_shutdown(shutdown_signal())
-                                .await;
-                            let _ = grpc_handle.await;
-                            http_result?;
-
-                            tracing::info!("Server shutdown complete");
-                            if let Some(mut runtime) = self.agent_runtime {
-                                tracing::info!("Shutting down agent runtime...");
-                                if let Err(e) = runtime.shutdown_all().await {
-                                    tracing::error!("Agent runtime shutdown error: {}", e);
-                                }
-                                tracing::info!("Agent runtime shutdown complete");
-                            }
-                            return Ok(());
-                        }
-
-                        // Run HTTP server (plain TCP)
-                        let http_result = axum::serve(
-                            http_listener,
-                            self.app
-                                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
-                        )
-                        .with_graceful_shutdown(shutdown_signal())
-                        .await;
-
-                        // Wait for gRPC server
-                        let _ = grpc_handle.await;
-
-                        http_result?;
-                    } else {
-                        // Single-port mode: Hybrid HTTP + gRPC on same port
-                        tracing::info!(
-                            "Starting hybrid HTTP+gRPC service on {}",
-                            self.listener_addr
-                        );
-
-                        let listener = TcpListener::bind(&self.listener_addr).await?;
-
-                        // Merge HTTP and gRPC services (the gRPC router keeps
-                        // its own auth and Cedar layers through the merge)
-                        let hybrid_service = grpc_routes.merge(self.app);
-
-                        // The TLS listener exposes `TlsConnectInfo` (remote
-                        // address plus any verified client certificate) as
-                        // connect-info.
-                        #[cfg(feature = "tls")]
-                        if let Some(ref tls_source) = self.tls_config {
-                            let tls_listener = crate::tls::TlsListener::with_config_source(
-                                listener,
-                                tls_source.clone(),
-                            )
-                            .with_handshake_timeout(self.tls_handshake_timeout);
-                            tracing::info!("TLS enabled (HTTPS) for hybrid HTTP+gRPC");
-                            axum::serve(
-                                tls_listener,
-                                hybrid_service.into_make_service_with_connect_info::<
-                                    crate::tls::TlsConnectInfo,
-                                >(),
-                            )
-                                .with_graceful_shutdown(shutdown_signal())
-                                .await?;
-
-                            tracing::info!("Server shutdown complete");
-                            if let Some(mut runtime) = self.agent_runtime {
-                                tracing::info!("Shutting down agent runtime...");
-                                if let Err(e) = runtime.shutdown_all().await {
-                                    tracing::error!("Agent runtime shutdown error: {}", e);
-                                }
-                                tracing::info!("Agent runtime shutdown complete");
-                            }
-                            return Ok(());
-                        }
-
-                        axum::serve(
-                            listener,
-                            hybrid_service
-                                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
-                        )
-                        .with_graceful_shutdown(shutdown_signal())
-                        .await?;
-                    }
-
-                    tracing::info!("Server shutdown complete");
-
-                    // Shutdown agent runtime after server stops (gRPC path)
-                    if let Some(mut runtime) = self.agent_runtime {
-                        tracing::info!("Shutting down agent runtime...");
-                        if let Err(e) = runtime.shutdown_all().await {
-                            tracing::error!("Agent runtime shutdown error: {}", e);
-                        }
-                        tracing::info!("Agent runtime shutdown complete");
-                    }
-
-                    return Ok(());
-                }
+        let grpc = match self.config.grpc.as_ref() {
+            Some(g) if g.enabled && g.use_separate_port && self.grpc_routes.is_some() => {
+                let addr =
+                    std::net::SocketAddr::new(g.effective_bind(self.config.service.bind), g.port);
+                Some(TcpListener::bind(&addr).await?)
             }
-        }
+            _ => None,
+        };
+        #[cfg(feature = "grpc")]
+        let grpc_addr = grpc.as_ref().map(TcpListener::local_addr).transpose()?;
 
-        // HTTP-only mode (no gRPC or gRPC disabled)
-        tracing::info!("Starting HTTP service on {}", self.listener_addr);
+        #[cfg(feature = "prometheus-metrics")]
+        let metrics_addr = exporter.as_ref().map(TcpListener::local_addr).transpose()?;
 
-        let listener = TcpListener::bind(&self.listener_addr).await?;
-
-        // The TLS listener exposes `TlsConnectInfo` (remote address plus any
-        // verified client certificate) as connect-info.
-        #[cfg(feature = "tls")]
-        if let Some(ref tls_source) = self.tls_config {
-            let tls_listener =
-                crate::tls::TlsListener::with_config_source(listener, tls_source.clone())
-                    .with_handshake_timeout(self.tls_handshake_timeout);
-            tracing::info!("TLS enabled (HTTPS)");
-            axum::serve(
-                tls_listener,
-                self.app
-                    .into_make_service_with_connect_info::<crate::tls::TlsConnectInfo>(),
-            )
-            .with_graceful_shutdown(shutdown_signal())
-            .await?;
-
-            tracing::info!("Server shutdown complete");
-
-            if let Some(mut runtime) = self.agent_runtime {
-                tracing::info!("Shutting down agent runtime...");
-                if let Err(e) = runtime.shutdown_all().await {
-                    tracing::error!("Agent runtime shutdown error: {}", e);
-                }
-                tracing::info!("Agent runtime shutdown complete");
-            }
-
-            return Ok(());
-        }
-
-        axum::serve(
-            listener,
-            self.app
-                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
-
-        tracing::info!("Server shutdown complete");
-
-        // Shutdown agent runtime after server stops (HTTP-only path)
-        if let Some(mut runtime) = self.agent_runtime {
-            tracing::info!("Shutting down agent runtime...");
-            if let Err(e) = runtime.shutdown_all().await {
-                tracing::error!("Agent runtime shutdown error: {}", e);
-            }
-            tracing::info!("Agent runtime shutdown complete");
-        }
-
-        Ok(())
+        Ok(BoundService {
+            service: self,
+            http,
+            http_addr,
+            #[cfg(feature = "grpc")]
+            grpc,
+            #[cfg(feature = "grpc")]
+            grpc_addr,
+            #[cfg(feature = "prometheus-metrics")]
+            exporter,
+            #[cfg(feature = "prometheus-metrics")]
+            metrics_addr,
+        })
     }
 
     /// Get a reference to the service configuration
@@ -3191,6 +3110,233 @@ where
     /// ```
     pub fn state(&self) -> &AppState<T> {
         &self.state
+    }
+}
+
+/// A service whose listeners are bound but not yet accepting.
+///
+/// Returned by [`ActonService::bind`]. It reports the addresses the operating
+/// system actually assigned, which differ from the configuration when a port
+/// is `0`, and [`serve`](Self::serve) then accepts on exactly those sockets.
+///
+/// Dropping it without serving closes every socket it holds; no task is
+/// running on its behalf.
+#[must_use = "a BoundService holds its sockets open but accepts nothing until `serve()` is awaited"]
+pub struct BoundService<T = ()>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
+    service: ActonService<T>,
+    http: tokio::net::TcpListener,
+    http_addr: std::net::SocketAddr,
+    #[cfg(feature = "grpc")]
+    grpc: Option<tokio::net::TcpListener>,
+    #[cfg(feature = "grpc")]
+    grpc_addr: Option<std::net::SocketAddr>,
+    #[cfg(feature = "prometheus-metrics")]
+    exporter: Option<tokio::net::TcpListener>,
+    #[cfg(feature = "prometheus-metrics")]
+    metrics_addr: Option<std::net::SocketAddr>,
+}
+
+impl<T> BoundService<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
+    /// The address the HTTP listener bound (in single-port mode, the one
+    /// listener carrying HTTP and gRPC).
+    #[must_use]
+    pub fn local_addr(&self) -> std::net::SocketAddr {
+        self.http_addr
+    }
+
+    /// The address the separate-port gRPC listener bound; `None` unless gRPC
+    /// runs in dual-port mode.
+    #[cfg(feature = "grpc")]
+    #[must_use]
+    pub fn grpc_local_addr(&self) -> Option<std::net::SocketAddr> {
+        self.grpc_addr
+    }
+
+    /// The address the Prometheus exporter listener bound; `None` unless an
+    /// exporter is configured or supplied.
+    #[cfg(feature = "prometheus-metrics")]
+    #[must_use]
+    pub fn metrics_local_addr(&self) -> Option<std::net::SocketAddr> {
+        self.metrics_addr
+    }
+
+    /// The service configuration.
+    #[must_use]
+    pub fn config(&self) -> &Config<T> {
+        self.service.config()
+    }
+
+    /// The application state.
+    #[must_use]
+    pub fn state(&self) -> &AppState<T> {
+        self.service.state()
+    }
+
+    /// The HTTP listener's TLS credentials, if TLS resolved. See
+    /// [`ActonService::tls_config_source`].
+    #[cfg(feature = "tls")]
+    #[must_use]
+    pub fn tls_config_source(&self) -> Option<crate::tls::TlsConfigSource> {
+        self.service.tls_config_source()
+    }
+
+    /// The separate-port gRPC listener's TLS credentials, if TLS resolved. See
+    /// [`ActonService::grpc_tls_config_source`].
+    #[cfg(all(feature = "grpc", feature = "tls"))]
+    #[must_use]
+    pub fn grpc_tls_config_source(&self) -> Option<crate::tls::TlsConfigSource> {
+        self.service.grpc_tls_config_source()
+    }
+
+    /// Accept on the bound listeners until shutdown, then drain them.
+    ///
+    /// Shutdown starts on SIGINT, SIGTERM, the future given to
+    /// [`ServiceBuilder::with_shutdown`], or the first listener or supporting
+    /// task that stops on its own. The service listeners drain first, then the
+    /// agent runtime stops, then the metrics exporter drains, so the final
+    /// scrape can still observe the drain.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error naming each failure, after everything has drained, if
+    /// the HTTP listener, the separate-port gRPC listener, a TLS listener's
+    /// handshake pump or the metrics exporter stopped before shutdown was
+    /// requested, or if one failed while draining.
+    pub async fn serve(self) -> crate::error::Result<()> {
+        let BoundService {
+            mut service,
+            http,
+            http_addr,
+            #[cfg(feature = "grpc")]
+            grpc,
+            #[cfg(feature = "grpc")]
+            grpc_addr,
+            #[cfg(feature = "prometheus-metrics")]
+            exporter,
+            #[cfg(feature = "prometheus-metrics")]
+                metrics_addr: _,
+        } = self;
+
+        // Credential rotation runs for as long as the listeners do. The guard
+        // aborts the trigger tasks on every return path, so they cannot outlive
+        // the listeners they rotate.
+        #[cfg(feature = "tls")]
+        let _tls_reload_tasks = service.install_tls_reload_triggers();
+
+        let mut supervisor = crate::supervise::Supervisor::new(service.shutdown.take());
+
+        if supervisor.stop_requested() {
+            tracing::info!(
+                "not accepting on {http_addr}: shutdown was requested before serve started"
+            );
+        } else {
+            #[cfg(feature = "prometheus-metrics")]
+            let exporter = exporter.map(crate::metrics_exporter::MetricsExporter::from_listener);
+            #[cfg(feature = "prometheus-metrics")]
+            if let Some(exporter) = exporter.as_ref() {
+                supervisor.watch(
+                    exporter.exited(),
+                    format!(
+                        "the Prometheus exporter on {} stopped before shutdown was requested",
+                        exporter.local_addr()
+                    ),
+                );
+            }
+
+            #[cfg_attr(not(feature = "grpc"), allow(unused_mut))]
+            let mut app = std::mem::take(&mut service.app);
+            #[cfg_attr(not(feature = "grpc"), allow(unused_mut))]
+            let mut http_name = format!("HTTP listener on {http_addr}");
+
+            #[cfg(feature = "grpc")]
+            {
+                let grpc_enabled = service.config.grpc.as_ref().is_some_and(|g| g.enabled);
+                if let Some(grpc_routes) = service.grpc_routes.take().filter(|_| grpc_enabled) {
+                    match (grpc, grpc_addr) {
+                        // Dual-port mode: the gRPC router on its own socket,
+                        // with its own TLS (inheriting the HTTP credentials
+                        // when `[grpc.tls]` is absent, resolved at build).
+                        (Some(grpc), Some(grpc_addr)) => {
+                            tracing::info!("Starting gRPC service on {grpc_addr}");
+                            supervisor.serve_router(
+                                format!("gRPC listener on {grpc_addr}"),
+                                grpc,
+                                grpc_routes,
+                                #[cfg(feature = "tls")]
+                                service.grpc_tls_config.clone().map(|source| {
+                                    crate::supervise::TlsServing {
+                                        source,
+                                        handshake_timeout: service.grpc_tls_handshake_timeout,
+                                    }
+                                }),
+                            );
+                        }
+                        // Single-port mode: one listener, HTTP and gRPC routed
+                        // by content type. The gRPC router keeps its own auth
+                        // and Cedar layers through the merge.
+                        _ => {
+                            app = grpc_routes.merge(app);
+                            http_name = format!("HTTP+gRPC listener on {http_addr}");
+                        }
+                    }
+                }
+            }
+
+            tracing::info!("Starting {http_name}");
+            #[cfg(feature = "tls")]
+            if service.tls_config.is_some() {
+                tracing::info!("TLS enabled (HTTPS) on the {http_name}");
+            }
+            supervisor.serve_router(
+                http_name,
+                http,
+                app,
+                #[cfg(feature = "tls")]
+                service
+                    .tls_config
+                    .clone()
+                    .map(|source| crate::supervise::TlsServing {
+                        source,
+                        handshake_timeout: service.tls_handshake_timeout,
+                    }),
+            );
+
+            supervisor.drain().await;
+            tracing::info!("Server shutdown complete");
+
+            if let Some(mut runtime) = service.agent_runtime.take() {
+                tracing::info!("Shutting down agent runtime...");
+                if let Err(e) = runtime.shutdown_all().await {
+                    tracing::error!("Agent runtime shutdown error: {}", e);
+                }
+                tracing::info!("Agent runtime shutdown complete");
+            }
+
+            #[cfg(feature = "prometheus-metrics")]
+            if let Some(exporter) = exporter {
+                match exporter.stop().await {
+                    Ok(()) => tracing::info!("Prometheus exporter shutdown complete"),
+                    Err(e) => supervisor.record(e),
+                }
+            }
+
+            return supervisor.finish();
+        }
+
+        if let Some(mut runtime) = service.agent_runtime.take() {
+            tracing::info!("Shutting down agent runtime...");
+            if let Err(e) = runtime.shutdown_all().await {
+                tracing::error!("Agent runtime shutdown error: {}", e);
+            }
+            tracing::info!("Agent runtime shutdown complete");
+        }
+        supervisor.finish()
     }
 }
 

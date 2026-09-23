@@ -4,7 +4,6 @@ use axum::Router;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::net::TcpListener;
-use tokio::signal;
 use tower_http::{
     catch_panic::CatchPanicLayer,
     compression::CompressionLayer,
@@ -153,8 +152,8 @@ impl Server {
         tracing::info!("Server listening on {}", addr);
 
         // Bound after the main listener so its port takes precedence in a
-        // race, drained after the serve calls below return. On an error return
-        // the handle's abort-on-drop backstop closes the socket instead.
+        // race, drained after the service listener. On an error return the
+        // handle's abort-on-drop backstop closes the socket instead.
         #[cfg(feature = "prometheus-metrics")]
         let metrics_exporter = match metrics_exporter_addr {
             Some(exporter_addr) => {
@@ -163,64 +162,73 @@ impl Server {
             None => None,
         };
 
-        // Serve with graceful shutdown -- TLS or plain TCP
-        //
-        // The TLS listener exposes `TlsConnectInfo` (remote address plus any
-        // verified client certificate) as connect-info.
+        // A reloadable source rather than a fixed `ServerConfig`: the listener
+        // rereads it per handshake, which is what lets the triggers below
+        // rotate the certificate without rebinding.
         #[cfg(feature = "tls")]
-        if let Some(ref tls_config) = self.config.tls {
-            if tls_config.enabled {
-                // A reloadable source rather than a fixed `ServerConfig`: the
-                // listener rereads it per handshake, which is what lets the
-                // triggers below rotate the certificate without rebinding.
+        let tls = match self.config.tls.as_ref().filter(|t| t.enabled) {
+            Some(tls_config) => {
                 let source = crate::tls::TlsConfigSource::from_tls_config(tls_config)?;
                 crate::tls::warn_if_reload_config_is_unusable(Some(&source), tls_config, "[tls]");
-
-                // This path serves one listener, so the handle carries only the
-                // HTTP slot and there is no gRPC interval to pass.
-                let reload_handle = crate::tls::TlsReloadHandle::new(Some(source.clone()), None);
-                // Held across the serve await; dropping it on return aborts the
-                // trigger tasks so they cannot outlive the listener.
-                let _tls_reload_tasks = crate::tls::install_reload_triggers(
-                    &reload_handle,
-                    tls_reload_interval,
-                    None,
-                    tls_config.reload_on_sighup,
-                );
-
-                let tls_listener = crate::tls::TlsListener::with_config_source(listener, source)
-                    .with_handshake_timeout(tls_handshake_timeout);
                 tracing::info!("TLS enabled (HTTPS)");
-                axum::serve(
-                    tls_listener,
-                    app.into_make_service_with_connect_info::<crate::tls::TlsConnectInfo>(),
-                )
-                .with_graceful_shutdown(shutdown_signal())
-                .await?;
-                #[cfg(feature = "prometheus-metrics")]
-                if let Some(exporter) = metrics_exporter {
-                    exporter.shutdown().await;
-                }
-                tracing::info!("Server shutdown complete");
-                return Ok(());
+                Some((source, tls_config.reload_on_sighup))
             }
-        }
+            None => None,
+        };
 
-        axum::serve(
+        // This path serves one listener, so the handle carries only the HTTP
+        // slot and there is no gRPC interval to pass. Held until return;
+        // dropping it aborts the trigger tasks so they cannot outlive the
+        // listener.
+        #[cfg(feature = "tls")]
+        let _tls_reload_tasks = tls.as_ref().map(|(source, reload_on_sighup)| {
+            let reload_handle = crate::tls::TlsReloadHandle::new(Some(source.clone()), None);
+            crate::tls::install_reload_triggers(
+                &reload_handle,
+                tls_reload_interval,
+                None,
+                *reload_on_sighup,
+            )
+        });
+
+        // The same supervision `ActonService::serve` applies: the listener, its
+        // TLS handshake pump and the exporter are all watched, and any of them
+        // stopping before a shutdown signal is an error rather than a process
+        // that runs on serving nothing.
+        let mut supervisor = crate::supervise::Supervisor::new(None);
+        #[cfg(feature = "prometheus-metrics")]
+        if let Some(exporter) = metrics_exporter.as_ref() {
+            supervisor.watch(
+                exporter.exited(),
+                format!(
+                    "the Prometheus exporter on {} stopped before shutdown was requested",
+                    exporter.local_addr()
+                ),
+            );
+        }
+        supervisor.serve_router(
+            format!("HTTP listener on {addr}"),
             listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+            app,
+            #[cfg(feature = "tls")]
+            tls.map(|(source, _)| crate::supervise::TlsServing {
+                source,
+                handshake_timeout: tls_handshake_timeout,
+            }),
+        );
+        supervisor.drain().await;
 
         #[cfg(feature = "prometheus-metrics")]
         if let Some(exporter) = metrics_exporter {
-            exporter.shutdown().await;
+            match exporter.stop().await {
+                Ok(()) => tracing::info!("Prometheus exporter shutdown complete"),
+                Err(e) => supervisor.record(e),
+            }
         }
 
         tracing::info!("Server shutdown complete");
 
-        Ok(())
+        supervisor.finish()
     }
 
     /// Log middleware configuration for debugging
@@ -361,37 +369,6 @@ impl Server {
             }
         }
     }
-}
-
-/// Wait for shutdown signal (SIGTERM or SIGINT)
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        signal::ctrl_c()
-            .await
-            .expect("Failed to install Ctrl+C handler");
-    };
-
-    #[cfg(unix)]
-    let terminate = async {
-        signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("Failed to install SIGTERM handler")
-            .recv()
-            .await;
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    tokio::select! {
-        _ = ctrl_c => {
-            tracing::info!("Received SIGINT (Ctrl+C), starting graceful shutdown");
-        },
-        _ = terminate => {
-            tracing::info!("Received SIGTERM, starting graceful shutdown");
-        },
-    }
-
-    tracing::info!("Shutdown signal received, draining requests...");
 }
 
 #[cfg(test)]
