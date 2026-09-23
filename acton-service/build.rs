@@ -8,7 +8,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo::rustc-check-cfg=cfg(saml_backend_rustcrypto)");
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
-    let aws_lc_capable = target_os == "linux" && matches!(target_arch.as_str(), "x86_64" | "aarch64");
+    let aws_lc_capable =
+        target_os == "linux" && matches!(target_arch.as_str(), "x86_64" | "aarch64");
     if !aws_lc_capable {
         println!("cargo::rustc-cfg=saml_backend_rustcrypto");
     }

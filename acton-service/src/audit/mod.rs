@@ -27,8 +27,8 @@ pub mod config_audit;
 #[cfg(feature = "auth")]
 pub mod decorators;
 pub mod event;
-pub mod id;
 pub(crate) mod failure_tracker;
+pub mod id;
 pub mod logger;
 pub mod middleware;
 pub mod storage;

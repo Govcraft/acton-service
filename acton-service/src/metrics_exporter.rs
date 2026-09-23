@@ -265,8 +265,12 @@ mod runtime {
 
             match tokio::time::timeout(DRAIN_TIMEOUT, task).await {
                 Ok(Ok(Ok(()))) => tracing::info!("Prometheus exporter shutdown complete"),
-                Ok(Ok(Err(e))) => tracing::warn!(error = %e, "Prometheus exporter stopped with an error"),
-                Ok(Err(e)) => tracing::warn!(error = %e, "Prometheus exporter task did not join cleanly"),
+                Ok(Ok(Err(e))) => {
+                    tracing::warn!(error = %e, "Prometheus exporter stopped with an error")
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(error = %e, "Prometheus exporter task did not join cleanly")
+                }
                 Err(_) => tracing::warn!(
                     timeout_secs = DRAIN_TIMEOUT.as_secs(),
                     "Prometheus exporter did not drain in time; abandoning it"
@@ -291,9 +295,9 @@ mod runtime {
 mod tests {
     use super::*;
     use crate::config::MetricsExporterConfig;
-    use std::net::{IpAddr, Ipv4Addr};
     #[cfg(feature = "prometheus-metrics")]
     use std::net::Ipv6Addr;
+    use std::net::{IpAddr, Ipv4Addr};
 
     fn http_addr(port: u16) -> SocketAddr {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)
@@ -380,9 +384,8 @@ mod tests {
     #[test]
     fn colliding_with_the_separate_port_grpc_listener_is_refused() {
         let metrics = metrics_with_exporter(IpAddr::V4(Ipv4Addr::LOCALHOST), 50051);
-        let error =
-            resolve_exporter_addr(Some(&metrics), http_addr(8080), Some(http_addr(50051)))
-                .expect_err("sharing the gRPC port must be refused");
+        let error = resolve_exporter_addr(Some(&metrics), http_addr(8080), Some(http_addr(50051)))
+            .expect_err("sharing the gRPC port must be refused");
 
         let message = error.to_string();
         assert!(
@@ -424,8 +427,8 @@ mod tests {
     /// one warning, and this is the predicate that decides it.
     #[test]
     fn exporter_with_the_http_layer_disabled_warrants_a_warning() {
-        let metrics = metrics_with_exporter(IpAddr::V4(Ipv4Addr::LOCALHOST), 9090)
-            .with_enabled(false);
+        let metrics =
+            metrics_with_exporter(IpAddr::V4(Ipv4Addr::LOCALHOST), 9090).with_enabled(false);
         assert!(exporter_without_http_instruments(Some(&metrics)));
     }
 
