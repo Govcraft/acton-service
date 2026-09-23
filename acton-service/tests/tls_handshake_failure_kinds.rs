@@ -22,15 +22,25 @@ use rcgen::{
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 use tokio_rustls::rustls::server::WebPkiClientVerifier;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore, ServerConfig};
 use tokio_rustls::TlsConnector;
 
-/// Bounds every wait; a loopback handshake fails in milliseconds.
-const SETTLE: Duration = Duration::from_secs(5);
+/// Bounds every wait. A loopback handshake fails in milliseconds; the bound
+/// is generous because it is only ever reached on failure, and a loaded CI
+/// runner should not be what fails a test.
+const SETTLE: Duration = Duration::from_secs(30);
 
-/// Short, so the timeout test does not dominate the suite.
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_millis(300);
+/// The handshake timeout for the one test that waits it out: short, so it
+/// does not dominate the suite.
+const SHORT_HANDSHAKE_TIMEOUT: Duration = Duration::from_millis(300);
+
+/// The handshake timeout for every other test. A certificate handshake on a
+/// loaded machine can take longer than [`SHORT_HANDSHAKE_TIMEOUT`], and one
+/// that did would be counted as `timeout` instead of the kind under test; no
+/// test here waits this out.
+const PATIENT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn init_metrics() {
     static INIT: Once = Once::new();
@@ -120,8 +130,9 @@ fn pki() -> Pki {
 }
 
 /// A mutual-TLS listener requiring a client certificate from the test CA,
-/// accepting in the background. Returns its address.
-async fn serve(pki: &Pki) -> SocketAddr {
+/// accepting in the background. Returns its address and a receiver that
+/// yields once per completed handshake.
+async fn serve(pki: &Pki, handshake_timeout: Duration) -> (SocketAddr, UnboundedReceiver<()>) {
     acton_service::crypto::ensure_default_crypto_provider();
     init_metrics();
 
@@ -138,13 +149,15 @@ async fn serve(pki: &Pki) -> SocketAddr {
     let tcp = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = tcp.local_addr().expect("addr");
     let mut listener =
-        TlsListener::new(tcp, Arc::new(config)).with_handshake_timeout(HANDSHAKE_TIMEOUT);
+        TlsListener::new(tcp, Arc::new(config)).with_handshake_timeout(handshake_timeout);
+    let (accepted, accepts) = unbounded_channel();
     tokio::spawn(async move {
         loop {
-            let _ = listener.accept().await;
+            let _connection = listener.accept().await;
+            let _ = accepted.send(());
         }
     });
-    addr
+    (addr, accepts)
 }
 
 /// A TLS client trusting the test CA, presenting `identity` if given.
@@ -174,7 +187,7 @@ async fn tls_client(pki: &Pki, addr: SocketAddr, identity: Option<&Identity>) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plaintext_http_on_the_tls_port_is_plaintext() {
     let pki = pki();
-    let addr = serve(&pki).await;
+    let (addr, _accepts) = serve(&pki, PATIENT_HANDSHAKE_TIMEOUT).await;
     let before = failures("plaintext").await;
 
     let mut tcp = TcpStream::connect(addr).await.expect("connect");
@@ -190,7 +203,7 @@ async fn plaintext_http_on_the_tls_port_is_plaintext() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_client_without_a_certificate_is_no_client_cert() {
     let pki = pki();
-    let addr = serve(&pki).await;
+    let (addr, _accepts) = serve(&pki, PATIENT_HANDSHAKE_TIMEOUT).await;
     let before = failures("no_client_cert").await;
 
     tls_client(&pki, addr, None).await;
@@ -201,7 +214,7 @@ async fn a_client_without_a_certificate_is_no_client_cert() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_certificate_from_an_untrusted_ca_is_bad_cert() {
     let pki = pki();
-    let addr = serve(&pki).await;
+    let (addr, _accepts) = serve(&pki, PATIENT_HANDSHAKE_TIMEOUT).await;
     let before = failures("bad_cert").await;
 
     tls_client(&pki, addr, Some(&pki.rogue_client)).await;
@@ -212,7 +225,7 @@ async fn a_certificate_from_an_untrusted_ca_is_bad_cert() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_peer_that_never_sends_a_client_hello_is_timeout() {
     let pki = pki();
-    let addr = serve(&pki).await;
+    let (addr, _accepts) = serve(&pki, SHORT_HANDSHAKE_TIMEOUT).await;
     let before = failures("timeout").await;
 
     // Held open, silent, past the handshake timeout.
@@ -224,7 +237,7 @@ async fn a_peer_that_never_sends_a_client_hello_is_timeout() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_peer_that_hangs_up_mid_handshake_is_eof() {
     let pki = pki();
-    let addr = serve(&pki).await;
+    let (addr, _accepts) = serve(&pki, PATIENT_HANDSHAKE_TIMEOUT).await;
     let before = failures("eof").await;
 
     // Half a record header, then the write side closes.
@@ -238,7 +251,7 @@ async fn a_peer_that_hangs_up_mid_handshake_is_eof() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_malformed_handshake_record_is_other() {
     let pki = pki();
-    let addr = serve(&pki).await;
+    let (addr, _accepts) = serve(&pki, PATIENT_HANDSHAKE_TIMEOUT).await;
     let before = failures("other").await;
 
     // A well-formed handshake record carrying a message type that does not
@@ -256,7 +269,7 @@ async fn a_malformed_handshake_record_is_other() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_trusted_client_is_not_a_failure() {
     let pki = pki();
-    let addr = serve(&pki).await;
+    let (addr, mut accepts) = serve(&pki, PATIENT_HANDSHAKE_TIMEOUT).await;
     let kinds = [
         "plaintext",
         "no_client_cert",
@@ -270,12 +283,27 @@ async fn a_trusted_client_is_not_a_failure() {
         before.push(failures(kind).await);
     }
 
-    tokio::time::timeout(
-        Duration::from_millis(500),
-        tls_client(&pki, addr, Some(&pki.client)),
+    let mut roots = RootCertStore::empty();
+    roots.add(pki.ca.clone()).expect("trust the test CA");
+    let config = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_client_auth_cert(pki.client.chain.clone(), pki.client.key.clone_key())
+        .expect("client identity");
+    let tcp = TcpStream::connect(addr).await.expect("connect");
+    let name = ServerName::try_from("localhost").expect("server name");
+    let _stream = tokio::time::timeout(
+        SETTLE,
+        TlsConnector::from(Arc::new(config)).connect(name, tcp),
     )
     .await
-    .ok();
+    .expect("the handshake finishes within the bound")
+    .expect("a trusted client completes the handshake");
+    // The listener hands a connection out only once its side of the
+    // handshake has finished, so every counter it could touch is settled.
+    tokio::time::timeout(SETTLE, accepts.recv())
+        .await
+        .expect("the listener accepts the trusted client")
+        .expect("the accept loop is running");
 
     for (kind, was) in kinds.iter().zip(before) {
         // Other tests may share this registry under `cargo test`, so only a
