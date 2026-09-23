@@ -16,12 +16,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `MetricsExporter::from_listener(tokio::net::TcpListener)` starts the exporter on a caller-bound socket.
 - `TlsListener::stopped()` resolves if the listener's handshake pump stops while the listener is still alive, the one condition in which `accept()` would otherwise park forever without a sign.
 - Failed TLS handshakes carry a `kind`: `plaintext`, `no_client_cert`, `bad_cert`, `timeout`, `eof` or `other` (`tls::HandshakeFailureKind`). It is a field on the existing WARN log line and the attribute of the new counter `tls.handshake_failures` (Prometheus: `tls_handshake_failures_total{kind}`).
+- **`acton_service::reload`: the watched-file reload poll, public and not feature-gated.** Implement `Reloadable`: `label`, `watched_paths`, and a fail-closed `reload` that validates before it installs. Pass it to `spawn_reload_poll(source, period, serving)`, and it rereads the value whenever the files' *content* changes. It is the same poll that rotates TLS credentials, now usable for any file-backed value (a token, a key list, a policy).
+  - `fingerprint_files` hashes paths, lengths and bytes, never mtimes.
+  - `reload_tick` and `PollState` expose the decision without a clock.
+  - `ReloadTick` is `#[non_exhaustive]`.
+  - `validate_reload_interval` refuses `0` with a typed `ZeroReloadInterval` that names the section and the field.
+  - A read failure is retried next tick. A reload that panics is caught and treated as a rejection of that content, so it is not retried or logged again until the files change. Each tick runs on the blocking pool.
 
 ### Changed
 
 - `serve()` supervises every task it starts. If the HTTP listener, the separate-port gRPC listener, a TLS listener's handshake pump or the metrics exporter stops before shutdown was requested, the remaining listeners drain and `serve()` returns an error naming each failure. Before, the separate-port gRPC task's result was discarded and read only after HTTP stopped, the exporter task was never observed, and a dead handshake pump left the listener silently accepting nothing. `Server::serve()` applies the same supervision to its listener, handshake pump and exporter.
 - A SIGINT or SIGTERM handler that cannot be installed is logged at ERROR and the other shutdown sources keep working; `serve()` no longer panics on it.
 - The separate-port gRPC listener, when plaintext, now carries the peer `SocketAddr` as connect-info, as the HTTP listener always has.
+- **TLS credential rotation runs on `acton_service::reload`.**
+  - A rotation whose new files are rejected, or whose reload panics, is now logged at `ERROR` once per distinct content, not on every poll tick. A half-written file that is later completed changes its content, so it is still retried. A revert to the serving files followed by the same bad files is reported again.
+  - The poll's own log lines name the listener as "the http listener's TLS credentials".
+  - `TlsConfigSource::reload`, SIGHUP and `TlsReloadHandle::reload_all` log as before.
 
 ## [acton-service-v0.42.0] - 2026-09-09
 
