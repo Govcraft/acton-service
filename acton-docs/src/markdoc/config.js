@@ -1,10 +1,7 @@
 import nodes from './nodes.js'
 import tags from './tags.js'
 import { siteConfig } from '../lib/config'
-
-// Extract version from workspace Cargo.toml
-// This should be kept in sync with the workspace version
-const ACTON_VERSION = '0.42.0'
+import { VERSION as ACTON_VERSION } from '../lib/version'
 
 // Single source of truth mapping camelCase aliases to the real Cargo feature
 // lists. Used by both the `dep()` function and the `$dep.*` variables so a
