@@ -930,10 +930,20 @@ async fn handshake_pump(
                     let _ = tx.send((tls_stream, addr)).await;
                 }
                 Ok(Err(e)) => {
-                    tracing::warn!("TLS handshake failed from {}: {}", addr, e);
+                    let kind = HandshakeFailureKind::of(&e);
+                    count_handshake_failure(kind);
+                    tracing::warn!(
+                        kind = kind.as_str(),
+                        "TLS handshake failed from {}: {}",
+                        addr,
+                        e
+                    );
                 }
                 Err(_elapsed) => {
+                    let kind = HandshakeFailureKind::Timeout;
+                    count_handshake_failure(kind);
                     tracing::warn!(
+                        kind = kind.as_str(),
                         "TLS handshake from {} did not complete within {:?}; dropping the \
                          connection",
                         addr,
@@ -943,6 +953,99 @@ async fn handshake_pump(
             }
         });
     }
+}
+
+/// Why a TLS handshake on a [`TlsListener`] failed, as a bounded label.
+///
+/// Every failed handshake is counted on the `tls.handshake_failures` counter
+/// (Prometheus: `tls_handshake_failures_total`) with this as its `kind`
+/// attribute, and logged at WARN with the same value in a `kind` field. The
+/// label set is small and fixed, so an operator can tell a plaintext probe on
+/// the TLS port from a client that presented no certificate or an untrusted
+/// one without reading error prose, and alert on each separately.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum HandshakeFailureKind {
+    /// The peer did not speak TLS at all: typically plaintext HTTP sent to an
+    /// HTTPS port. Label `plaintext`.
+    Plaintext,
+    /// Mutual TLS required a client certificate and the peer presented none.
+    /// Label `no_client_cert`.
+    NoClientCert,
+    /// The peer's certificate, or a revocation list checked against it, was
+    /// rejected: an untrusted issuer, an expired or revoked certificate, a
+    /// malformed chain. Label `bad_cert`.
+    BadCert,
+    /// The handshake did not finish within the listener's handshake timeout.
+    /// Label `timeout`.
+    Timeout,
+    /// The peer closed the connection before the handshake finished. Label
+    /// `eof`.
+    Eof,
+    /// Any other failure: no shared protocol version or cipher suite, a fatal
+    /// alert from the peer, a malformed handshake message. Label `other`.
+    Other,
+}
+
+impl HandshakeFailureKind {
+    /// The label recorded for this kind.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Plaintext => "plaintext",
+            Self::NoClientCert => "no_client_cert",
+            Self::BadCert => "bad_cert",
+            Self::Timeout => "timeout",
+            Self::Eof => "eof",
+            Self::Other => "other",
+        }
+    }
+
+    /// Classify the error a server-side handshake returned.
+    ///
+    /// Pure. Never returns [`Timeout`](Self::Timeout): a timed-out handshake
+    /// yields no error to classify, and the listener labels it directly.
+    #[must_use]
+    pub fn of(error: &io::Error) -> Self {
+        use tokio_rustls::rustls::{Error as TlsError, InvalidMessage};
+
+        if error.kind() == io::ErrorKind::UnexpectedEof {
+            return Self::Eof;
+        }
+        match error
+            .get_ref()
+            .and_then(|inner| inner.downcast_ref::<TlsError>())
+        {
+            Some(TlsError::InvalidMessage(InvalidMessage::InvalidContentType)) => Self::Plaintext,
+            Some(TlsError::NoCertificatesPresented) => Self::NoClientCert,
+            Some(TlsError::InvalidCertificate(_) | TlsError::InvalidCertRevocationList(_)) => {
+                Self::BadCert
+            }
+            _ => Self::Other,
+        }
+    }
+}
+
+impl std::fmt::Display for HandshakeFailureKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Count one failed handshake on `tls.handshake_failures{kind}`.
+///
+/// A no-op when no meter provider is installed or the build has no metrics.
+fn count_handshake_failure(kind: HandshakeFailureKind) {
+    #[cfg(feature = "_metrics")]
+    if let Some(meter) = crate::observability::get_meter() {
+        meter
+            .u64_counter("tls.handshake_failures")
+            .with_description("TLS handshakes that failed, by why they failed")
+            .build()
+            .add(1, &[opentelemetry::KeyValue::new("kind", kind.as_str())]);
+    }
+    #[cfg(not(feature = "_metrics"))]
+    let _ = kind;
 }
 
 impl TlsListener {
@@ -1204,9 +1307,7 @@ pub fn load_server_config(tls_config: &TlsConfig) -> Result<Arc<ServerConfig>> {
         }
     }
     .with_single_cert(cert_chain, key)
-    .map_err(|e| {
-        crate::error::Error::Tls(format!("Failed to build TLS server config: {}", e))
-    })?;
+    .map_err(|e| crate::error::Error::Tls(format!("Failed to build TLS server config: {}", e)))?;
 
     // Advertise ALPN so the listener answers a client's protocol offer during
     // the handshake. Without this rustls selects nothing, and a strict gRPC
@@ -1532,7 +1633,10 @@ mod tests {
                 crate::error::Error::Tls("cert_path '/etc/secret.pem' unreadable".to_string())
                     .into_response();
 
-            assert_eq!(response.status(), axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            );
         }
     }
 
@@ -2655,5 +2759,103 @@ mod tests {
         let certs = info.peer_certificates().expect("chain present");
         assert_eq!(certs.as_slice().len(), 1);
         assert_eq!(certs.leaf(), &leaf.der, "the leaf must be the first cert");
+    }
+
+    mod handshake_failure_kind {
+        use super::super::HandshakeFailureKind;
+        use std::io;
+        use tokio_rustls::rustls::{
+            CertRevocationListError, CertificateError, Error as TlsError, InvalidMessage,
+        };
+
+        fn wrapped(error: TlsError) -> io::Error {
+            io::Error::new(io::ErrorKind::InvalidData, error)
+        }
+
+        #[test]
+        fn a_record_that_is_not_tls_is_plaintext() {
+            let error = wrapped(TlsError::InvalidMessage(InvalidMessage::InvalidContentType));
+            assert_eq!(
+                HandshakeFailureKind::of(&error),
+                HandshakeFailureKind::Plaintext
+            );
+        }
+
+        #[test]
+        fn a_missing_client_certificate_is_no_client_cert() {
+            let error = wrapped(TlsError::NoCertificatesPresented);
+            assert_eq!(
+                HandshakeFailureKind::of(&error),
+                HandshakeFailureKind::NoClientCert
+            );
+        }
+
+        #[test]
+        fn a_rejected_certificate_or_crl_is_bad_cert() {
+            for error in [
+                TlsError::InvalidCertificate(CertificateError::UnknownIssuer),
+                TlsError::InvalidCertificate(CertificateError::Expired),
+                TlsError::InvalidCertificate(CertificateError::Revoked),
+                TlsError::InvalidCertRevocationList(CertRevocationListError::BadSignature),
+            ] {
+                let error = wrapped(error);
+                assert_eq!(
+                    HandshakeFailureKind::of(&error),
+                    HandshakeFailureKind::BadCert,
+                    "{error}"
+                );
+            }
+        }
+
+        #[test]
+        fn an_early_close_is_eof() {
+            let error = io::Error::new(io::ErrorKind::UnexpectedEof, "tls handshake eof");
+            assert_eq!(HandshakeFailureKind::of(&error), HandshakeFailureKind::Eof);
+        }
+
+        #[test]
+        fn anything_else_is_other() {
+            for error in [
+                wrapped(TlsError::InvalidMessage(
+                    InvalidMessage::InvalidEmptyPayload,
+                )),
+                wrapped(TlsError::PeerIncompatible(
+                    tokio_rustls::rustls::PeerIncompatible::Tls13RequiredForQuic,
+                )),
+                io::Error::new(io::ErrorKind::ConnectionReset, "reset"),
+                io::Error::new(io::ErrorKind::InvalidData, "not a rustls error"),
+            ] {
+                assert_eq!(
+                    HandshakeFailureKind::of(&error),
+                    HandshakeFailureKind::Other,
+                    "{error}"
+                );
+            }
+        }
+
+        #[test]
+        fn labels_are_stable() {
+            let labels = [
+                HandshakeFailureKind::Plaintext,
+                HandshakeFailureKind::NoClientCert,
+                HandshakeFailureKind::BadCert,
+                HandshakeFailureKind::Timeout,
+                HandshakeFailureKind::Eof,
+                HandshakeFailureKind::Other,
+            ]
+            .map(HandshakeFailureKind::as_str);
+            assert_eq!(
+                labels,
+                [
+                    "plaintext",
+                    "no_client_cert",
+                    "bad_cert",
+                    "timeout",
+                    "eof",
+                    "other"
+                ]
+            );
+            assert_eq!(HandshakeFailureKind::BadCert.to_string(), "bad_cert");
+        }
     }
 }
