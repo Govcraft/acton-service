@@ -157,9 +157,12 @@ jobs:
               - `acton-docs/src/app/docs/<topic>/page.md` -- 56 Markdoc pages
               - `acton-docs/src/lib/navigation.ts` -- sidebar navigation; a NEW page
                 is invisible unless you add it here
-              - `acton-docs/src/lib/version.ts` -- exported `VERSION` constant
-              - `acton-docs/src/markdoc/config.js` and `functions.js` -- Markdoc
-                config, which also carry version references
+              - `acton-docs/src/markdoc/config.js` -- Markdoc config: the `dep()`
+                feature aliases and the `version()` function
+              - The version every page shows comes from `[workspace.package]` in
+                the root `Cargo.toml` at build time (`acton-docs/next.config.mjs`).
+                Never write a version literal into a page; use `{% version() %}`
+                or `{% dep(...) %}`.
 
             Search the docs for anything the PR contradicts. Do not assume a topic
             is undocumented because you did not find it on the first try -- grep for
