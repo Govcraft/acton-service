@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `ActonService::bind()` binds every listener (metrics exporter, HTTP, separate-port gRPC) without accepting, and returns a `#[must_use]` `BoundService` reporting the addresses the operating system assigned (`local_addr`, `grpc_local_addr`, `metrics_local_addr`). `BoundService::serve()` then accepts on exactly those sockets. Dropping a `BoundService` closes its sockets; nothing is spawned before `serve()`. `ActonService::serve()` is now `bind()` followed by `serve()`.
+- `ServiceBuilder::with_listener(tokio::net::TcpListener)` serves HTTP (or single-port HTTP+gRPC) on a socket the caller bound, instead of binding `[service] bind`/`port`.
+- `ServiceBuilder::with_metrics_listener(tokio::net::TcpListener)` (`prometheus-metrics`) serves the plaintext exporter on a caller-bound socket, with or without a `[middleware.metrics.exporter]` table, and takes precedence over it.
+- `ServiceBuilder::with_shutdown(future)` starts the graceful drain when the future resolves, in addition to SIGINT and SIGTERM. A future already resolved when `serve()` starts means no connection is accepted and `serve()` returns `Ok(())`.
+- `MetricsExporter::from_listener(tokio::net::TcpListener)` starts the exporter on a caller-bound socket.
+- `TlsListener::stopped()` resolves if the listener's handshake pump stops while the listener is still alive, the one condition in which `accept()` would otherwise park forever without a sign.
+- Failed TLS handshakes carry a `kind`: `plaintext`, `no_client_cert`, `bad_cert`, `timeout`, `eof` or `other` (`tls::HandshakeFailureKind`). It is a field on the existing WARN log line and the attribute of the new counter `tls.handshake_failures` (Prometheus: `tls_handshake_failures_total{kind}`).
+
+### Changed
+
+- `serve()` supervises every task it starts. If the HTTP listener, the separate-port gRPC listener, a TLS listener's handshake pump or the metrics exporter stops before shutdown was requested, the remaining listeners drain and `serve()` returns an error naming each failure. Before, the separate-port gRPC task's result was discarded and read only after HTTP stopped, the exporter task was never observed, and a dead handshake pump left the listener silently accepting nothing. `Server::serve()` applies the same supervision to its listener, handshake pump and exporter.
+- A SIGINT or SIGTERM handler that cannot be installed is logged at ERROR and the other shutdown sources keep working; `serve()` no longer panics on it.
+- The separate-port gRPC listener, when plaintext, now carries the peer `SocketAddr` as connect-info, as the HTTP listener always has.
+
 ## [acton-service-v0.42.0] - 2026-09-09
 
 ### Changed
