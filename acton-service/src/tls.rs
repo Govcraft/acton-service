@@ -55,6 +55,7 @@ use tokio_rustls::rustls::server::WebPkiClientVerifier;
 use tokio_rustls::rustls::{RootCertStore, ServerConfig};
 use tokio_rustls::server::TlsStream;
 use tokio_rustls::TlsAcceptor;
+use tokio_util::sync::CancellationToken;
 
 use crate::config::TlsConfig;
 use crate::error::Result;
@@ -871,7 +872,10 @@ pub struct TlsListener {
     rx: Option<mpsc::Receiver<(TlsStream<TcpStream>, SocketAddr)>>,
     /// The pump task, kept so `Drop` can abort it rather than let it outlive the
     /// listener holding the socket open.
-    pump: Option<tokio::task::JoinHandle<()>>,
+    pump: Option<tokio::task::AbortHandle>,
+    /// Cancelled when the pump stops while this listener is still alive. See
+    /// [`stopped`](Self::stopped).
+    stopped: CancellationToken,
 }
 
 impl Drop for TlsListener {
@@ -1048,6 +1052,34 @@ fn count_handshake_failure(kind: HandshakeFailureKind) {
     let _ = kind;
 }
 
+/// Wait for the handshake pump to end, and mark the listener stopped if it
+/// ended any way other than being aborted.
+///
+/// The pump loops forever, so it ends only by panicking or by the listener's
+/// `Drop` aborting it. An abort is the listener going away on purpose; anything
+/// else leaves a listener that will never accept again, which must not be
+/// silent.
+async fn watch_pump(pump: tokio::task::JoinHandle<()>, stopped: CancellationToken, addr: String) {
+    match pump.await {
+        Err(e) if e.is_cancelled() => {}
+        Err(e) => {
+            tracing::error!(
+                listener = %addr,
+                "the TLS handshake pump panicked ({e}); this listener accepts no further \
+                 connections"
+            );
+            stopped.cancel();
+        }
+        Ok(()) => {
+            tracing::error!(
+                listener = %addr,
+                "the TLS handshake pump returned; this listener accepts no further connections"
+            );
+            stopped.cancel();
+        }
+    }
+}
+
 impl TlsListener {
     /// Create a TLS listener serving one fixed server configuration.
     ///
@@ -1076,6 +1108,7 @@ impl TlsListener {
             handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
             rx: None,
             pump: None,
+            stopped: CancellationToken::new(),
         }
     }
 
@@ -1094,6 +1127,21 @@ impl TlsListener {
     #[must_use]
     pub fn config_source(&self) -> &TlsConfigSource {
         &self.config_source
+    }
+
+    /// Resolves if this listener stops accepting while it is still alive.
+    ///
+    /// The handshake pump that feeds [`accept`](axum::serve::Listener::accept)
+    /// runs as its own task. If it ends (it can only panic; it never returns),
+    /// `accept` has nothing left to hand out and parks forever, which to
+    /// `axum::serve` looks exactly like a quiet listener. Await this beside the
+    /// serve future to turn that silent stop into an exit: `ActonService::serve`
+    /// does, and returns an error when it fires.
+    ///
+    /// Never resolves for a healthy listener, nor for one dropped on purpose.
+    /// Take it before handing the listener to `axum::serve`, which consumes it.
+    pub fn stopped(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
+        self.stopped.clone().cancelled_owned()
     }
 }
 
@@ -1114,10 +1162,16 @@ impl axum::serve::Listener for TlsListener {
                 self.handshake_timeout,
                 tx,
             ));
+            self.pump = Some(pump.abort_handle());
+            let addr = self
+                .tcp
+                .local_addr()
+                .map_or_else(|e| format!("<unknown: {e}>"), |a| a.to_string());
+            tokio::spawn(watch_pump(pump, self.stopped.clone(), addr));
             self.rx = Some(rx);
-            self.pump = Some(pump);
         }
 
+        let stopped = self.stopped.clone();
         let rx = self
             .rx
             .as_mut()
@@ -1127,12 +1181,16 @@ impl axum::serve::Listener for TlsListener {
             match rx.recv().await {
                 Some(conn) => conn,
                 // The pump loops forever holding a `tx`, so the channel can only
-                // close if the pump task itself is gone — unreachable in normal
-                // operation. Returning would hand axum a bogus connection and
-                // busy-loop its serve loop, so park this future forever instead;
-                // a graceful shutdown drops the whole listener rather than
-                // relying on `accept()` to resolve.
-                None => std::future::pending().await,
+                // close once the pump task is gone. Returning would hand axum a
+                // bogus connection and busy-loop its serve loop, so park this
+                // future forever instead, and report the stop through
+                // `stopped()` so whoever serves this listener can exit rather
+                // than wait on it. `watch_pump` usually reports first; this
+                // covers any exit it could not see.
+                None => {
+                    stopped.cancel();
+                    std::future::pending().await
+                }
             }
         }
     }
@@ -2856,6 +2914,100 @@ mod tests {
                 ]
             );
             assert_eq!(HandshakeFailureKind::BadCert.to_string(), "bad_cert");
+        }
+    }
+
+    mod pump_supervision {
+        use super::super::{watch_pump, TlsConfigSource, TlsListener};
+        use super::{generate_cert, write_credentials};
+        use std::time::Duration;
+        use tokio::net::TcpListener;
+        use tokio_util::sync::CancellationToken;
+
+        const SETTLE: Duration = Duration::from_secs(5);
+
+        #[tokio::test]
+        async fn a_panicking_pump_marks_the_listener_stopped() {
+            let stopped = CancellationToken::new();
+            let pump = tokio::spawn(async { panic!("pump fault injected by the test") });
+            tokio::time::timeout(SETTLE, watch_pump(pump, stopped.clone(), "test".into()))
+                .await
+                .expect("the watcher returns once the pump ends");
+            assert!(stopped.is_cancelled());
+        }
+
+        #[tokio::test]
+        async fn an_aborted_pump_is_a_deliberate_stop_not_a_failure() {
+            let stopped = CancellationToken::new();
+            let pump = tokio::spawn(std::future::pending::<()>());
+            pump.abort();
+            tokio::time::timeout(SETTLE, watch_pump(pump, stopped.clone(), "test".into()))
+                .await
+                .expect("the watcher returns once the pump ends");
+            assert!(!stopped.is_cancelled());
+        }
+
+        async fn listener() -> TlsListener {
+            crate::crypto::ensure_default_crypto_provider();
+            let dir = tempfile::tempdir().expect("temp dir");
+            let tls_config = write_credentials(dir.path(), &generate_cert("localhost"));
+            let source =
+                TlsConfigSource::from_tls_config(&tls_config).expect("server config loads");
+            let tcp = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+            TlsListener::with_config_source(tcp, source)
+        }
+
+        /// The silent stop this guards against: with the pump gone, `accept()`
+        /// parks forever and `axum::serve` waits on it with nothing to say.
+        #[tokio::test]
+        async fn a_dead_pump_under_a_live_listener_resolves_stopped() {
+            use axum::serve::Listener as _;
+
+            let mut listener = listener().await;
+            let stopped = listener.stopped();
+            // The first accept spawns the pump; nothing connects, so it pends.
+            assert!(
+                tokio::time::timeout(Duration::from_millis(50), listener.accept())
+                    .await
+                    .is_err()
+            );
+            listener
+                .pump
+                .as_ref()
+                .expect("the first accept spawned the pump")
+                .abort();
+            // The next accept finds the channel closed and reports it.
+            let accept = listener.accept();
+            tokio::select! {
+                () = stopped => {}
+                _ = accept => panic!("accept cannot yield a connection with no pump"),
+                () = tokio::time::sleep(SETTLE) => panic!("stopped() never resolved"),
+            }
+        }
+
+        #[tokio::test]
+        async fn a_healthy_listener_never_resolves_stopped() {
+            use axum::serve::Listener as _;
+
+            let mut listener = listener().await;
+            let stopped = listener.stopped();
+            let _ = tokio::time::timeout(Duration::from_millis(50), listener.accept()).await;
+            assert!(tokio::time::timeout(Duration::from_millis(200), stopped)
+                .await
+                .is_err());
+        }
+
+        #[tokio::test]
+        async fn dropping_the_listener_is_not_a_stop() {
+            use axum::serve::Listener as _;
+
+            let mut listener = listener().await;
+            let stopped = listener.stopped();
+            let _ = tokio::time::timeout(Duration::from_millis(50), listener.accept()).await;
+            drop(listener);
+            assert!(tokio::time::timeout(Duration::from_millis(200), stopped)
+                .await
+                .is_err());
         }
     }
 }

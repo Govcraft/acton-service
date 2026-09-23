@@ -140,6 +140,8 @@ pub(crate) fn warn_if_http_instruments_are_absent(metrics: Option<&MetricsConfig
 }
 
 #[cfg(feature = "prometheus-metrics")]
+pub(crate) use runtime::bind_exporter;
+#[cfg(feature = "prometheus-metrics")]
 pub use runtime::{exporter_router, MetricsExporter};
 
 #[cfg(feature = "prometheus-metrics")]
@@ -150,6 +152,7 @@ mod runtime {
     use std::time::Duration;
     use tokio::sync::oneshot;
     use tokio::task::JoinHandle;
+    use tokio_util::sync::CancellationToken;
 
     /// How long [`MetricsExporter::shutdown`] waits for in-flight scrapes.
     ///
@@ -186,6 +189,20 @@ mod runtime {
         addr: SocketAddr,
         stop: Option<oneshot::Sender<()>>,
         task: Option<JoinHandle<std::io::Result<()>>>,
+        /// Cancelled when the serving task ends, however it ends.
+        exited: CancellationToken,
+    }
+
+    /// Bind the exporter's configured address, naming it and the config
+    /// section in the error: the bare `std::io::Error` ("Address already in
+    /// use (os error 98)") says neither.
+    pub(crate) async fn bind_exporter(addr: SocketAddr) -> Result<tokio::net::TcpListener> {
+        tokio::net::TcpListener::bind(addr).await.map_err(|e| {
+            Error::Internal(format!(
+                "the Prometheus exporter listener could not bind {addr}, configured by \
+                 {SECTION}: {e}"
+            ))
+        })
     }
 
     impl MetricsExporter {
@@ -202,17 +219,24 @@ mod runtime {
         /// message names the address and the config section, which the bare
         /// `std::io::Error` ("Address already in use (os error 98)") does not.
         pub async fn start(addr: SocketAddr) -> Result<Self> {
-            let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
-                Error::Internal(format!(
-                    "the Prometheus exporter listener could not bind {addr}, configured by \
-                     {SECTION}: {e}"
-                ))
-            })?;
+            Ok(Self::from_listener(bind_exporter(addr).await?))
+        }
 
-            // `local_addr` rather than `addr`: they differ when the caller
-            // asked for port 0, which `resolve_exporter_addr` rejects for
-            // configuration but which tests legitimately use.
-            let addr = listener.local_addr().unwrap_or(addr);
+        /// Start serving on a listener the caller already bound.
+        ///
+        /// For a socket bound elsewhere: an ephemeral port a test reads back, a
+        /// socket handed over by a supervisor, or one bound early so that
+        /// `ServiceBuilder::with_metrics_listener` can hand it to `serve`.
+        /// Must be called inside a Tokio runtime; the serving task is spawned
+        /// here.
+        pub fn from_listener(listener: tokio::net::TcpListener) -> Self {
+            // `local_addr` of the socket itself: it differs from any requested
+            // address when the caller asked for port 0, which
+            // `resolve_exporter_addr` rejects for configuration but which tests
+            // and pre-bound listeners legitimately use.
+            let addr = listener
+                .local_addr()
+                .unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], 0)));
 
             if crate::observability::PROMETHEUS_REGISTRY.get().is_none() {
                 tracing::warn!(
@@ -225,7 +249,12 @@ mod runtime {
             }
 
             let (stop, stopped) = oneshot::channel();
+            let exited = CancellationToken::new();
+            let exit_guard = exited.clone().drop_guard();
             let task = tokio::spawn(async move {
+                // Dropped when this task ends by returning, panicking or being
+                // aborted, so `exited()` covers every way the socket stops.
+                let _exit_guard = exit_guard;
                 axum::serve(listener, exporter_router().into_make_service())
                     .with_graceful_shutdown(async move {
                         let _ = stopped.await;
@@ -238,11 +267,12 @@ mod runtime {
                 "Prometheus exporter listening (plaintext, GET /metrics only)"
             );
 
-            Ok(Self {
+            Self {
                 addr,
                 stop: Some(stop),
                 task: Some(task),
-            })
+                exited,
+            }
         }
 
         /// The address the listener actually bound.
@@ -250,31 +280,54 @@ mod runtime {
             self.addr
         }
 
+        /// Resolves once the serving task has ended, for any reason.
+        ///
+        /// `ActonService::serve` awaits this beside the service listeners: an
+        /// exporter that stops before shutdown was requested is a service that
+        /// can no longer be scraped, and serve exits with an error rather than
+        /// run on unobservable.
+        pub(crate) fn exited(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
+            self.exited.clone().cancelled_owned()
+        }
+
+        /// Stop serving, wait for in-flight scrapes (bounded by
+        /// `DRAIN_TIMEOUT`), and report how the task ended.
+        ///
+        /// `Err` carries a sentence naming the failure: the listener returned
+        /// an error, the task panicked, or it did not drain in time.
+        pub(crate) async fn stop(mut self) -> std::result::Result<(), String> {
+            let Some(task) = self.task.take() else {
+                return Ok(());
+            };
+            drop(self.stop.take());
+
+            match tokio::time::timeout(DRAIN_TIMEOUT, task).await {
+                Ok(Ok(Ok(()))) => Ok(()),
+                Ok(Ok(Err(e))) => Err(format!(
+                    "the Prometheus exporter on {} stopped with an error: {e}",
+                    self.addr
+                )),
+                Ok(Err(e)) => Err(format!(
+                    "the Prometheus exporter task on {} did not join cleanly: {e}",
+                    self.addr
+                )),
+                Err(_) => Err(format!(
+                    "the Prometheus exporter on {} did not drain within {}s; abandoning it",
+                    self.addr,
+                    DRAIN_TIMEOUT.as_secs()
+                )),
+            }
+        }
+
         /// Stop serving and wait for in-flight scrapes, bounded by
         /// `DRAIN_TIMEOUT`.
         ///
         /// Callers drain the exporter *after* the service's own listeners have
         /// finished, so the final scrape can still observe the drain.
-        pub async fn shutdown(mut self) {
-            // Taken, so `Drop` sees `None` and does not abort a task that
-            // finished on its own terms.
-            let Some(task) = self.task.take() else {
-                return;
-            };
-            drop(self.stop.take());
-
-            match tokio::time::timeout(DRAIN_TIMEOUT, task).await {
-                Ok(Ok(Ok(()))) => tracing::info!("Prometheus exporter shutdown complete"),
-                Ok(Ok(Err(e))) => {
-                    tracing::warn!(error = %e, "Prometheus exporter stopped with an error")
-                }
-                Ok(Err(e)) => {
-                    tracing::warn!(error = %e, "Prometheus exporter task did not join cleanly")
-                }
-                Err(_) => tracing::warn!(
-                    timeout_secs = DRAIN_TIMEOUT.as_secs(),
-                    "Prometheus exporter did not drain in time; abandoning it"
-                ),
+        pub async fn shutdown(self) {
+            match self.stop().await {
+                Ok(()) => tracing::info!("Prometheus exporter shutdown complete"),
+                Err(e) => tracing::warn!("{e}"),
             }
         }
     }

@@ -105,6 +105,7 @@ pub mod responses;
 pub mod server;
 pub mod service_builder;
 pub mod state;
+pub(crate) mod supervise;
 pub mod versioning;
 
 #[cfg(feature = "database")]
@@ -275,7 +276,7 @@ pub mod prelude {
         Accepted, Conflict, Created, FieldError, NoContent, Success, ValidationError,
     };
     pub use crate::server::Server;
-    pub use crate::service_builder::{ActonService, ServiceBuilder, VersionedRoutes};
+    pub use crate::service_builder::{ActonService, BoundService, ServiceBuilder, VersionedRoutes};
     pub use crate::state::{AppState, AppStateBuilder};
     pub use crate::versioning::{
         extract_version_from_path, versioned_router, ApiVersion, DeprecationInfo,

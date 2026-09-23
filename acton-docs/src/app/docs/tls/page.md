@@ -365,6 +365,15 @@ scanner pointed at the wrong scheme; a jump in `bad_cert` after a CA rotation
 is a client fleet that has not picked up the new chain. Alert on each kind
 separately rather than on the total.
 
+## Handshake pump supervision
+
+The handshakes above run on a background task that feeds the listener. If
+that task ever stops, the listener can accept nothing further. `serve()`
+watches it: the other listeners drain and `serve()` returns an error naming
+the listener, rather than the process running on with a port that never
+answers. A `TlsListener` used directly with `axum::serve` exposes the same
+signal as `TlsListener::stopped()`.
+
 ## Outbound connect timeout
 
 The handshake timeout above bounds connections this service *accepts*. The
