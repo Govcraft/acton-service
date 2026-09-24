@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `RateLimitExceeded::retry_after_secs()` rounds the governor's wait up, and is at least 1, as the 429's `Retry-After` does. It used to truncate, so a wait under a second read as 0.
 - A governor limit above 60 000 requests per minute no longer panics when its bucket is created: the replenish interval is computed in nanoseconds, not whole milliseconds.
 
 ## [acton-service-v0.42.0] - 2026-09-09

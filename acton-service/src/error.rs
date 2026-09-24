@@ -505,16 +505,22 @@ impl Error {
     /// refused again. A zero or sub-second wait still answers 1, because
     /// `Retry-After: 0` invites an immediate retry into the same refusal.
     pub fn rate_limited(wait: std::time::Duration) -> Self {
-        let whole = wait.as_secs();
-        let retry_after_secs = if wait.subsec_nanos() > 0 {
-            whole.saturating_add(1)
-        } else {
-            whole
-        };
         Error::RateLimitExceeded {
-            retry_after_secs: retry_after_secs.max(1),
+            retry_after_secs: retry_after_secs(wait),
         }
     }
+}
+
+/// A wait as a `Retry-After` value: whole seconds, rounded up, and at least 1
+/// (`Retry-After: 0` invites an immediate retry into the same refusal).
+pub(crate) fn retry_after_secs(wait: std::time::Duration) -> u64 {
+    let whole = wait.as_secs();
+    let rounded = if wait.subsec_nanos() > 0 {
+        whole.saturating_add(1)
+    } else {
+        whole
+    };
+    rounded.max(1)
 }
 
 impl IntoResponse for Error {

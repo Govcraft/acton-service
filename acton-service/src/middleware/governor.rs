@@ -153,9 +153,9 @@ impl RateLimitExceeded {
         }
     }
 
-    /// Get retry-after header value in seconds
+    /// The `Retry-After` value in seconds: the wait rounded up, and at least 1.
     pub fn retry_after_secs(&self) -> u64 {
-        self.retry_after.as_secs()
+        crate::error::retry_after_secs(self.retry_after)
     }
 }
 
@@ -610,6 +610,28 @@ mod tests {
         assert_eq!(exceeded.retry_after_secs(), 30);
         assert_eq!(exceeded.limit, 100);
         assert_eq!(exceeded.period, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn rate_limit_exceeded_rounds_its_wait_up_to_at_least_one_second() {
+        let secs =
+            |wait| RateLimitExceeded::new(wait, 100, Duration::from_secs(60)).retry_after_secs();
+        assert_eq!(
+            secs(Duration::from_millis(100)),
+            1,
+            "a sub-second wait is 1, never 0"
+        );
+        assert_eq!(secs(Duration::ZERO), 1, "never 0");
+        assert_eq!(
+            secs(Duration::from_millis(1_001)),
+            2,
+            "rounded up, not truncated"
+        );
+        assert_eq!(
+            secs(Duration::from_secs(30)),
+            30,
+            "a whole wait is unchanged"
+        );
     }
 
     #[cfg(feature = "governor")]
