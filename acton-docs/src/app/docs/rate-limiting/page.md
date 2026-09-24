@@ -82,7 +82,7 @@ let service = ServiceBuilder::new()
 `request.extensions()` holds `ConnectInfo<TlsConnectInfo>` on a directly terminated [TLS](/docs/tls) listener, with the client certificate chain the listener verified, so a classifier can exempt operators by the identity their certificate names rather than by the fact that some chain verified.
 
 {% callout type="warning" title="Key only what you have verified" %}
-The classifier runs before token authentication and before any handler. Key a request by an identity only after the classifier has checked it. A classifier that keys by a raw header value gives every caller a fresh bucket for each made-up value it sends, which is no limit at all. Send an unverified caller to `RateKey::Anonymous`.
+The limiter `ServiceBuilder` applies runs after token authentication and Cedar authorization, just before the handler. The claims a classifier reads there were verified by token authentication, and a request that authentication or Cedar rejected is never counted. Any other credential a classifier keys by, such as a header or a client certificate's identity, it must verify itself. A classifier that keys by a raw header value gives every caller a fresh bucket for each made-up value it sends, which is no limit at all. Send an unverified caller to `RateKey::Anonymous`.
 {% /callout %}
 
 A classifier runs on every request that reaches the limiter, so keep it cheap: read from state the service has already published rather than calling out per request.
@@ -629,7 +629,7 @@ Both limiters key their buckets from the validated token claims — there is no 
 - `client_id` claim present → per-client bucket, limited by `per_client_rpm`
 - No claims → per-IP bucket
 
-Token authentication runs before rate limiting in the `ServiceBuilder` middleware order, so claims are always available to the limiter when a valid token is presented.
+Token authentication and Cedar authorization run before rate limiting in the `ServiceBuilder` middleware order, so claims are always available to the limiter when a valid token is presented, and a request they reject is not counted.
 
 ## Per-Client Rate Limiting
 

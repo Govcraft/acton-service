@@ -21,10 +21,25 @@
 //! [`RateLimitConfig::exempt_paths`] is applied before any classifier runs, so
 //! probes stay exempt whatever the classifier decides.
 //!
-//! A classifier runs on every request that reaches the limiter, before the
-//! request is authenticated. It must be cheap, and it must key a request by an
-//! identity only after checking it: keying by an unverified credential lets a
-//! caller open a fresh bucket per request by sending a fresh made-up value.
+//! Where a classifier runs is where its limiter sits. The governor limiter
+//! that [`ServiceBuilder`](crate::service_builder::ServiceBuilder) applies
+//! itself runs after token authentication and Cedar authorization, just before
+//! the handler:
+//!
+//! - the [`Claims`] a classifier reads there were verified by token
+//!   authentication;
+//! - a request that authentication or Cedar rejected never reaches the
+//!   limiter, so it is not counted.
+//!
+//! A limiter wired by hand runs wherever it is layered, and sees claims only
+//! if token authentication ran before it.
+//!
+//! Either way a classifier runs on every request that reaches its limiter, so
+//! it must be cheap. It must also key a request by an identity only once that
+//! identity is verified, by token authentication ahead of it or by the
+//! classifier itself for a credential no earlier layer checks: keying by an
+//! unverified credential lets a caller open a fresh bucket per request by
+//! sending a fresh made-up value.
 //!
 //! [`GovernorRateLimit`]: crate::middleware::governor::GovernorRateLimit
 //! [`RateLimit`]: crate::middleware::RateLimit

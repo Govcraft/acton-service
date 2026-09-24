@@ -595,9 +595,14 @@ where
     /// in which bucket: [`RateKey::Exempt`](crate::middleware::RateKey::Exempt),
     /// a keyed bucket, or the anonymous bucket of the client's address.
     /// [`exempt_paths`](crate::config::RateLimitConfig::exempt_paths) still
-    /// applies first. The classifier runs before token authentication and
-    /// before any handler, so it must key a request by an identity only once
-    /// it has checked that identity itself.
+    /// applies first.
+    ///
+    /// The auto-applied limiter runs after token authentication and Cedar
+    /// authorization, just before the handler. The
+    /// [`Claims`](crate::middleware::Claims) a classifier reads were verified
+    /// by token authentication, and a request that authentication or Cedar
+    /// rejected is never counted. Any other credential the classifier keys by
+    /// (a header, a client certificate's identity) it must verify itself.
     ///
     /// Has no effect when `[rate_limit] auto_apply` is `false`; a hand-wired
     /// limiter takes its classifier from
