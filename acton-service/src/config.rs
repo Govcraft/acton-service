@@ -380,7 +380,8 @@ pub struct RateLimitConfig {
     pub trust_forwarded_headers: bool,
 
     /// Request paths the limiters never count, matched exactly against the
-    /// full request path (no normalization, no wildcards).
+    /// full request path (no normalization, no wildcards). The query string is
+    /// not part of the path, a trailing slash is, and the method is ignored.
     ///
     /// Defaults to `["/health", "/ready"]`: an orchestrator polls its probes
     /// from one address, so counting them against that address's anonymous
@@ -404,6 +405,9 @@ pub struct RateLimitConfig {
     /// anonymous budget can be sized for them without changing the budget of
     /// users who are.
     ///
+    /// The governor limiter alone counts this bucket. The Redis limiter lets a
+    /// request with no claims and no matching route limit through uncounted.
+    ///
     /// [`per_user_rpm`]: RateLimitConfig::per_user_rpm
     #[serde(default)]
     pub anonymous_rpm: Option<u32>,
@@ -411,7 +415,9 @@ pub struct RateLimitConfig {
     /// Burst for the anonymous per-IP bucket: how many requests one IP may
     /// send back to back before the per-minute rate applies.
     ///
-    /// Unset, it is a tenth of the anonymous rate, and at least 1.
+    /// Unset, it is a tenth of the anonymous rate, and at least 1. The
+    /// governor limiter alone reads it: the Redis limiter counts in fixed
+    /// windows, which have no burst.
     #[serde(default)]
     pub anonymous_burst: Option<u32>,
 }

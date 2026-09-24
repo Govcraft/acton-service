@@ -43,11 +43,13 @@ The middleware is wired by `ServiceBuilder` to the **outer** router (before any 
 
 ### Exempt paths
 
-`exempt_paths` lists request paths the limiters never count, matched exactly against the full request path. It defaults to `["/health", "/ready"]`: an orchestrator polls the probes from one address, and counting them against that address's anonymous bucket would take a healthy instance out of rotation. Setting the list replaces the default, so keep the probes in it when adding paths, or set it to `[]` to count them.
+`exempt_paths` lists request paths the limiters never count, matched exactly against the full request path: a query string does not change the path (`/ready?x=1` is exempt), a trailing slash does (`/health/` is counted), and the method does not matter (`HEAD /ready` is exempt). Both limiters answer an exempt request before any classifier runs or any bucket is touched. The Redis limiter matches the path it is handed: attached inside a nested router, that is the path after the nest strips its prefix. It defaults to `["/health", "/ready"]`: an orchestrator polls the probes from one address, and counting them against that address's anonymous bucket would take a healthy instance out of rotation. Setting the list replaces the default, so keep the probes in it when adding paths, or set it to `[]` to count them.
 
 ### Sizing the anonymous bucket
 
 A request with no claims and no matching route limit is counted per client IP. By default that bucket uses `per_user_rpm` with a burst of a tenth of it. Set `anonymous_rpm` (and optionally `anonymous_burst`) when a service's callers are not token-authenticated users, so the per-IP budget can be sized for them without changing the budget of users who are. Every rate is exact up to `u32::MAX` requests per minute.
+
+The governor alone counts this bucket. The Redis limiter lets a request with no claims and no matching route limit through uncounted.
 
 ### Classifying callers
 
@@ -238,8 +240,15 @@ Per-route limits use a distinct Redis key structure:
 # Per-user route limit
 route:/api/v1/users/{id}:user:user123 → counter (expires in window_secs)
 
+# Per-caller route limit, anonymous caller (counted by client address)
+route:/api/v1/users/{id}:ip:198.51.100.7 → counter (expires in window_secs)
+
 # Global route limit (per_user = false)
 route:/api/v1/shared:global → counter (expires in window_secs)
+
+# No route limit: a keyed caller's own bucket, or an anonymous caller's address
+ratelimit:user:user123 → counter (expires in window_secs)
+ratelimit:ip:198.51.100.7 → counter (expires in window_secs)
 ```
 
 ## Redis vs Governor: Which Should You Use?
