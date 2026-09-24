@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** `Error::RateLimitExceeded` is now `Error::RateLimitExceeded { retry_after_secs }`, and every 429 it renders carries `Retry-After` (whole seconds, at least 1). The governor sets it from its own wait for a token, rounded up; the Redis limiter sets it from the time left on the counter's window. `Error::rate_limited(Duration)` builds one with that rounding. Match on `Error::RateLimitExceeded { .. }`.
+- **Breaking:** `RateLimitConfig` has three new fields, so a struct literal needs `..RateLimitConfig::default()`.
+- A per-caller route limit (`per_user = true`) now keys a client-token caller as `client:<sub>` and a caller with any other subject as `unknown:<sub>`, the same names as the global buckets, instead of counting every subject under `user:<sub>`. User-token keys are unchanged.
+
+### Added
+
+- `rate_limit.exempt_paths`: paths the governor and Redis limiters never count, matched exactly. Defaults to `["/health", "/ready"]`, so orchestrator probes from one address no longer draw down that address's anonymous bucket.
+- `rate_limit.anonymous_rpm` and `rate_limit.anonymous_burst`: size the per-IP bucket for requests without claims independently of `per_user_rpm`. Unset, the bucket is `per_user_rpm` with a tenth of it as burst.
+- Rate classifiers. A `RateClassifier` decides, per request, whether the governor and Redis limiters count it and in which bucket: `RateKey::Exempt`, a keyed bucket at the per-user or per-client quota (`RateKey::Key { id, class }`), or the anonymous bucket of the client address (`RateKey::Anonymous`). It sees the method, path, headers, extensions (connect info with any verified client certificate chain, and claims) and the resolved client address. `ClaimsClassifier` is the default and keeps the existing claims-based buckets and quotas, and `exempt_paths` applies before any classifier. Install one with `ServiceBuilder::with_rate_classifier`, or `with_classifier` on `GovernorRateLimit` and `RateLimit`. Any `Fn(&RateRequest) -> RateKey` is a classifier. It lets a service exempt its operators by certificate identity, or key callers by a credential its own middleware checks, instead of by address.
+
+### Fixed
+
+- A governor limit above 60 000 requests per minute no longer panics when its bucket is created: the replenish interval is computed in nanoseconds, not whole milliseconds.
+
 ## [acton-service-v0.42.0] - 2026-09-09
 
 ### Changed

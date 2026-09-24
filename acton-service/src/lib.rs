@@ -253,8 +253,9 @@ pub mod prelude {
 
     pub use crate::middleware::{
         normalize_path, request_id_layer, request_id_propagation_layer, sensitive_headers_layer,
-        Claims, CompiledRoutePatterns, PasetoAuth, RateLimit, RequestTrackingConfig,
-        TokenValidator, PROPAGATE_HEADERS, SENSITIVE_HEADERS,
+        Claims, ClaimsClassifier, CompiledRoutePatterns, PasetoAuth, RateClass, RateClassifier,
+        RateKey, RateLimit, RateRequest, RequestTrackingConfig, TokenValidator, PROPAGATE_HEADERS,
+        SENSITIVE_HEADERS,
     };
     #[cfg(feature = "events")]
     pub use crate::pool_health::NatsClientHealth;

@@ -14,6 +14,7 @@ pub mod revocation;
 #[cfg(feature = "jwt")]
 pub mod jwt;
 
+pub mod rate_key;
 pub mod rate_limit;
 pub mod request_context;
 pub mod request_tracking;
@@ -51,6 +52,9 @@ pub use revocation::RedisTokenRevocation;
 pub use jwt::JwtAuth;
 
 // Other middleware exports
+pub use rate_key::{
+    claims_rate_key, ClaimsClassifier, RateClass, RateClassifier, RateKey, RateRequest,
+};
 pub use rate_limit::RateLimit;
 pub use request_context::{request_context_middleware, RequestContext};
 pub use request_tracking::{
