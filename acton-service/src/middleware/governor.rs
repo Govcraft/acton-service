@@ -792,6 +792,7 @@ mod tests {
         let rate_limit = GovernorRateLimit::new(config);
         axum::Router::new()
             .route("/health", get(|| async { "ok" }))
+            .route("/health/", get(|| async { "ok" }))
             .route("/ready", get(|| async { "ok" }))
             .route("/readyz", get(|| async { "ok" }))
             .route("/api/v1/thing", get(|| async { "ok" }))
@@ -886,6 +887,159 @@ mod tests {
             (59..=60).contains(&retry_after),
             "Retry-After is the limiter's own wait, rounded up: {retry_after}"
         );
+    }
+
+    /// One anonymous request per address, and none back for a minute.
+    #[cfg(feature = "governor")]
+    fn one_request_each() -> RateLimitConfig {
+        RateLimitConfig {
+            anonymous_rpm: Some(1),
+            anonymous_burst: Some(1),
+            ..RateLimitConfig::default()
+        }
+    }
+
+    #[cfg(feature = "governor")]
+    #[tokio::test]
+    async fn a_probe_with_a_query_string_is_still_the_probe() {
+        use tower::ServiceExt;
+        let router = anonymous_router(one_request_each());
+        for n in 0..20 {
+            let response = router
+                .clone()
+                .oneshot(from_ip("/ready?x=1", 20))
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::OK,
+                "request {n}: the query string is not part of the path matched"
+            );
+        }
+    }
+
+    #[cfg(feature = "governor")]
+    #[tokio::test]
+    async fn a_trailing_slash_is_another_path() {
+        use tower::ServiceExt;
+        let router = anonymous_router(one_request_each());
+        let first = router
+            .clone()
+            .oneshot(from_ip("/health/", 21))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), axum::http::StatusCode::OK);
+        let second = router
+            .clone()
+            .oneshot(from_ip("/health/", 21))
+            .await
+            .unwrap();
+        assert_eq!(
+            second.status(),
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            "exact match: /health/ is not /health, so it is counted"
+        );
+    }
+
+    #[cfg(feature = "governor")]
+    #[tokio::test]
+    async fn a_head_probe_is_exempt() {
+        use tower::ServiceExt;
+        let router = anonymous_router(one_request_each());
+        for n in 0..20 {
+            let mut request = from_ip("/ready", 22);
+            *request.method_mut() = axum::http::Method::HEAD;
+            let response = router.clone().oneshot(request).await.unwrap();
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::OK,
+                "HEAD request {n}: the exemption is by path, whatever the method"
+            );
+        }
+    }
+
+    #[cfg(feature = "governor")]
+    #[tokio::test]
+    async fn an_exempt_request_leaves_the_bucket_untouched() {
+        use tower::ServiceExt;
+        let router = anonymous_router(one_request_each());
+        for path in ["/ready", "/health", "/ready?x=1"] {
+            for _ in 0..10 {
+                let response = router.clone().oneshot(from_ip(path, 23)).await.unwrap();
+                assert_eq!(response.status(), axum::http::StatusCode::OK, "{path}");
+            }
+        }
+        let first = router
+            .clone()
+            .oneshot(from_ip("/api/v1/thing", 23))
+            .await
+            .unwrap();
+        assert_eq!(
+            first.status(),
+            axum::http::StatusCode::OK,
+            "thirty probes later, the address's one request is still there"
+        );
+        let second = router
+            .clone()
+            .oneshot(from_ip("/api/v1/thing", 23))
+            .await
+            .unwrap();
+        assert_eq!(
+            second.status(),
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            "and it was the only one"
+        );
+    }
+
+    #[cfg(feature = "governor")]
+    #[tokio::test]
+    async fn a_sub_second_wait_is_advertised_as_one_second() {
+        use tower::ServiceExt;
+        // 600 a minute is one token every 100 ms: the refused request's
+        // actual wait is under a second, and Retry-After rounds it up.
+        let router = anonymous_router(RateLimitConfig {
+            anonymous_rpm: Some(600),
+            anonymous_burst: Some(1),
+            ..RateLimitConfig::default()
+        });
+        let first = router
+            .clone()
+            .oneshot(from_ip("/api/v1/thing", 24))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), axum::http::StatusCode::OK);
+        let refused = router
+            .clone()
+            .oneshot(from_ip("/api/v1/thing", 24))
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            refused.headers()[axum::http::header::RETRY_AFTER],
+            "1",
+            "a sub-second wait is 1, never 0"
+        );
+    }
+
+    /// The regression for the panic: a limit above 60 000 a minute used to
+    /// make a whole-millisecond period of zero, and creating the bucket on the
+    /// first request panicked.
+    #[cfg(feature = "governor")]
+    #[tokio::test]
+    async fn a_limit_above_sixty_thousand_a_minute_serves_requests() {
+        use tower::ServiceExt;
+        let router = anonymous_router(RateLimitConfig {
+            per_user_rpm: 120_000,
+            ..RateLimitConfig::default()
+        });
+        for n in 0..5 {
+            let response = router
+                .clone()
+                .oneshot(from_ip("/api/v1/thing", 25))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), axum::http::StatusCode::OK, "request {n}");
+        }
     }
 
     #[cfg(feature = "governor")]
