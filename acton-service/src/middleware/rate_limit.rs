@@ -447,4 +447,126 @@ mod tests {
             assert!(!rate_limit.route_patterns.is_empty());
         }
     }
+
+    // ---------------------------------------------------------------------
+    // Exemption is answered before Redis is asked anything
+    // ---------------------------------------------------------------------
+
+    #[cfg(feature = "cache")]
+    mod redis_exemption {
+        use std::collections::HashMap;
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+        use axum::body::Body;
+        use axum::http::{Method, Request, StatusCode};
+        use axum::routing::get;
+        use axum::Router;
+        use tower::ServiceExt;
+
+        use super::super::RateLimit;
+        use crate::config::{RateLimitConfig, RouteRateLimitConfig};
+        use crate::middleware::rate_key::{RateKey, RateRequest};
+
+        const IP: IpAddr = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 7));
+
+        /// A limiter whose Redis refuses every connection, so a request the
+        /// limiter counts fails with a server error and an uncounted one is
+        /// served. `/api/v1/thing` carries a route limit, which counts every
+        /// caller the classifier does not exempt.
+        fn limiter(classify_as: RateKey) -> RateLimit {
+            let pool = deadpool_redis::Config::from_url("redis://127.0.0.1:1")
+                .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+                .expect("the pool is built without connecting");
+            let config = RateLimitConfig {
+                routes: HashMap::from([(
+                    "/api/v1/thing".to_string(),
+                    RouteRateLimitConfig {
+                        requests_per_minute: 10,
+                        burst_size: 2,
+                        per_user: false,
+                    },
+                )]),
+                ..RateLimitConfig::default()
+            };
+            RateLimit::new(config, pool)
+                .with_classifier(move |_: &RateRequest<'_>| classify_as.clone())
+        }
+
+        fn router(rate_limit: RateLimit) -> Router {
+            Router::new()
+                .route("/health", get(|| async { "ok" }))
+                .route("/health/", get(|| async { "ok" }))
+                .route("/ready", get(|| async { "ok" }))
+                .route("/api/v1/thing", get(|| async { "ok" }))
+                .layer(axum::middleware::from_fn_with_state(
+                    rate_limit,
+                    RateLimit::middleware,
+                ))
+        }
+
+        async fn status(router: &Router, method: Method, uri: &str) -> StatusCode {
+            let mut request = Request::builder()
+                .method(method)
+                .uri(uri)
+                .body(Body::empty())
+                .expect("a valid request");
+            request
+                .extensions_mut()
+                .insert(axum::extract::ConnectInfo(SocketAddr::new(IP, 40000)));
+            router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("the router is infallible")
+                .status()
+        }
+
+        #[tokio::test]
+        async fn exempt_paths_are_served_before_redis_is_asked_anything() {
+            let router = router(limiter(RateKey::user("user:alice")));
+            for uri in ["/health", "/ready", "/ready?x=1"] {
+                assert_eq!(
+                    status(&router, Method::GET, uri).await,
+                    StatusCode::OK,
+                    "{uri}"
+                );
+            }
+            assert_eq!(
+                status(&router, Method::HEAD, "/ready").await,
+                StatusCode::OK,
+                "the exemption is by path, whatever the method"
+            );
+            // Counted requests reach the refused Redis, proving the ones
+            // above never did.
+            assert!(
+                status(&router, Method::GET, "/health/")
+                    .await
+                    .is_server_error(),
+                "exact match: a trailing slash is another path"
+            );
+            assert!(
+                status(&router, Method::GET, "/api/v1/thing")
+                    .await
+                    .is_server_error(),
+                "a keyed caller is counted in Redis"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_classifier_exemption_is_served_before_redis_is_asked_anything() {
+            let exempt = router(limiter(RateKey::Exempt));
+            assert_eq!(
+                status(&exempt, Method::GET, "/api/v1/thing").await,
+                StatusCode::OK,
+                "an exempt caller is not counted, even under a route limit"
+            );
+            let counted = router(limiter(RateKey::Anonymous(Some(IP))));
+            assert!(
+                status(&counted, Method::GET, "/api/v1/thing")
+                    .await
+                    .is_server_error(),
+                "any other caller of the route is counted in Redis"
+            );
+        }
+    }
 }
