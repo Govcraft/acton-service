@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.44.0] - 2026-09-24
+
+This release lets a service decide who a rate limit counts, and in which
+bucket: a `RateClassifier` sees each request's method, path, headers, client
+certificate and claims. Health probes are exempt by default, and every 429
+tells the caller how long to wait in `Retry-After`.
+
 ### Breaking
 
 - **`/health` and `/ready` are no longer rate limited, by default.** `rate_limit.exempt_paths` defaults to `["/health", "/ready"]`, and both the governor and the Redis limiter answer a request on an exempt path before any classifier runs or any bucket is touched. Matching is exact on the request path: a query string does not change it (`/ready?x=1` is exempt), a trailing slash does (`/health/` is counted), and the method does not matter (`HEAD /ready` is exempt). An orchestrator polls its probes from one address, and counting them against that address's anonymous bucket turned a healthy instance unready under load. **Opt out:** set `exempt_paths = []` under `[rate_limit]` to count probes as before. Setting the list replaces the default, so a service adding its own exempt paths lists the probes too if it wants them kept.
@@ -30,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `RateLimitExceeded::retry_after_secs()` rounds the governor's wait up, and is at least 1, as the 429's `Retry-After` does. It used to truncate, so a wait under a second read as 0.
 - A governor limit above 60 000 requests per minute no longer panics when its bucket is created: the replenish interval is computed in nanoseconds, not whole milliseconds.
+
+### Security
+
+- `rustls` floor raised to 0.23.45 for [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285) (TLS 1.3 handshake messages accepted across encryption level boundaries). The lockfile moves `aws-lc-rs` to 1.18.1 and `rustls-webpki` to 0.103.15 with it.
 
 ## [acton-service-v0.42.0] - 2026-09-09
 
