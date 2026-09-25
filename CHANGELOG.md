@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- **`/health` and `/ready` are no longer rate limited, by default.** `rate_limit.exempt_paths` defaults to `["/health", "/ready"]`, and both the governor and the Redis limiter answer a request on an exempt path before any classifier runs or any bucket is touched. Matching is exact on the request path: a query string does not change it (`/ready?x=1` is exempt), a trailing slash does (`/health/` is counted), and the method does not matter (`HEAD /ready` is exempt). An orchestrator polls its probes from one address, and counting them against that address's anonymous bucket turned a healthy instance unready under load. **Opt out:** set `exempt_paths = []` under `[rate_limit]` to count probes as before. Setting the list replaces the default, so a service adding its own exempt paths lists the probes too if it wants them kept.
+- **`Error::RateLimitExceeded` carries the wait: `Error::RateLimitExceeded { retry_after_secs }`**, and every 429 it renders carries `Retry-After` in whole seconds, at least 1. The governor sets it from its own wait for a token, rounded up; the Redis limiter from the time left on the counter's window. **Migrating:**
+  - a pattern `Error::RateLimitExceeded` becomes `Error::RateLimitExceeded { .. }`, or `{ retry_after_secs }` to read the wait;
+  - code that built the error builds it with the wait, `Error::RateLimitExceeded { retry_after_secs: 30 }`, or from a `Duration` with `Error::rate_limited(wait)`, which rounds up and never answers 0;
+  - a client that retried a 429 on a fixed timer can honor `Retry-After` instead.
+- **`RateLimitConfig` has three new fields** (`exempt_paths`, `anonymous_rpm`, `anonymous_burst`), so a struct literal needs `..RateLimitConfig::default()`.
+
+### Changed
+
+- A per-caller route limit (`per_user = true`) now keys a client-token caller as `client:<sub>` and a caller with any other subject as `unknown:<sub>`, the same names as the global buckets, instead of counting every subject under `user:<sub>`. User-token keys are unchanged.
+
+### Added
+
+- `rate_limit.exempt_paths`: see Breaking above.
+- `rate_limit.anonymous_rpm` and `rate_limit.anonymous_burst`: size the per-IP bucket for requests without claims independently of `per_user_rpm`. Unset, the bucket is `per_user_rpm` with a tenth of it as burst.
+- Rate classifiers. A `RateClassifier` decides, per request, whether the governor and Redis limiters count it and in which bucket: `RateKey::Exempt`, a keyed bucket at the per-user or per-client quota (`RateKey::Key { id, class }`), or the anonymous bucket of the client address (`RateKey::Anonymous`), which the governor counts and the Redis limiter counts only against a matching route limit. It sees the method, path, headers, extensions (connect info with any verified client certificate chain, and claims) and the resolved client address. `ClaimsClassifier` is the default and keeps the existing claims-based buckets and quotas, and `exempt_paths` applies before any classifier. Install one with `ServiceBuilder::with_rate_classifier`, or `with_classifier` on `GovernorRateLimit` and `RateLimit`. Any `Fn(&RateRequest) -> RateKey` is a classifier. It lets a service exempt its operators by certificate identity, or key callers by a credential its own middleware checks, instead of by address.
+
+### Fixed
+
+- `RateLimitExceeded::retry_after_secs()` rounds the governor's wait up, and is at least 1, as the 429's `Retry-After` does. It used to truncate, so a wait under a second read as 0.
+- A governor limit above 60 000 requests per minute no longer panics when its bucket is created: the replenish interval is computed in nanoseconds, not whole milliseconds.
+
 ## [acton-service-v0.42.0] - 2026-09-09
 
 ### Changed
