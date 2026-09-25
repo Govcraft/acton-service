@@ -38,6 +38,10 @@ tells the caller how long to wait in `Retry-After`.
 - `RateLimitExceeded::retry_after_secs()` rounds the governor's wait up, and is at least 1, as the 429's `Retry-After` does. It used to truncate, so a wait under a second read as 0.
 - A governor limit above 60 000 requests per minute no longer panics when its bucket is created: the replenish interval is computed in nanoseconds, not whole milliseconds.
 
+### Security
+
+- `rustls` floor raised to 0.23.45 for [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285) (TLS 1.3 handshake messages accepted across encryption level boundaries). The lockfile moves `aws-lc-rs` to 1.18.1 and `rustls-webpki` to 0.103.15 with it.
+
 ## [acton-service-v0.42.0] - 2026-09-09
 
 ### Changed
