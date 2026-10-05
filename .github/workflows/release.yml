@@ -1,5 +1,7 @@
 name: Publish acton-service
 
+# crates.io publisher: owner Govcraft, repository acton-service,
+# workflow release.yml, with no GitHub environment configured.
 on:
   workflow_dispatch:
     inputs:
