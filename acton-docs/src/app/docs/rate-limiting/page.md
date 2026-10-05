@@ -27,14 +27,65 @@ per_user_rpm = 100          # Per-user rate limit: 100 requests per minute
 per_client_rpm = 1000       # Per-client rate limit: 1000 requests per minute
 auto_apply = true           # Auto-attach the middleware (default: true)
 trust_forwarded_headers = false  # Trust X-Forwarded-For / X-Real-IP (default: false)
+exempt_paths = ["/health", "/ready"]  # Never counted (this is the default)
+# anonymous_rpm = 600       # Per-IP rate for requests with no claims (default: per_user_rpm)
+# anonymous_burst = 60      # Per-IP burst (default: anonymous_rpm / 10, at least 1)
 ```
 
-Rate limits are automatically applied based on token claims:
-- **Per-user limits** use the `sub` claim as identifier
-- **Per-client limits** use the `client_id` claim as identifier
+By default, rate limits are applied based on token claims:
+- **Per-user limits** apply to a `sub` starting with `user:`
+- **Per-client limits** apply to a `sub` starting with `client:`
 - **Anonymous requests** fall back to IP address-based limiting
 
+A [rate classifier](#classifying-callers) can replace this rule.
+
 The middleware is wired by `ServiceBuilder` to the **outer** router (before any `Router::nest` strips the path prefix), so route-rate-limit keys like `"POST /api/v1/uploads"` match the full request path as documented.
+
+### Exempt paths
+
+`exempt_paths` lists request paths the limiters never count, matched exactly against the full request path: a query string does not change the path (`/ready?x=1` is exempt), a trailing slash does (`/health/` is counted), and the method does not matter (`HEAD /ready` is exempt). Both limiters answer an exempt request before any classifier runs or any bucket is touched. The Redis limiter matches the path it is handed: attached inside a nested router, that is the path after the nest strips its prefix. It defaults to `["/health", "/ready"]`: an orchestrator polls the probes from one address, and counting them against that address's anonymous bucket would take a healthy instance out of rotation. Setting the list replaces the default, so keep the probes in it when adding paths, or set it to `[]` to count them.
+
+### Sizing the anonymous bucket
+
+A request with no claims and no matching route limit is counted per client IP. By default that bucket uses `per_user_rpm` with a burst of a tenth of it. Set `anonymous_rpm` (and optionally `anonymous_burst`) when a service's callers are not token-authenticated users, so the per-IP budget can be sized for them without changing the budget of users who are. Every rate is exact up to `u32::MAX` requests per minute.
+
+The governor alone counts this bucket. The Redis limiter lets a request with no claims and no matching route limit through uncounted.
+
+### Classifying callers
+
+Before counting a request, both limiters ask a `RateClassifier` which bucket it belongs to. The answer is a `RateKey`:
+
+- `RateKey::Exempt`: not counted, and never refused.
+- `RateKey::Key { id, class }`: counted in the bucket `id`, at `per_user_rpm` (`RateClass::User`) or `per_client_rpm` (`RateClass::Client`). Requests with the same `id` share a bucket, whatever address they come from.
+- `RateKey::Anonymous(ip)`: counted in the client address's anonymous bucket.
+
+The default, `ClaimsClassifier`, is the claims rule above. A service whose callers identify themselves some other way installs its own. `exempt_paths` still applies first.
+
+```rust
+use acton_service::prelude::*;
+
+fn classify(request: &RateRequest<'_>) -> RateKey {
+    if is_rostered_operator(request.extensions()) {
+        RateKey::Exempt
+    } else if let Some(agent) = verified_agent(request.headers()) {
+        RateKey::client(format!("agent:{agent}"))
+    } else {
+        RateKey::Anonymous(request.client_ip())
+    }
+}
+
+let service = ServiceBuilder::new()
+    .with_rate_classifier(classify)
+    .build();
+```
+
+`request.extensions()` holds `ConnectInfo<TlsConnectInfo>` on a directly terminated [TLS](/docs/tls) listener, with the client certificate chain the listener verified, so a classifier can exempt operators by the identity their certificate names rather than by the fact that some chain verified.
+
+{% callout type="warning" title="Key only what you have verified" %}
+The limiter `ServiceBuilder` applies runs after token authentication and Cedar authorization, just before the handler. The claims a classifier reads there were verified by token authentication, and a request that authentication or Cedar rejected is never counted. Any other credential a classifier keys by, such as a header or a client certificate's identity, it must verify itself. A classifier that keys by a raw header value gives every caller a fresh bucket for each made-up value it sends, which is no limit at all. Send an unverified caller to `RateKey::Anonymous`.
+{% /callout %}
+
+A classifier runs on every request that reaches the limiter, so keep it cheap: read from state the service has already published rather than calling out per request.
 
 ### Auto-apply opt-out
 
@@ -189,8 +240,15 @@ Per-route limits use a distinct Redis key structure:
 # Per-user route limit
 route:/api/v1/users/{id}:user:user123 → counter (expires in window_secs)
 
+# Per-caller route limit, anonymous caller (counted by client address)
+route:/api/v1/users/{id}:ip:198.51.100.7 → counter (expires in window_secs)
+
 # Global route limit (per_user = false)
 route:/api/v1/shared:global → counter (expires in window_secs)
+
+# No route limit: a keyed caller's own bucket, or an anonymous caller's address
+ratelimit:user:user123 → counter (expires in window_secs)
+ratelimit:ip:198.51.100.7 → counter (expires in window_secs)
 ```
 
 ## Redis vs Governor: Which Should You Use?
@@ -571,7 +629,7 @@ Both limiters key their buckets from the validated token claims — there is no 
 - `client_id` claim present → per-client bucket, limited by `per_client_rpm`
 - No claims → per-IP bucket
 
-Token authentication runs before rate limiting in the `ServiceBuilder` middleware order, so claims are always available to the limiter when a valid token is presented.
+Token authentication and Cedar authorization run before rate limiting in the `ServiceBuilder` middleware order, so claims are always available to the limiter when a valid token is presented, and a request they reject is not counted.
 
 ## Per-Client Rate Limiting
 
@@ -611,22 +669,21 @@ X-RateLimit-Reset: 1700000060
 
 ### 429 Too Many Requests
 
-When limit exceeded:
+When a limit is exceeded, both limiters answer 429 with `Retry-After`: whole seconds until the request would be admitted, rounded up and never 0. The governor reports its own wait for a token; the Redis limiter reports the time left on the counter's window.
 
 ```http
 HTTP/1.1 429 Too Many Requests
-X-RateLimit-Limit: 100
-X-RateLimit-Remaining: 0
-X-RateLimit-Reset: 1700000060
 Retry-After: 45
+Content-Type: application/json
 
 {
-  "error": "Rate limit exceeded",
+  "error": "Too many requests",
   "code": "RATE_LIMIT_EXCEEDED",
-  "status": 429,
-  "retry_after": 45
+  "status": 429
 }
 ```
+
+In code this is `Error::RateLimitExceeded { retry_after_secs }`. Build one from a wait with `Error::rate_limited(duration)`, which applies the same rounding.
 
 ## Audit Integration
 

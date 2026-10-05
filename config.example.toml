@@ -98,6 +98,9 @@ environment = "dev"  # dev, staging, production
 per_user_rpm = 200      # Requests per minute per user
 per_client_rpm = 1000   # Requests per minute per API client
 window_secs = 60
+exempt_paths = ["/health", "/ready"]   # never counted; setting this replaces the default
+# anonymous_rpm = 600   # per-IP rate for requests without claims (default: per_user_rpm)
+# anonymous_burst = 60  # per-IP burst (default: anonymous_rpm / 10, at least 1)
 
 # ============================================================================
 # MIDDLEWARE CONFIGURATION

@@ -389,9 +389,17 @@ pub enum Error {
     #[error("Bad request: {0}")]
     BadRequest(String),
 
-    /// Rate limit exceeded
-    #[error("Rate limit exceeded")]
-    RateLimitExceeded,
+    /// Rate limit exceeded (HTTP 429).
+    ///
+    /// The response always carries `Retry-After: retry_after_secs`, so a
+    /// client that honors it waits exactly as long as the limiter needs and
+    /// no longer. Build it with [`Error::rate_limited`] from the limiter's
+    /// wait, which rounds up and never answers 0.
+    #[error("Rate limit exceeded: retry after {retry_after_secs}s")]
+    RateLimitExceeded {
+        /// Whole seconds until the request would be admitted; at least 1.
+        retry_after_secs: u64,
+    },
 
     /// Resource conflict (409)
     #[error("Conflict: {0}")]
@@ -487,6 +495,32 @@ impl ErrorResponse {
             status: status.as_u16(),
         }
     }
+}
+
+impl Error {
+    /// A rate-limit refusal for a caller that must wait `wait` before retrying.
+    ///
+    /// `Retry-After` counts whole seconds, so the wait is rounded up, never
+    /// down: a client told to come back sooner than the limiter admits it is
+    /// refused again. A zero or sub-second wait still answers 1, because
+    /// `Retry-After: 0` invites an immediate retry into the same refusal.
+    pub fn rate_limited(wait: std::time::Duration) -> Self {
+        Error::RateLimitExceeded {
+            retry_after_secs: retry_after_secs(wait),
+        }
+    }
+}
+
+/// A wait as a `Retry-After` value: whole seconds, rounded up, and at least 1
+/// (`Retry-After: 0` invites an immediate retry into the same refusal).
+pub(crate) fn retry_after_secs(wait: std::time::Duration) -> u64 {
+    let whole = wait.as_secs();
+    let rounded = if wait.subsec_nanos() > 0 {
+        whole.saturating_add(1)
+    } else {
+        whole
+    };
+    rounded.max(1)
 }
 
 impl IntoResponse for Error {
@@ -636,14 +670,20 @@ impl IntoResponse for Error {
                 ErrorResponse::with_code(StatusCode::BAD_REQUEST, "BAD_REQUEST", msg),
             ),
 
-            Error::RateLimitExceeded => (
-                StatusCode::TOO_MANY_REQUESTS,
-                ErrorResponse::with_code(
+            Error::RateLimitExceeded { retry_after_secs } => {
+                let error_response = ErrorResponse::with_code(
                     StatusCode::TOO_MANY_REQUESTS,
                     "RATE_LIMIT_EXCEEDED",
                     "Too many requests",
-                ),
-            ),
+                );
+                let mut response =
+                    (StatusCode::TOO_MANY_REQUESTS, Json(error_response)).into_response();
+                response.headers_mut().insert(
+                    axum::http::header::RETRY_AFTER,
+                    axum::http::header::HeaderValue::from(retry_after_secs.max(1)),
+                );
+                return response;
+            }
 
             Error::Conflict(msg) => (
                 StatusCode::CONFLICT,
@@ -1072,6 +1112,57 @@ impl From<DatabaseError> for crate::repository::RepositoryError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rate_limited_rounds_the_wait_up_to_whole_seconds() {
+        use std::time::Duration;
+        let secs = |wait| match Error::rate_limited(wait) {
+            Error::RateLimitExceeded { retry_after_secs } => retry_after_secs,
+            other => panic!("rate_limited built {other:?}"),
+        };
+        assert_eq!(secs(Duration::ZERO), 1, "a zero wait still answers 1");
+        assert_eq!(secs(Duration::from_millis(1)), 1);
+        assert_eq!(secs(Duration::from_secs(1)), 1);
+        assert_eq!(
+            secs(Duration::from_millis(1001)),
+            2,
+            "rounded up, never down"
+        );
+        assert_eq!(secs(Duration::from_secs(30)), 30);
+        assert_eq!(secs(Duration::MAX), u64::MAX, "saturates rather than wraps");
+    }
+
+    #[test]
+    fn rate_limit_exceeded_is_429_with_retry_after() {
+        let response = Error::RateLimitExceeded {
+            retry_after_secs: 7,
+        }
+        .into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok()),
+            Some("7"),
+            "every 429 carries Retry-After"
+        );
+    }
+
+    #[test]
+    fn rate_limit_exceeded_never_advertises_a_zero_wait() {
+        let response = Error::RateLimitExceeded {
+            retry_after_secs: 0,
+        }
+        .into_response();
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok()),
+            Some("1")
+        );
+    }
 
     #[test]
     fn test_error_response() {
