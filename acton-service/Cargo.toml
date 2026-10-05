@@ -83,7 +83,7 @@ reqwest = { workspace = true }
 
 # Async utilities
 futures = { workspace = true }
-async-trait = { workspace = true }
+async-trait = "0.1.92"
 
 # HTTP types
 http = { workspace = true }
