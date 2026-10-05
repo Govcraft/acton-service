@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-acton-service = { {% if acton_service_path %}path = "{{ acton_service_path }}"{% else %}version = "0.2.1"{% endif %}{% if features|length > 0 %}, features = [{% for feature in features %}"{{ feature }}"{% if not loop.last %}, {% endif %}{% endfor %}]{% endif %} }
+acton-service = { {% if acton_service_path %}path = "{{ acton_service_path }}"{% else %}version = "{{ acton_service_version }}"{% endif %}{% if features|length > 0 %}, features = [{% for feature in features %}"{{ feature }}"{% if not loop.last %}, {% endif %}{% endfor %}]{% endif %} }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

@@ -10,6 +10,24 @@ use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+/// The acton-service release this CLI belongs to.
+///
+/// The CLI and the library share the workspace version, so every scaffolded
+/// `Cargo.toml` and every printed install hint names the release the CLI was
+/// built with rather than a literal that ages with each release.
+pub const ACTON_SERVICE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The `acton-service = { ... }` dependency line for `features`, pinned to
+/// [`ACTON_SERVICE_VERSION`].
+pub fn acton_service_dependency(features: &[&str]) -> String {
+    let features = features
+        .iter()
+        .map(|feature| format!("\"{feature}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("acton-service = {{ version = \"{ACTON_SERVICE_VERSION}\", features = [{features}] }}")
+}
+
 /// Template data for service generation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
@@ -124,5 +142,21 @@ impl ServiceTemplate {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+
+    #[test]
+    fn the_cli_pins_the_workspace_release() {
+        assert_eq!(ACTON_SERVICE_VERSION, env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            acton_service_dependency(&["grpc", "observability"]),
+            format!(
+                r#"acton-service = {{ version = "{ACTON_SERVICE_VERSION}", features = ["grpc", "observability"] }}"#
+            )
+        );
     }
 }

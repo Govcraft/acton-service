@@ -249,6 +249,10 @@ async fn create_project(config: &ServiceConfig, project_path: &Path, no_git: boo
     let mut context = template.to_json();
     let context_obj = context.as_object_mut().unwrap();
     context_obj.insert(
+        "acton_service_version".to_string(),
+        serde_json::Value::String(crate::templates::ACTON_SERVICE_VERSION.to_string()),
+    );
+    context_obj.insert(
         "acton_service_path".to_string(),
         serde_json::Value::String(template.acton_service_path().unwrap_or_default()),
     );

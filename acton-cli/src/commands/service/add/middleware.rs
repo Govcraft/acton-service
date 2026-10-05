@@ -1,3 +1,4 @@
+use crate::templates::acton_service_dependency;
 use anyhow::{bail, Result};
 use colored::Colorize;
 
@@ -185,7 +186,7 @@ fn show_resilience_middleware() {
     println!("{}", "1. Enable in Cargo.toml:".green().bold());
     println!();
     println!("   [dependencies]");
-    println!(r#"   acton-service = {{ version = "0.2", features = ["resilience"] }}"#);
+    println!("   {}", acton_service_dependency(&["resilience"]));
     println!();
 
     println!("{}", "2. Configure in config.toml:".green().bold());
@@ -227,9 +228,9 @@ fn show_metrics_middleware() {
     println!();
     println!("   [dependencies]");
     println!("   # OTLP push:");
-    println!(r#"   acton-service = {{ version = "0.2", features = ["otel-metrics"] }}"#);
+    println!("   {}", acton_service_dependency(&["otel-metrics"]));
     println!("   # Prometheus pull (/metrics endpoint):");
-    println!(r#"   acton-service = {{ version = "0.2", features = ["prometheus-metrics"] }}"#);
+    println!("   {}", acton_service_dependency(&["prometheus-metrics"]));
     println!();
 
     println!("{}", "2. Configure in config.toml:".green().bold());
@@ -272,7 +273,7 @@ fn show_governor_middleware() {
     println!("{}", "1. Enable in Cargo.toml:".green().bold());
     println!();
     println!("   [dependencies]");
-    println!(r#"   acton-service = {{ version = "0.2", features = ["governor"] }}"#);
+    println!("   {}", acton_service_dependency(&["governor"]));
     println!();
 
     println!("{}", "2. Configure in config.toml:".green().bold());
