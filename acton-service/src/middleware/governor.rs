@@ -7,8 +7,6 @@
 use std::time::Duration;
 
 #[cfg(feature = "governor")]
-use std::net::IpAddr;
-#[cfg(feature = "governor")]
 use std::num::NonZeroU32;
 #[cfg(feature = "governor")]
 use std::sync::Arc;
@@ -39,11 +37,15 @@ use tracing::{debug, warn};
 use super::request_context::extract_client_ip;
 
 #[cfg(feature = "governor")]
+use super::rate_key::{RateClass, RateClassifier, RateKey, RateRequest, SharedClassifier};
+#[cfg(feature = "governor")]
 use crate::config::RateLimitConfig;
 #[cfg(feature = "governor")]
 use crate::error::Error;
+#[cfg(all(feature = "governor", feature = "audit"))]
+use crate::middleware::Claims;
 #[cfg(feature = "governor")]
-use crate::middleware::{normalize_path, Claims, CompiledRoutePatterns};
+use crate::middleware::{normalize_path, CompiledRoutePatterns};
 
 /// Configuration for governor-based rate limiting
 #[derive(Debug, Clone)]
@@ -151,9 +153,9 @@ impl RateLimitExceeded {
         }
     }
 
-    /// Get retry-after header value in seconds
+    /// The `Retry-After` value in seconds: the wait rounded up, and at least 1.
     pub fn retry_after_secs(&self) -> u64 {
-        self.retry_after.as_secs()
+        crate::error::retry_after_secs(self.retry_after)
     }
 }
 
@@ -174,6 +176,8 @@ pub struct GovernorRateLimit {
     route_limiters: Arc<DashMap<String, Arc<GovernorLimiter>>>,
     /// Global rate limiters, keyed by user/client/IP identifier
     global_limiters: Arc<DashMap<String, Arc<GovernorLimiter>>>,
+    /// Decides which bucket each request is counted in
+    classifier: SharedClassifier,
 }
 
 #[cfg(feature = "governor")]
@@ -186,16 +190,33 @@ impl GovernorRateLimit {
             route_patterns: Arc::new(route_patterns),
             route_limiters: Arc::new(DashMap::new()),
             global_limiters: Arc::new(DashMap::new()),
+            classifier: SharedClassifier::default(),
         }
+    }
+
+    /// Counts requests by `classifier` instead of the default
+    /// [`ClaimsClassifier`](super::rate_key::ClaimsClassifier).
+    pub fn with_classifier(mut self, classifier: impl RateClassifier) -> Self {
+        self.classifier = SharedClassifier::new(classifier);
+        self
+    }
+
+    /// As [`with_classifier`](Self::with_classifier), for a classifier that is
+    /// already shared.
+    pub(crate) fn with_shared_classifier(mut self, classifier: Arc<dyn RateClassifier>) -> Self {
+        self.classifier = SharedClassifier::from_arc(classifier);
+        self
     }
 
     /// Middleware function to enforce rate limits
     ///
-    /// Checks rate limits in the following order:
+    /// Paths on [`RateLimitConfig::exempt_paths`] are never counted. Every
+    /// other request is classified (see [`with_classifier`](Self::with_classifier);
+    /// the default classifies by JWT/PASETO claims), and a request the
+    /// classifier does not exempt is checked in this order:
     /// 1. Per-route limits (if configured for the request path)
-    /// 2. Global per-user/per-client limits (if JWT/PASETO claims present)
-    /// 3. Per-IP fallback for anonymous requests (when no route-specific limit
-    ///    matches and no claims are present)
+    /// 2. The keyed caller's per-user or per-client limit
+    /// 3. Per-IP fallback for an anonymous caller
     ///
     /// The path used for route matching is the request URI as seen by this
     /// layer. When the layer is attached to the outer router (the default
@@ -219,7 +240,12 @@ impl GovernorRateLimit {
             .map(|ou| ou.0.path().to_string())
             .unwrap_or_else(|| request.uri().path().to_string());
 
-        let claims = request.extensions().get::<Claims>().cloned();
+        // Probes and other configured paths are never counted, whatever the
+        // classifier would say.
+        if rate_limit.config.is_exempt_path(&path) {
+            return Ok(next.run(request).await);
+        }
+
         // Resolve the peer address from whichever connect-info the listener
         // installed: `ConnectInfo<SocketAddr>` on plain TCP, or
         // `ConnectInfo<TlsConnectInfo>` on a directly-terminated TLS listener.
@@ -231,15 +257,26 @@ impl GovernorRateLimit {
             connect_info.as_ref(),
             rate_limit.config.trust_forwarded_headers,
         );
+        let rate_key = rate_limit.classifier.classify(&RateRequest::new(
+            request.method(),
+            &path,
+            request.headers(),
+            request.extensions(),
+            client_ip,
+        ));
+        #[cfg(feature = "audit")]
+        let subject = request.extensions().get::<Claims>().map(|c| c.sub.clone());
 
         // Check rate limit and get result for headers
-        let result = match rate_limit.check_rate_limit(&method, &path, claims.as_ref(), client_ip) {
-            Ok(result) => result,
+        let result = match rate_limit.check_rate_limit(&method, &path, &rate_key) {
+            Ok(Some(result)) => result,
+            // The classifier exempted the request: nothing counted, no headers.
+            Ok(None) => return Ok(next.run(request).await),
             Err(e) => {
                 // Mirror the Redis rate limiter: rejections are audit-visible
                 // as HttpRequestDenied (issue #16).
                 #[cfg(feature = "audit")]
-                if matches!(e, Error::RateLimitExceeded) {
+                if matches!(e, Error::RateLimitExceeded { .. }) {
                     if let Some(logger) = request
                         .extensions()
                         .get::<crate::audit::AuditLogger>()
@@ -248,7 +285,7 @@ impl GovernorRateLimit {
                         if logger.config().audit_auth_events {
                             let mut source =
                                 super::request_context::audit_source_for_request(&request);
-                            source.subject = claims.as_ref().map(|c| c.sub.clone());
+                            source.subject = subject;
                             logger
                                 .log(
                                     crate::audit::event::AuditEvent::new(
@@ -284,84 +321,87 @@ impl GovernorRateLimit {
         Ok(response)
     }
 
-    /// Check rate limit considering per-route configuration and the resolved
-    /// client IP for anonymous fallback.
+    /// Counts a request classified as `rate_key` against its bucket, and
+    /// answers `None` when the classifier exempted it.
     fn check_rate_limit(
         &self,
         method: &str,
         path: &str,
-        claims: Option<&Claims>,
-        client_ip: Option<IpAddr>,
-    ) -> Result<GovernorRateLimitResult, Error> {
+        rate_key: &RateKey,
+    ) -> Result<Option<GovernorRateLimitResult>, Error> {
+        let Some(bucket) = self.bucket(method, path, rate_key) else {
+            return Ok(None);
+        };
+        let limiters = match bucket.scope {
+            BucketScope::Route => &self.route_limiters,
+            BucketScope::Global => &self.global_limiters,
+        };
+        self.check_with_limiter(limiters, &bucket.key, bucket.rpm, bucket.burst)
+            .map(Some)
+    }
+
+    /// The bucket a request classified as `rate_key` is counted in, or `None`
+    /// when it is exempt.
+    ///
+    /// A per-route limit for the request's route comes first: a per-user route
+    /// limit keys it by the classified identity or else the client address,
+    /// and a shared one keys every caller alike. Otherwise a keyed request is
+    /// counted in its own bucket at its class's quota, and an anonymous one in
+    /// its address's bucket at [`RateLimitConfig::anonymous_quota`].
+    fn bucket(&self, method: &str, path: &str, rate_key: &RateKey) -> Option<Bucket> {
+        if matches!(rate_key, RateKey::Exempt) {
+            return None;
+        }
         let normalized_path = normalize_path(path);
 
-        // Check if there's a route-specific rate limit
         if let Some(route_config) = self.route_patterns.match_route(method, &normalized_path) {
             debug!(
                 "Using per-route governor limit for {} {}: {} rpm",
                 method, normalized_path, route_config.requests_per_minute
             );
-
             let key = if route_config.per_user {
-                // Per-user route limit - prefer claims, fall back to IP, then "unknown"
-                if let Some(claims) = claims {
-                    format!("route:{}:user:{}", normalized_path, claims.sub)
-                } else if let Some(ip) = client_ip {
-                    format!("route:{}:ip:{}", normalized_path, ip)
-                } else {
-                    format!("route:{}:ip:unknown", normalized_path)
+                match rate_key {
+                    RateKey::Key { id, .. } => format!("route:{}:{}", normalized_path, id),
+                    RateKey::Anonymous(Some(ip)) => format!("route:{}:ip:{}", normalized_path, ip),
+                    RateKey::Anonymous(None) | RateKey::Exempt => {
+                        format!("route:{}:ip:unknown", normalized_path)
+                    }
                 }
             } else {
-                // Global route limit (shared across all users)
                 format!("route:{}:global", normalized_path)
             };
-
-            return self.check_with_limiter(
-                &self.route_limiters,
-                &key,
-                route_config.requests_per_minute,
-                route_config.burst_size,
-            );
+            return Some(Bucket {
+                scope: BucketScope::Route,
+                key,
+                rpm: route_config.requests_per_minute,
+                burst: route_config.burst_size,
+            });
         }
 
-        // Fall back to global user/client limits
-        if let Some(claims) = claims {
-            let (key, limit) = if claims.is_user() {
-                (
-                    format!("governor:user:{}", claims.sub),
-                    self.config.per_user_rpm,
-                )
-            } else if claims.is_client() {
-                (
-                    format!("governor:client:{}", claims.sub),
-                    self.config.per_client_rpm,
-                )
-            } else {
-                // Default to user limit
-                (
-                    format!("governor:unknown:{}", claims.sub),
-                    self.config.per_user_rpm,
-                )
-            };
-
-            // Calculate burst size (10% of limit, minimum 1)
-            let burst_size = (limit / 10).max(1);
-
-            return self.check_with_limiter(&self.global_limiters, &key, limit, burst_size);
-        }
-
-        // No claims and no route-specific limit - fall back to per-IP limiting.
-        // Previously this branch silently allowed the request, contradicting
-        // the documented "anonymous requests fall back to IP-based limiting"
-        // behaviour.
-        let limit = self.config.per_user_rpm;
-        let burst_size = (limit / 10).max(1);
-        let key = match client_ip {
-            Some(ip) => format!("governor:ip:{}", ip),
-            None => "governor:ip:unknown".to_string(),
+        let (key, rpm, burst) = match rate_key {
+            RateKey::Key { id, class } => {
+                let rpm = match class {
+                    RateClass::User => self.config.per_user_rpm,
+                    RateClass::Client => self.config.per_client_rpm,
+                };
+                (format!("governor:{}", id), rpm, (rpm / 10).max(1))
+            }
+            RateKey::Anonymous(ip) => {
+                let (rpm, burst) = self.config.anonymous_quota();
+                let key = match ip {
+                    Some(ip) => format!("governor:ip:{}", ip),
+                    None => "governor:ip:unknown".to_string(),
+                };
+                (key, rpm, burst)
+            }
+            RateKey::Exempt => return None,
         };
-
-        self.check_with_limiter(&self.global_limiters, &key, limit, burst_size)
+        Some(Bucket {
+            scope: BucketScope::Global,
+            key,
+            rpm,
+            burst,
+        })
     }
 
     /// Check rate limit using a specific limiter map
@@ -400,24 +440,27 @@ impl GovernorRateLimit {
                     key, retry_after
                 );
 
-                Err(Error::RateLimitExceeded)
+                Err(Error::rate_limited(retry_after))
             }
         }
     }
 
     /// Create a new rate limiter with the given configuration
     fn create_limiter(requests_per_minute: u32, burst_size: u32) -> GovernorLimiter {
-        // Calculate replenishment interval: how often to add one token
-        // For 60 RPM: 60000ms / 60 = 1000ms per token
-        let replenish_interval_ms = 60_000u64 / (requests_per_minute as u64).max(1);
-
-        // Create quota with burst capacity
-        let burst = NonZeroU32::new(burst_size.max(1)).unwrap();
-        let quota = Quota::with_period(Duration::from_millis(replenish_interval_ms))
-            .expect("Replenish interval should be valid")
+        let burst = NonZeroU32::new(burst_size.max(1)).unwrap_or(NonZeroU32::MIN);
+        let quota = Quota::with_period(Self::replenish_interval(requests_per_minute))
+            .unwrap_or_else(|| Quota::per_second(NonZeroU32::MAX))
             .allow_burst(burst);
 
         RateLimiter::direct(quota)
+    }
+
+    /// How often one token is added back to a bucket of `requests_per_minute`.
+    ///
+    /// Counted in nanoseconds: a whole-millisecond interval is zero above
+    /// 60 000 requests per minute, and a zero period is not a quota.
+    fn replenish_interval(requests_per_minute: u32) -> Duration {
+        Duration::from_nanos(60_000_000_000 / u64::from(requests_per_minute.max(1)))
     }
 
     /// Add rate limit headers to response
@@ -477,6 +520,24 @@ impl GovernorRateLimit {
             }
         }
     }
+}
+
+/// Which limiter map a bucket lives in.
+#[cfg(feature = "governor")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BucketScope {
+    Route,
+    Global,
+}
+
+/// One bucket a request is counted in.
+#[cfg(feature = "governor")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Bucket {
+    scope: BucketScope,
+    key: String,
+    rpm: u32,
+    burst: u32,
 }
 
 /// Rate limit check result for governor middleware
@@ -549,6 +610,28 @@ mod tests {
         assert_eq!(exceeded.retry_after_secs(), 30);
         assert_eq!(exceeded.limit, 100);
         assert_eq!(exceeded.period, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn rate_limit_exceeded_rounds_its_wait_up_to_at_least_one_second() {
+        let secs =
+            |wait| RateLimitExceeded::new(wait, 100, Duration::from_secs(60)).retry_after_secs();
+        assert_eq!(
+            secs(Duration::from_millis(100)),
+            1,
+            "a sub-second wait is 1, never 0"
+        );
+        assert_eq!(secs(Duration::ZERO), 1, "never 0");
+        assert_eq!(
+            secs(Duration::from_millis(1_001)),
+            2,
+            "rounded up, not truncated"
+        );
+        assert_eq!(
+            secs(Duration::from_secs(30)),
+            30,
+            "a whole wait is unchanged"
+        );
     }
 
     #[cfg(feature = "governor")]
@@ -640,12 +723,12 @@ mod tests {
         let rl = GovernorRateLimit::new(config);
 
         // Full path matches.
-        let first = rl.check_rate_limit("POST", "/api/v1/uploads", None, None);
+        let first = rl.check_rate_limit("POST", "/api/v1/uploads", &RateKey::Anonymous(None));
         assert!(first.is_ok());
 
         // The 2nd hit on the same global route bucket trips the burst=1 limit.
-        let second = rl.check_rate_limit("POST", "/api/v1/uploads", None, None);
-        assert!(matches!(second, Err(Error::RateLimitExceeded)));
+        let second = rl.check_rate_limit("POST", "/api/v1/uploads", &RateKey::Anonymous(None));
+        assert!(matches!(second, Err(Error::RateLimitExceeded { .. })));
 
         // Post-nest path on a fresh middleware does NOT match the route key
         // (it falls through to the IP-based fallback, which uses the global
@@ -665,7 +748,7 @@ mod tests {
             },
             ..RateLimitConfig::default()
         });
-        let post_nest = rl2.check_rate_limit("POST", "/uploads", None, None);
+        let post_nest = rl2.check_rate_limit("POST", "/uploads", &RateKey::Anonymous(None));
         assert!(
             post_nest.is_ok(),
             "post-nest path must not match the full-path config key"
@@ -690,15 +773,15 @@ mod tests {
         let ip_b = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2));
 
         // First request from ip_a succeeds.
-        let r1 = rl.check_rate_limit("GET", "/whatever", None, Some(ip_a));
+        let r1 = rl.check_rate_limit("GET", "/whatever", &RateKey::Anonymous(Some(ip_a)));
         assert!(r1.is_ok());
 
         // Second request from ip_a is rate-limited (burst exhausted).
-        let r2 = rl.check_rate_limit("GET", "/whatever", None, Some(ip_a));
-        assert!(matches!(r2, Err(Error::RateLimitExceeded)));
+        let r2 = rl.check_rate_limit("GET", "/whatever", &RateKey::Anonymous(Some(ip_a)));
+        assert!(matches!(r2, Err(Error::RateLimitExceeded { .. })));
 
         // ip_b gets a fresh bucket.
-        let r3 = rl.check_rate_limit("GET", "/whatever", None, Some(ip_b));
+        let r3 = rl.check_rate_limit("GET", "/whatever", &RateKey::Anonymous(Some(ip_b)));
         assert!(r3.is_ok());
     }
 
@@ -714,10 +797,537 @@ mod tests {
         };
         let rl = GovernorRateLimit::new(config);
 
-        let first = rl.check_rate_limit("GET", "/x", None, None);
+        let first = rl.check_rate_limit("GET", "/x", &RateKey::Anonymous(None));
         assert!(first.is_ok());
 
-        let second = rl.check_rate_limit("GET", "/x", None, None);
-        assert!(matches!(second, Err(Error::RateLimitExceeded)));
+        let second = rl.check_rate_limit("GET", "/x", &RateKey::Anonymous(None));
+        assert!(matches!(second, Err(Error::RateLimitExceeded { .. })));
+    }
+
+    // ---------------------------------------------------------------------
+    // Posture: exempt paths, the anonymous knob, Retry-After, mTLS exemption
+    // ---------------------------------------------------------------------
+
+    #[cfg(feature = "governor")]
+    fn anonymous_router(config: RateLimitConfig) -> axum::Router {
+        use axum::routing::get;
+        let rate_limit = GovernorRateLimit::new(config);
+        axum::Router::new()
+            .route("/health", get(|| async { "ok" }))
+            .route("/health/", get(|| async { "ok" }))
+            .route("/ready", get(|| async { "ok" }))
+            .route("/readyz", get(|| async { "ok" }))
+            .route("/api/v1/thing", get(|| async { "ok" }))
+            .layer(axum::middleware::from_fn_with_state(
+                rate_limit,
+                GovernorRateLimit::middleware,
+            ))
+    }
+
+    #[cfg(feature = "governor")]
+    fn from_ip(path: &str, last_octet: u8) -> Request<Body> {
+        use std::net::{Ipv4Addr, SocketAddr};
+        let mut request = Request::builder().uri(path).body(Body::empty()).unwrap();
+        request
+            .extensions_mut()
+            .insert(axum::extract::ConnectInfo(SocketAddr::from((
+                Ipv4Addr::new(198, 51, 100, last_octet),
+                40000,
+            ))));
+        request
+    }
+
+    #[cfg(feature = "governor")]
+    #[tokio::test]
+    async fn probes_are_exempt_by_default() {
+        use tower::ServiceExt;
+        let router = anonymous_router(RateLimitConfig {
+            per_user_rpm: 1,
+            ..RateLimitConfig::default()
+        });
+        for path in ["/health", "/ready"] {
+            for n in 0..50 {
+                let response = router.clone().oneshot(from_ip(path, 7)).await.unwrap();
+                assert_eq!(
+                    response.status(),
+                    axum::http::StatusCode::OK,
+                    "{path} request {n} from one IP was refused under a 1 rpm limit"
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "governor")]
+    #[tokio::test]
+    async fn exempt_paths_match_exactly_and_replace_the_default() {
+        use tower::ServiceExt;
+        let router = anonymous_router(RateLimitConfig {
+            per_user_rpm: 1,
+            exempt_paths: vec!["/health".to_string()],
+            ..RateLimitConfig::default()
+        });
+        // `/readyz` is not `/ready`, and `/ready` is no longer listed.
+        let first = router.clone().oneshot(from_ip("/readyz", 8)).await.unwrap();
+        assert_eq!(first.status(), axum::http::StatusCode::OK);
+        let second = router.clone().oneshot(from_ip("/ready", 8)).await.unwrap();
+        assert_eq!(second.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
+        let health = router.clone().oneshot(from_ip("/health", 8)).await.unwrap();
+        assert_eq!(health.status(), axum::http::StatusCode::OK);
+    }
+
+    #[cfg(feature = "governor")]
+    #[tokio::test]
+    async fn a_refusal_is_429_with_the_limiters_wait_in_retry_after() {
+        use tower::ServiceExt;
+        // One request a minute, burst 1: the second waits about 60 seconds.
+        let router = anonymous_router(RateLimitConfig {
+            anonymous_rpm: Some(1),
+            anonymous_burst: Some(1),
+            ..RateLimitConfig::default()
+        });
+        let first = router
+            .clone()
+            .oneshot(from_ip("/api/v1/thing", 9))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), axum::http::StatusCode::OK);
+        let refused = router
+            .clone()
+            .oneshot(from_ip("/api/v1/thing", 9))
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
+        let retry_after: u64 = refused
+            .headers()
+            .get(axum::http::header::RETRY_AFTER)
+            .expect("every 429 carries Retry-After")
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(
+            (59..=60).contains(&retry_after),
+            "Retry-After is the limiter's own wait, rounded up: {retry_after}"
+        );
+    }
+
+    /// One anonymous request per address, and none back for a minute.
+    #[cfg(feature = "governor")]
+    fn one_request_each() -> RateLimitConfig {
+        RateLimitConfig {
+            anonymous_rpm: Some(1),
+            anonymous_burst: Some(1),
+            ..RateLimitConfig::default()
+        }
+    }
+
+    #[cfg(feature = "governor")]
+    #[tokio::test]
+    async fn a_probe_with_a_query_string_is_still_the_probe() {
+        use tower::ServiceExt;
+        let router = anonymous_router(one_request_each());
+        for n in 0..20 {
+            let response = router
+                .clone()
+                .oneshot(from_ip("/ready?x=1", 20))
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::OK,
+                "request {n}: the query string is not part of the path matched"
+            );
+        }
+    }
+
+    #[cfg(feature = "governor")]
+    #[tokio::test]
+    async fn a_trailing_slash_is_another_path() {
+        use tower::ServiceExt;
+        let router = anonymous_router(one_request_each());
+        let first = router
+            .clone()
+            .oneshot(from_ip("/health/", 21))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), axum::http::StatusCode::OK);
+        let second = router
+            .clone()
+            .oneshot(from_ip("/health/", 21))
+            .await
+            .unwrap();
+        assert_eq!(
+            second.status(),
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            "exact match: /health/ is not /health, so it is counted"
+        );
+    }
+
+    #[cfg(feature = "governor")]
+    #[tokio::test]
+    async fn a_head_probe_is_exempt() {
+        use tower::ServiceExt;
+        let router = anonymous_router(one_request_each());
+        for n in 0..20 {
+            let mut request = from_ip("/ready", 22);
+            *request.method_mut() = axum::http::Method::HEAD;
+            let response = router.clone().oneshot(request).await.unwrap();
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::OK,
+                "HEAD request {n}: the exemption is by path, whatever the method"
+            );
+        }
+    }
+
+    #[cfg(feature = "governor")]
+    #[tokio::test]
+    async fn an_exempt_request_leaves_the_bucket_untouched() {
+        use tower::ServiceExt;
+        let router = anonymous_router(one_request_each());
+        for path in ["/ready", "/health", "/ready?x=1"] {
+            for _ in 0..10 {
+                let response = router.clone().oneshot(from_ip(path, 23)).await.unwrap();
+                assert_eq!(response.status(), axum::http::StatusCode::OK, "{path}");
+            }
+        }
+        let first = router
+            .clone()
+            .oneshot(from_ip("/api/v1/thing", 23))
+            .await
+            .unwrap();
+        assert_eq!(
+            first.status(),
+            axum::http::StatusCode::OK,
+            "thirty probes later, the address's one request is still there"
+        );
+        let second = router
+            .clone()
+            .oneshot(from_ip("/api/v1/thing", 23))
+            .await
+            .unwrap();
+        assert_eq!(
+            second.status(),
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            "and it was the only one"
+        );
+    }
+
+    #[cfg(feature = "governor")]
+    #[tokio::test]
+    async fn a_sub_second_wait_is_advertised_as_one_second() {
+        use tower::ServiceExt;
+        // 600 a minute is one token every 100 ms: the refused request's
+        // actual wait is under a second, and Retry-After rounds it up.
+        let router = anonymous_router(RateLimitConfig {
+            anonymous_rpm: Some(600),
+            anonymous_burst: Some(1),
+            ..RateLimitConfig::default()
+        });
+        let first = router
+            .clone()
+            .oneshot(from_ip("/api/v1/thing", 24))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), axum::http::StatusCode::OK);
+        let refused = router
+            .clone()
+            .oneshot(from_ip("/api/v1/thing", 24))
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            refused.headers()[axum::http::header::RETRY_AFTER],
+            "1",
+            "a sub-second wait is 1, never 0"
+        );
+    }
+
+    /// The regression for the panic: a limit above 60 000 a minute used to
+    /// make a whole-millisecond period of zero, and creating the bucket on the
+    /// first request panicked.
+    #[cfg(feature = "governor")]
+    #[tokio::test]
+    async fn a_limit_above_sixty_thousand_a_minute_serves_requests() {
+        use tower::ServiceExt;
+        let router = anonymous_router(RateLimitConfig {
+            per_user_rpm: 120_000,
+            ..RateLimitConfig::default()
+        });
+        for n in 0..5 {
+            let response = router
+                .clone()
+                .oneshot(from_ip("/api/v1/thing", 25))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), axum::http::StatusCode::OK, "request {n}");
+        }
+    }
+
+    #[cfg(feature = "governor")]
+    #[test]
+    fn the_anonymous_knob_sizes_the_per_ip_bucket_alone() {
+        use std::net::{IpAddr, Ipv4Addr};
+        let rl = GovernorRateLimit::new(RateLimitConfig {
+            per_user_rpm: 1,
+            anonymous_rpm: Some(600),
+            anonymous_burst: Some(3),
+            ..RateLimitConfig::default()
+        });
+        let ip = Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 3)));
+        for n in 0..3 {
+            assert!(
+                rl.check_rate_limit("GET", "/x", &RateKey::Anonymous(ip))
+                    .is_ok(),
+                "burst request {n} is inside anonymous_burst = 3"
+            );
+        }
+        assert!(matches!(
+            rl.check_rate_limit("GET", "/x", &RateKey::Anonymous(ip)),
+            Err(Error::RateLimitExceeded { .. })
+        ));
+    }
+
+    #[cfg(feature = "governor")]
+    #[test]
+    fn anonymous_quota_defaults_to_the_user_rate_and_a_tenth() {
+        let config = RateLimitConfig {
+            per_user_rpm: 200,
+            ..RateLimitConfig::default()
+        };
+        assert_eq!(config.anonymous_quota(), (200, 20));
+        let tiny = RateLimitConfig {
+            anonymous_rpm: Some(5),
+            ..RateLimitConfig::default()
+        };
+        assert_eq!(tiny.anonymous_quota(), (5, 1), "the burst is at least 1");
+        let zero = RateLimitConfig {
+            anonymous_rpm: Some(0),
+            anonymous_burst: Some(0),
+            ..RateLimitConfig::default()
+        };
+        assert_eq!(zero.anonymous_quota(), (1, 1));
+    }
+
+    #[cfg(feature = "governor")]
+    #[test]
+    fn limits_above_sixty_thousand_a_minute_build_a_quota() {
+        // A whole-millisecond period is 0 above 60 000 rpm and was refused.
+        assert_eq!(
+            GovernorRateLimit::replenish_interval(120_000),
+            Duration::from_micros(500)
+        );
+        assert!(GovernorRateLimit::replenish_interval(u32::MAX) > Duration::ZERO);
+        assert_eq!(
+            GovernorRateLimit::replenish_interval(0),
+            Duration::from_secs(60),
+            "a zero rate is one a minute, not a division by zero"
+        );
+        let limiter = GovernorRateLimit::create_limiter(120_000, 2);
+        assert!(limiter.check().is_ok());
+    }
+
+    // ---------------------------------------------------------------------
+    // Classifiers
+    // ---------------------------------------------------------------------
+
+    #[cfg(feature = "governor")]
+    #[test]
+    fn the_default_classifier_keeps_the_claims_buckets_and_quotas() {
+        use crate::middleware::rate_key::claims_rate_key;
+        use crate::middleware::Claims;
+        use std::net::{IpAddr, Ipv4Addr};
+        let rl = GovernorRateLimit::new(RateLimitConfig {
+            per_user_rpm: 200,
+            per_client_rpm: 1000,
+            ..RateLimitConfig::default()
+        });
+        let claims = |sub: &str| Claims {
+            sub: sub.to_string(),
+            email: None,
+            username: None,
+            roles: Vec::new(),
+            perms: Vec::new(),
+            exp: 0,
+            iat: None,
+            jti: None,
+            iss: None,
+            aud: None,
+            custom: Default::default(),
+        };
+        let ip = Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 4)));
+        let global = |key: &str, rpm, burst| {
+            Some(Bucket {
+                scope: BucketScope::Global,
+                key: key.to_string(),
+                rpm,
+                burst,
+            })
+        };
+        // The bucket names and quotas the limiter used before classifiers.
+        let cases = [
+            ("user:alice", global("governor:user:user:alice", 200, 20)),
+            (
+                "client:svc",
+                global("governor:client:client:svc", 1000, 100),
+            ),
+            ("robot", global("governor:unknown:robot", 200, 20)),
+        ];
+        for (sub, expected) in cases {
+            let key = claims_rate_key(Some(&claims(sub)), ip);
+            assert_eq!(rl.bucket("GET", "/x", &key), expected, "subject {sub}");
+        }
+        assert_eq!(
+            rl.bucket("GET", "/x", &claims_rate_key(None, ip)),
+            global("governor:ip:10.0.0.4", 200, 20)
+        );
+        assert_eq!(rl.bucket("GET", "/x", &RateKey::Exempt), None);
+    }
+
+    /// A router whose limiter counts by `classifier`, with anonymous callers
+    /// and keyed callers both held to one request a minute.
+    #[cfg(feature = "governor")]
+    fn classified_router(classifier: impl RateClassifier) -> axum::Router {
+        use axum::routing::get;
+        let rate_limit = GovernorRateLimit::new(RateLimitConfig {
+            per_user_rpm: 1,
+            per_client_rpm: 1,
+            anonymous_rpm: Some(1),
+            anonymous_burst: Some(1),
+            ..RateLimitConfig::default()
+        })
+        .with_classifier(classifier);
+        axum::Router::new()
+            .route("/ready", get(|| async { "ok" }))
+            .route("/api/v1/thing", get(|| async { "ok" }))
+            .layer(axum::middleware::from_fn_with_state(
+                rate_limit,
+                GovernorRateLimit::middleware,
+            ))
+    }
+
+    /// A request from `198.51.100.<last_octet>` carrying `x-caller: <caller>`.
+    #[cfg(feature = "governor")]
+    fn calling(path: &str, last_octet: u8, caller: &str) -> Request<Body> {
+        let mut request = from_ip(path, last_octet);
+        request.headers_mut().insert(
+            "x-caller",
+            axum::http::HeaderValue::from_str(caller).unwrap(),
+        );
+        request
+    }
+
+    /// Exempts `operator`, keys `agent-*` per agent, and counts everyone else
+    /// by address.
+    #[cfg(feature = "governor")]
+    fn by_caller(request: &RateRequest<'_>) -> RateKey {
+        match request
+            .headers()
+            .get("x-caller")
+            .and_then(|value| value.to_str().ok())
+        {
+            Some("operator") => RateKey::Exempt,
+            Some(agent) if agent.starts_with("agent-") => RateKey::client(agent.to_string()),
+            _ => RateKey::Anonymous(request.client_ip()),
+        }
+    }
+
+    #[cfg(feature = "governor")]
+    #[tokio::test]
+    async fn a_classifier_can_exempt_a_caller() {
+        use tower::ServiceExt;
+        let router = classified_router(by_caller);
+        for n in 0..5 {
+            let response = router
+                .clone()
+                .oneshot(calling("/api/v1/thing", 20, "operator"))
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::OK,
+                "exempt request {n} was counted"
+            );
+            assert!(
+                response.headers().get("x-ratelimit-limit").is_none(),
+                "an exempt request reports no limit"
+            );
+        }
+    }
+
+    #[cfg(feature = "governor")]
+    #[tokio::test]
+    async fn a_classifier_key_follows_the_caller_across_addresses() {
+        use tower::ServiceExt;
+        let router = classified_router(by_caller);
+        let first = router
+            .clone()
+            .oneshot(calling("/api/v1/thing", 21, "agent-a"))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), axum::http::StatusCode::OK);
+        // Same agent, another address: the same bucket, now empty.
+        let moved = router
+            .clone()
+            .oneshot(calling("/api/v1/thing", 22, "agent-a"))
+            .await
+            .unwrap();
+        assert_eq!(moved.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
+        assert!(moved
+            .headers()
+            .contains_key(axum::http::header::RETRY_AFTER));
+        // Another agent behind the first agent's address: its own bucket.
+        let neighbor = router
+            .clone()
+            .oneshot(calling("/api/v1/thing", 21, "agent-b"))
+            .await
+            .unwrap();
+        assert_eq!(neighbor.status(), axum::http::StatusCode::OK);
+    }
+
+    #[cfg(feature = "governor")]
+    #[tokio::test]
+    async fn a_classifier_anonymous_answer_is_counted_by_address() {
+        use tower::ServiceExt;
+        let router = classified_router(by_caller);
+        // Two made-up callers from one address share that address's bucket.
+        let first = router
+            .clone()
+            .oneshot(calling("/api/v1/thing", 23, "nobody-1"))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), axum::http::StatusCode::OK);
+        let second = router
+            .clone()
+            .oneshot(calling("/api/v1/thing", 23, "nobody-2"))
+            .await
+            .unwrap();
+        assert_eq!(second.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
+        let elsewhere = router
+            .clone()
+            .oneshot(calling("/api/v1/thing", 24, "nobody-3"))
+            .await
+            .unwrap();
+        assert_eq!(elsewhere.status(), axum::http::StatusCode::OK);
+    }
+
+    #[cfg(feature = "governor")]
+    #[tokio::test]
+    async fn exempt_paths_apply_before_the_classifier() {
+        use tower::ServiceExt;
+        // A classifier that puts every request in one bucket cannot count probes.
+        let router = classified_router(|_: &RateRequest<'_>| RateKey::user("everyone"));
+        for n in 0..50 {
+            let response = router
+                .clone()
+                .oneshot(calling("/ready", 25, "agent-a"))
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::OK,
+                "probe {n} was counted"
+            );
+        }
     }
 }
