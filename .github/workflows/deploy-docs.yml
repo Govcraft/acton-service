@@ -5,6 +5,7 @@ on:
     branches: ['main']
     paths:
       - 'acton-docs/**'
+      - 'Cargo.toml'
       - '.github/workflows/deploy-docs.yml'
   workflow_dispatch:
 

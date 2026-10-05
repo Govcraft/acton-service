@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.45.0] - 2026-10-05
+
+This release adds listener binding, supervised serving and shutdown, watched-file
+reloads, Redis-free OAuth state, configured OAuth provider registries, and an
+optional quota before authentication. It also repairs configuration diagnostics,
+tracing ownership, metrics initialization, and governor reporting.
+
+### Breaking
+
+- Framework configuration tables reject unknown keys. Remove obsolete keys,
+  correct misspellings, and keep application root keys before the first TOML
+  table header. A root key placed below `[middleware]` belongs to that table
+  and now fails loading instead of silently retaining its default (#167).
+- Ambiguous or unresolved compound legacy environment names fail loading.
+  Prefer explicit table separators, such as `ACTON_SERVICE__LOG_LEVEL`, while
+  preserving single underscores within field names (#161).
+- Governor `x-ratelimit-remaining` reports actual available burst capacity;
+  the unsupported `x-ratelimit-reset` header is removed. Use `Retry-After`
+  when a request is rejected (#163).
+- Cedar authorization rejections no longer consume the post-authentication
+  quota. Use the independent pre-authentication quota when rejected requests
+  should consume capacity (#159).
+- GitHub profile-email fallbacks are unverified. Verify ownership before
+  using these emails to link accounts (#164).
+
 ### Added
 
 - OAuth login flows no longer require Redis: `MemoryOAuthStateManager` stores bounded, expiring, single-use state in one process. `OAuthProviderRegistry::from_config` builds Google, GitHub, and custom OIDC providers with startup endpoint validation; the audited constructor wraps all providers consistently (#164).

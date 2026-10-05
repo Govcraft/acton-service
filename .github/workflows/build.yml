@@ -86,7 +86,7 @@ jobs:
 
           # The documentation site is built whenever its sources change, so that broken
           # Markdoc fails the pull request instead of reaching the deploy job on main.
-          if echo "$files" | grep -qE '^acton-docs/'; then
+          if echo "$files" | grep -qE '^(acton-docs/|Cargo\.toml$)'; then
             docs=true
           else
             docs=false
