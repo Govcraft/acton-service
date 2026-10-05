@@ -378,6 +378,48 @@ pub struct RateLimitConfig {
     /// Defaults to `false` (do not trust) to be safe by default.
     #[serde(default = "default_false")]
     pub trust_forwarded_headers: bool,
+
+    /// Request paths the limiters never count, matched exactly against the
+    /// full request path (no normalization, no wildcards). The query string is
+    /// not part of the path, a trailing slash is, and the method is ignored.
+    ///
+    /// Defaults to `["/health", "/ready"]`: an orchestrator polls its probes
+    /// from one address, so counting them against that address's anonymous
+    /// bucket turns a healthy replica unready under a limiter meant for
+    /// clients. Setting this list replaces the default, so a deployment that
+    /// wants its probes counted can set it to `[]`, and one that keeps the
+    /// probes exempt while adding paths must list them too.
+    ///
+    /// ```toml
+    /// [rate_limit]
+    /// exempt_paths = ["/health", "/ready", "/metrics"]
+    /// ```
+    #[serde(default = "default_rate_limit_exempt_paths")]
+    pub exempt_paths: Vec<String>,
+
+    /// Requests per minute for one client IP when a request carries no
+    /// claims and matches no per-route limit.
+    ///
+    /// Unset, the anonymous per-IP bucket uses [`per_user_rpm`]. Set it when
+    /// the service's callers are not token-authenticated users, so the
+    /// anonymous budget can be sized for them without changing the budget of
+    /// users who are.
+    ///
+    /// The governor limiter alone counts this bucket. The Redis limiter lets a
+    /// request with no claims and no matching route limit through uncounted.
+    ///
+    /// [`per_user_rpm`]: RateLimitConfig::per_user_rpm
+    #[serde(default)]
+    pub anonymous_rpm: Option<u32>,
+
+    /// Burst for the anonymous per-IP bucket: how many requests one IP may
+    /// send back to back before the per-minute rate applies.
+    ///
+    /// Unset, it is a tenth of the anonymous rate, and at least 1. The
+    /// governor limiter alone reads it: the Redis limiter counts in fixed
+    /// windows, which have no burst.
+    #[serde(default)]
+    pub anonymous_burst: Option<u32>,
 }
 
 impl Default for RateLimitConfig {
@@ -389,7 +431,28 @@ impl Default for RateLimitConfig {
             routes: std::collections::HashMap::new(),
             auto_apply: true,
             trust_forwarded_headers: false,
+            exempt_paths: default_rate_limit_exempt_paths(),
+            anonymous_rpm: None,
+            anonymous_burst: None,
         }
+    }
+}
+
+impl RateLimitConfig {
+    /// Whether `path` is on [`exempt_paths`](RateLimitConfig::exempt_paths).
+    /// Exact match on the full request path.
+    pub fn is_exempt_path(&self, path: &str) -> bool {
+        self.exempt_paths.iter().any(|exempt| exempt == path)
+    }
+
+    /// The anonymous per-IP bucket as `(requests_per_minute, burst)`:
+    /// [`anonymous_rpm`](RateLimitConfig::anonymous_rpm) or else
+    /// `per_user_rpm`, and [`anonymous_burst`](RateLimitConfig::anonymous_burst)
+    /// or else a tenth of that rate. Both are at least 1.
+    pub fn anonymous_quota(&self) -> (u32, u32) {
+        let rpm = self.anonymous_rpm.unwrap_or(self.per_user_rpm).max(1);
+        let burst = self.anonymous_burst.unwrap_or(rpm / 10).max(1);
+        (rpm, burst)
     }
 }
 
@@ -1686,6 +1749,10 @@ fn default_window_secs() -> u64 {
     60
 }
 
+fn default_rate_limit_exempt_paths() -> Vec<String> {
+    vec!["/health".to_string(), "/ready".to_string()]
+}
+
 fn default_route_burst_size() -> u32 {
     10 // 10% burst allowance by default
 }
@@ -2552,6 +2619,7 @@ port = 9091
                 routes: std::collections::HashMap::new(),
                 auto_apply: true,
                 trust_forwarded_headers: false,
+                ..RateLimitConfig::default()
             },
             middleware: MiddlewareConfig::default(),
             database: None,
@@ -2623,6 +2691,7 @@ port = 9091
                 routes: std::collections::HashMap::new(),
                 auto_apply: true,
                 trust_forwarded_headers: false,
+                ..RateLimitConfig::default()
             },
             middleware: MiddlewareConfig::default(),
             database: None,

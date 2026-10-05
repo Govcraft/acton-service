@@ -164,6 +164,10 @@ where
     /// Caller-supplied graceful-shutdown trigger. See
     /// [`ServiceBuilder::with_shutdown`].
     shutdown: Option<crate::supervise::ShutdownFuture>,
+    /// Caller-supplied rate classifier for the auto-applied governor layer.
+    /// See [`ServiceBuilder::with_rate_classifier`].
+    #[cfg(feature = "governor")]
+    rate_classifier: Option<std::sync::Arc<dyn crate::middleware::RateClassifier>>,
 }
 
 impl<T> ServiceBuilder<T>
@@ -216,6 +220,8 @@ where
             #[cfg(feature = "prometheus-metrics")]
             metrics_listener: None,
             shutdown: None,
+            #[cfg(feature = "governor")]
+            rate_classifier: None,
         }
     }
 
@@ -664,6 +670,49 @@ where
     #[cfg(feature = "cedar-authz")]
     pub fn with_cedar_path_normalizer(mut self, normalizer: fn(&str) -> String) -> Self {
         self.cedar_path_normalizer = Some(normalizer);
+        self
+    }
+
+    /// Count requests in the auto-applied governor rate limiter by
+    /// `classifier` instead of the default
+    /// [`ClaimsClassifier`](crate::middleware::ClaimsClassifier).
+    ///
+    /// A classifier decides, per request, whether the limiter counts it and
+    /// in which bucket: [`RateKey::Exempt`](crate::middleware::RateKey::Exempt),
+    /// a keyed bucket, or the anonymous bucket of the client's address.
+    /// [`exempt_paths`](crate::config::RateLimitConfig::exempt_paths) still
+    /// applies first.
+    ///
+    /// The auto-applied limiter runs after token authentication and Cedar
+    /// authorization, just before the handler. The
+    /// [`Claims`](crate::middleware::Claims) a classifier reads were verified
+    /// by token authentication, and a request that authentication or Cedar
+    /// rejected is never counted. Any other credential the classifier keys by
+    /// (a header, a client certificate's identity) it must verify itself.
+    ///
+    /// Has no effect when `[rate_limit] auto_apply` is `false`; a hand-wired
+    /// limiter takes its classifier from
+    /// [`GovernorRateLimit::with_classifier`](crate::middleware::GovernorRateLimit::with_classifier).
+    ///
+    /// ```rust,ignore
+    /// use acton_service::prelude::*;
+    ///
+    /// let service = ServiceBuilder::new()
+    ///     .with_rate_classifier(|request: &RateRequest<'_>| {
+    ///         if request.headers().contains_key("x-internal") {
+    ///             RateKey::Exempt
+    ///         } else {
+    ///             RateKey::Anonymous(request.client_ip())
+    ///         }
+    ///     })
+    ///     .build();
+    /// ```
+    #[cfg(feature = "governor")]
+    pub fn with_rate_classifier(
+        mut self,
+        classifier: impl crate::middleware::RateClassifier,
+    ) -> Self {
+        self.rate_classifier = Some(std::sync::Arc::new(classifier));
         self
     }
 
@@ -1761,8 +1810,11 @@ where
         // "POST /api/v1/uploads" match as documented.
         #[cfg(feature = "governor")]
         if config.rate_limit.auto_apply {
-            let gov =
+            let mut gov =
                 crate::middleware::governor::GovernorRateLimit::new(config.rate_limit.clone());
+            if let Some(classifier) = self.rate_classifier.take() {
+                gov = gov.with_shared_classifier(classifier);
+            }
             tracing::debug!("Auto-applying governor rate-limit middleware");
             app = app.layer(axum::middleware::from_fn_with_state(
                 gov,
