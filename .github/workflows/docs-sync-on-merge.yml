@@ -222,3 +222,32 @@ jobs:
             If that command fails because auto-merge is not enabled on the
             repository, do NOT merge the PR by hand and do NOT force it. Leave the
             PR open and report the failure -- a human will decide.
+
+      # The action hides the terminal error in its normal sanitized output.
+      # Report only that error, never the prompt or tool execution transcript.
+      - name: Explain Claude execution failure
+        if: failure() && steps.claude.outcome == 'failure'
+        env:
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          import os
+          from pathlib import Path
+          import re
+
+          path = Path(os.environ.get("EXECUTION_FILE") or
+                      Path(os.environ["RUNNER_TEMP"]) / "claude-execution-output.json")
+          if not path.is_file():
+              print("No Claude execution result was saved; inspect the action's earlier error.")
+              raise SystemExit(0)
+          for message in json.loads(path.read_text()):
+              if message.get("type") != "result" or not message.get("is_error"):
+                  continue
+              details = message.get("result") or message.get("errors") or "No error details returned."
+              text = details if isinstance(details, str) else json.dumps(details)
+              text = re.sub(r"(?:sk-ant-|github_pat_|gh[pousr]_)[A-Za-z0-9_-]+", "[REDACTED]", text)
+              text = re.sub(r"(?i)bearer\s+\S+", "Bearer [REDACTED]", text)
+              text = text[:2000].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+              print(f"::error::Claude execution failed: {text}")
+          PYTHON
