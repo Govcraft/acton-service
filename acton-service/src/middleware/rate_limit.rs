@@ -22,7 +22,7 @@ use axum::http::{header::HeaderValue, HeaderName};
 use crate::{config::RateLimitConfig, error::Error};
 
 #[cfg(feature = "cache")]
-use crate::middleware::Claims;
+use super::rate_key::{RateClass, RateClassifier, RateKey, RateRequest, SharedClassifier};
 
 use super::route_matcher::CompiledRoutePatterns;
 
@@ -46,6 +46,8 @@ pub struct RateLimit {
     route_patterns: Arc<CompiledRoutePatterns>,
     #[cfg(feature = "cache")]
     redis_pool: Option<RedisPool>,
+    #[cfg(feature = "cache")]
+    classifier: SharedClassifier,
 }
 
 /// Rate limit check result containing limit info for response headers
@@ -68,6 +70,7 @@ impl RateLimit {
             config,
             route_patterns: Arc::new(route_patterns),
             redis_pool: Some(redis_pool),
+            classifier: SharedClassifier::default(),
         }
     }
 
@@ -81,12 +84,23 @@ impl RateLimit {
         }
     }
 
+    /// Counts requests by `classifier` instead of the default
+    /// [`ClaimsClassifier`](super::rate_key::ClaimsClassifier).
+    #[cfg(feature = "cache")]
+    pub fn with_classifier(mut self, classifier: impl RateClassifier) -> Self {
+        self.classifier = SharedClassifier::new(classifier);
+        self
+    }
+
     /// Middleware function to enforce rate limits
     ///
-    /// Checks rate limits in the following order:
+    /// Paths on [`RateLimitConfig::exempt_paths`] are never counted. Every
+    /// other request is classified (see [`with_classifier`](Self::with_classifier)),
+    /// and then checked in this order:
     /// 1. Per-route limits (if configured for the request path)
-    /// 2. Global per-user limits (if JWT claims present)
-    /// 3. Global per-client limits (if client token)
+    /// 2. The keyed bucket's per-user or per-client limit
+    ///
+    /// An anonymous request that matches no per-route limit is not counted.
     pub async fn middleware(
         #[cfg_attr(not(feature = "cache"), allow(unused_variables))] State(rate_limit): State<Self>,
         request: Request<Body>,
@@ -96,7 +110,30 @@ impl RateLimit {
         {
             let method = request.method().as_str().to_string();
             let path = request.uri().path().to_string();
-            let claims = request.extensions().get::<Claims>().cloned();
+
+            // Probes and other configured paths are never counted, whatever
+            // the classifier would say.
+            if rate_limit.config.is_exempt_path(&path) {
+                return Ok(next.run(request).await);
+            }
+
+            let connect_info =
+                super::request_context::connect_info_remote_addr(request.extensions());
+            let client_ip = super::request_context::extract_client_ip(
+                request.headers(),
+                connect_info.as_ref(),
+                rate_limit.config.trust_forwarded_headers,
+            );
+            let rate_key = rate_limit.classifier.classify(&RateRequest::new(
+                request.method(),
+                &path,
+                request.headers(),
+                request.extensions(),
+                client_ip,
+            ));
+            if rate_key == RateKey::Exempt {
+                return Ok(next.run(request).await);
+            }
 
             #[cfg(feature = "audit")]
             let audit_logger = request
@@ -106,19 +143,22 @@ impl RateLimit {
             #[cfg(feature = "audit")]
             let audit_source = {
                 let mut source = super::request_context::audit_source_for_request(&request);
-                source.subject = claims.as_ref().map(|c| c.sub.clone());
+                source.subject = request
+                    .extensions()
+                    .get::<crate::middleware::Claims>()
+                    .map(|c| c.sub.clone());
                 source
             };
 
             // Check rate limit and get result for headers
             let result = match rate_limit
-                .check_rate_limit_with_route(&method, &path, claims.as_ref())
+                .check_rate_limit_with_route(&method, &path, &rate_key)
                 .await
             {
                 Ok(r) => r,
                 Err(e) => {
                     #[cfg(feature = "audit")]
-                    if matches!(e, Error::RateLimitExceeded) {
+                    if matches!(e, Error::RateLimitExceeded { .. }) {
                         if let Some(ref logger) = audit_logger {
                             if logger.config().audit_auth_events {
                                 logger
@@ -166,7 +206,7 @@ impl RateLimit {
         &self,
         method: &str,
         path: &str,
-        claims: Option<&Claims>,
+        rate_key: &RateKey,
     ) -> Result<RateLimitResult, Error> {
         let normalized_path = normalize_path(path);
 
@@ -177,17 +217,14 @@ impl RateLimit {
                 method, normalized_path, route_config.requests_per_minute
             );
 
-            let key = if route_config.per_user {
-                // Per-user route limit
-                if let Some(claims) = claims {
-                    format!("route:{}:user:{}", normalized_path, claims.sub)
-                } else {
-                    // No claims, use global route limit
-                    format!("route:{}:global", normalized_path)
+            let key = match rate_key {
+                // Per-caller route limit
+                RateKey::Key { id, .. } if route_config.per_user => {
+                    format!("route:{}:{}", normalized_path, id)
                 }
-            } else {
-                // Global route limit (shared across all users)
-                format!("route:{}:global", normalized_path)
+                // Global route limit (shared across all callers), which is
+                // also where an anonymous caller of a per-caller route counts
+                _ => format!("route:{}:global", normalized_path),
             };
 
             return self
@@ -199,34 +236,19 @@ impl RateLimit {
                 .await;
         }
 
-        // Fall back to global user/client limits
-        if let Some(claims) = claims {
-            let (key, limit) = if claims.is_user() {
-                (
-                    format!("ratelimit:user:{}", claims.sub),
-                    self.config.per_user_rpm,
-                )
-            } else if claims.is_client() {
-                (
-                    format!("ratelimit:client:{}", claims.sub),
-                    self.config.per_client_rpm,
-                )
-            } else {
-                // Default to user limit
-                (
-                    format!("ratelimit:unknown:{}", claims.sub),
-                    self.config.per_user_rpm,
-                )
+        // Fall back to the keyed caller's global limit
+        if let RateKey::Key { id, class } = rate_key {
+            let limit = match class {
+                RateClass::User => self.config.per_user_rpm,
+                RateClass::Client => self.config.per_client_rpm,
             };
-
             return self
-                .check_and_increment(&key, limit, self.config.window_secs)
+                .check_and_increment(&format!("ratelimit:{}", id), limit, self.config.window_secs)
                 .await;
         }
 
-        // No claims and no route-specific limit - allow the request
-        // In production, you might want to add IP-based limiting here
-        warn!("Rate limit middleware called without JWT claims and no route-specific limit");
+        // Anonymous and no route-specific limit - allow the request
+        warn!("Rate limit middleware called without a keyed caller and no route-specific limit");
         Ok(RateLimitResult {
             limit: self.config.per_user_rpm,
             count: 0,
@@ -281,16 +303,14 @@ impl RateLimit {
 
         let reset_secs = if ttl > 0 { ttl as u64 } else { window_secs };
 
-        // Check if limit exceeded
-        if count > limit {
+        let verdict = window_verdict(count, limit, reset_secs);
+        if verdict.is_err() {
             warn!(
                 "Rate limit exceeded for {}: {} requests (limit: {})",
                 key, count, limit
             );
-            return Err(Error::RateLimitExceeded);
         }
-
-        Ok(RateLimitResult {
+        verdict.map(|()| RateLimitResult {
             limit,
             count,
             reset_secs,
@@ -324,10 +344,57 @@ impl RateLimit {
     }
 }
 
+/// Whether the `count`th request in a fixed window that resets in
+/// `reset_secs` is inside `limit`. A refusal waits for the window to reset,
+/// and never advertises a zero wait.
+#[cfg(any(feature = "cache", test))]
+fn window_verdict(count: u32, limit: u32, reset_secs: u64) -> Result<(), Error> {
+    if count > limit {
+        Err(Error::RateLimitExceeded {
+            retry_after_secs: reset_secs.max(1),
+        })
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::{window_verdict, Error};
     #[cfg(not(feature = "cache"))]
     use super::{RateLimit, RateLimitConfig};
+    use axum::response::IntoResponse;
+
+    #[test]
+    fn a_redis_window_refusal_is_429_with_the_windows_reset_in_retry_after() {
+        assert!(
+            window_verdict(10, 10, 42).is_ok(),
+            "the limit itself is inside"
+        );
+        let refused = window_verdict(11, 10, 42).expect_err("one past the limit");
+        assert!(matches!(
+            refused,
+            Error::RateLimitExceeded {
+                retry_after_secs: 42
+            }
+        ));
+        let response = refused.into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response.headers()[axum::http::header::RETRY_AFTER],
+            "42",
+            "the wait is the window's reset"
+        );
+        assert!(
+            matches!(
+                window_verdict(11, 10, 0),
+                Err(Error::RateLimitExceeded {
+                    retry_after_secs: 1
+                })
+            ),
+            "an expiring window still advertises a wait of at least one second"
+        );
+    }
 
     #[test]
     fn test_rate_limit_creation() {
@@ -340,6 +407,7 @@ mod tests {
                 routes: std::collections::HashMap::new(),
                 auto_apply: true,
                 trust_forwarded_headers: false,
+                ..RateLimitConfig::default()
             };
             let _rate_limit = RateLimit::new(config);
         }
@@ -371,11 +439,134 @@ mod tests {
                 routes,
                 auto_apply: true,
                 trust_forwarded_headers: false,
+                ..RateLimitConfig::default()
             };
             let rate_limit = RateLimit::new(config);
 
             // Verify route patterns were compiled
             assert!(!rate_limit.route_patterns.is_empty());
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Exemption is answered before Redis is asked anything
+    // ---------------------------------------------------------------------
+
+    #[cfg(feature = "cache")]
+    mod redis_exemption {
+        use std::collections::HashMap;
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+        use axum::body::Body;
+        use axum::http::{Method, Request, StatusCode};
+        use axum::routing::get;
+        use axum::Router;
+        use tower::ServiceExt;
+
+        use super::super::RateLimit;
+        use crate::config::{RateLimitConfig, RouteRateLimitConfig};
+        use crate::middleware::rate_key::{RateKey, RateRequest};
+
+        const IP: IpAddr = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 7));
+
+        /// A limiter whose Redis refuses every connection, so a request the
+        /// limiter counts fails with a server error and an uncounted one is
+        /// served. `/api/v1/thing` carries a route limit, which counts every
+        /// caller the classifier does not exempt.
+        fn limiter(classify_as: RateKey) -> RateLimit {
+            let pool = deadpool_redis::Config::from_url("redis://127.0.0.1:1")
+                .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+                .expect("the pool is built without connecting");
+            let config = RateLimitConfig {
+                routes: HashMap::from([(
+                    "/api/v1/thing".to_string(),
+                    RouteRateLimitConfig {
+                        requests_per_minute: 10,
+                        burst_size: 2,
+                        per_user: false,
+                    },
+                )]),
+                ..RateLimitConfig::default()
+            };
+            RateLimit::new(config, pool)
+                .with_classifier(move |_: &RateRequest<'_>| classify_as.clone())
+        }
+
+        fn router(rate_limit: RateLimit) -> Router {
+            Router::new()
+                .route("/health", get(|| async { "ok" }))
+                .route("/health/", get(|| async { "ok" }))
+                .route("/ready", get(|| async { "ok" }))
+                .route("/api/v1/thing", get(|| async { "ok" }))
+                .layer(axum::middleware::from_fn_with_state(
+                    rate_limit,
+                    RateLimit::middleware,
+                ))
+        }
+
+        async fn status(router: &Router, method: Method, uri: &str) -> StatusCode {
+            let mut request = Request::builder()
+                .method(method)
+                .uri(uri)
+                .body(Body::empty())
+                .expect("a valid request");
+            request
+                .extensions_mut()
+                .insert(axum::extract::ConnectInfo(SocketAddr::new(IP, 40000)));
+            router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("the router is infallible")
+                .status()
+        }
+
+        #[tokio::test]
+        async fn exempt_paths_are_served_before_redis_is_asked_anything() {
+            let router = router(limiter(RateKey::user("user:alice")));
+            for uri in ["/health", "/ready", "/ready?x=1"] {
+                assert_eq!(
+                    status(&router, Method::GET, uri).await,
+                    StatusCode::OK,
+                    "{uri}"
+                );
+            }
+            assert_eq!(
+                status(&router, Method::HEAD, "/ready").await,
+                StatusCode::OK,
+                "the exemption is by path, whatever the method"
+            );
+            // Counted requests reach the refused Redis, proving the ones
+            // above never did.
+            assert!(
+                status(&router, Method::GET, "/health/")
+                    .await
+                    .is_server_error(),
+                "exact match: a trailing slash is another path"
+            );
+            assert!(
+                status(&router, Method::GET, "/api/v1/thing")
+                    .await
+                    .is_server_error(),
+                "a keyed caller is counted in Redis"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_classifier_exemption_is_served_before_redis_is_asked_anything() {
+            let exempt = router(limiter(RateKey::Exempt));
+            assert_eq!(
+                status(&exempt, Method::GET, "/api/v1/thing").await,
+                StatusCode::OK,
+                "an exempt caller is not counted, even under a route limit"
+            );
+            let counted = router(limiter(RateKey::Anonymous(Some(IP))));
+            assert!(
+                status(&counted, Method::GET, "/api/v1/thing")
+                    .await
+                    .is_server_error(),
+                "any other caller of the route is counted in Redis"
+            );
         }
     }
 }
