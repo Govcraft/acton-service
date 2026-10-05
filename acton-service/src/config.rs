@@ -3590,7 +3590,7 @@ port = 9091
             "middleware": {
                 "cors_mode": "restrictive",
                 "body_limit_mb": 10,
-                "compression_enabled": true
+                "compression": false
             },
             "api_key": "prod-api-key",
             "timeout_ms": 10000,
@@ -3607,6 +3607,10 @@ port = 9091
         assert_eq!(config.service.name, "my-service");
         assert_eq!(config.service.port, 9000);
         assert_eq!(config.service.log_level, "debug");
+        assert!(
+            !config.middleware.compression,
+            "the configured compression override must replace its true default"
+        );
 
         // Verify custom config (flattened fields)
         assert_eq!(config.custom.api_key, "prod-api-key");

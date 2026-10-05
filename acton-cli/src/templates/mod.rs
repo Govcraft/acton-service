@@ -88,8 +88,13 @@ impl ServiceTemplate {
             features.push("grpc".to_string());
         }
 
-        if self.database.is_some() {
-            features.push("database".to_string());
+        if let Some(database) = &self.database {
+            let feature = if database == "surrealdb" {
+                "surrealdb"
+            } else {
+                "database"
+            };
+            features.push(feature.to_string());
         }
 
         if self.cache.is_some() {
@@ -117,7 +122,7 @@ impl ServiceTemplate {
         }
 
         if self.rate_limit {
-            features.push("rate-limit".to_string());
+            features.push("governor".to_string());
         }
 
         if self.audit {

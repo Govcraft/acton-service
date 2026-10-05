@@ -315,7 +315,7 @@ required-features = ["grpc"]
 [[example]]
 name = "cedar-authz"
 path = "examples/authorization/cedar-authz.rs"
-required-features = ["cedar-authz", "cache"]
+required-features = ["cedar-authz", "cache", "jwt"]
 
 # Observability examples
 [[example]]

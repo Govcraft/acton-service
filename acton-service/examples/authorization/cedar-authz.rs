@@ -5,7 +5,7 @@
 //! ## Quick Start
 //!
 //! ```bash
-//! cargo run --example cedar-authz --features cedar-authz,cache
+//! cargo run --example cedar-authz --features cedar-authz,cache,jwt
 //! ```
 //!
 //! The example automatically creates all necessary files in `~/.config/acton-service/cedar-authz-example/`.
@@ -133,9 +133,11 @@ fn setup_example_files() -> Result<()> {
             r#"[service]
 name = "cedar-authz-example"
 port = 8080
-host = "127.0.0.1"
+bind = "127.0.0.1"
+timeout_secs = 30
 
-[jwt]
+[token]
+format = "jwt"
 public_key_path = "{}/jwt-public.pem"
 algorithm = "RS256"
 
@@ -149,12 +151,11 @@ cache_ttl_secs = 300
 fail_open = false
 
 [rate_limit]
-enabled = false
+auto_apply = false
 
 [middleware]
-timeout_secs = 30
-cors_enabled = true
-cors_allowed_origins = ["http://localhost:3000"]
+# Use application middleware for a specific CORS origin allow-list.
+cors_mode = "restrictive"
 "#,
             config_dir.display(),
             config_dir.display()

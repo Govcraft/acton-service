@@ -268,8 +268,9 @@ When you enable `--http`, you get:
 
 **Configuration**: HTTP server settings:
 ```toml
-[http]
-host = "127.0.0.1"
+[service]
+name = "my-service"
+bind = "127.0.0.1"
 port = 8080
 ```
 
