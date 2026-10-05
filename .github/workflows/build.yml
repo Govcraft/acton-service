@@ -78,7 +78,9 @@ jobs:
           esac
 
           echo "Changed files:"
-          echo "$files" | sed 's/^/  /'
+          while IFS= read -r file; do
+            printf '  %s\n' "$file"
+          done <<< "$files"
 
           # The documentation site is built whenever its sources change, so that broken
           # Markdoc fails the pull request instead of reaching the deploy job on main.
@@ -326,6 +328,15 @@ jobs:
           # The mirror image: gRPC transport with no TLS material.
           - combo: grpc-no-tls
             features: "http,grpc,crypto-aws-lc-rs"
+          # OAuth's memory state and config registry must work without Redis.
+          - combo: oauth-no-cache
+            features: "http,oauth,crypto-aws-lc-rs"
+            test: true
+          # Readerless metrics initialization must remain retryable without a
+          # Prometheus reader forcing an immediate first initialization.
+          - combo: otel-only
+            features: "http,otel-metrics,crypto-aws-lc-rs"
+            test: true
           # Token validation and issuance without cache-backed revocation.
           - combo: tokens
             features: "http,jwt,auth,crypto-aws-lc-rs"

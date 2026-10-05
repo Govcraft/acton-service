@@ -86,3 +86,27 @@ pub trait OAuthProvider: Send + Sync {
     /// * `refresh_token` - Refresh token from the provider
     async fn refresh_token(&self, refresh_token: &str) -> Result<OAuthTokens, Error>;
 }
+
+// Preserve dynamic dispatch when boxed providers are passed into decorators.
+#[async_trait]
+impl<P: OAuthProvider + ?Sized> OAuthProvider for Box<P> {
+    fn name(&self) -> &str {
+        (**self).name()
+    }
+
+    fn authorization_url(&self, state: &str, scopes: &[String]) -> String {
+        (**self).authorization_url(state, scopes)
+    }
+
+    async fn exchange_code(&self, code: &str) -> Result<OAuthTokens, Error> {
+        (**self).exchange_code(code).await
+    }
+
+    async fn get_user_info(&self, access_token: &str) -> Result<OAuthUserInfo, Error> {
+        (**self).get_user_info(access_token).await
+    }
+
+    async fn refresh_token(&self, refresh_token: &str) -> Result<OAuthTokens, Error> {
+        (**self).refresh_token(refresh_token).await
+    }
+}

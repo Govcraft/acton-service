@@ -287,7 +287,7 @@ Or via environment variables:
 
 ```bash
 ACTON_DATABASE_URL=postgres://user:pass@localhost/mydb
-ACTON_DATABASE_MAX_CONNECTIONS=50
+ACTON_DATABASE__MAX_CONNECTIONS=50
 ACTON_REDIS_URL=redis://localhost:6379
 ACTON_NATS_URL=nats://localhost:4222
 ```

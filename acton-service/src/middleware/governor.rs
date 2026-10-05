@@ -25,6 +25,7 @@ use dashmap::DashMap;
 #[cfg(feature = "governor")]
 use governor::{
     clock::DefaultClock,
+    middleware::StateInformationMiddleware,
     state::{InMemoryState, NotKeyed},
     Quota, RateLimiter,
 };
@@ -161,7 +162,46 @@ impl RateLimitExceeded {
 
 /// Type alias for a governor rate limiter
 #[cfg(feature = "governor")]
-type GovernorLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
+type GovernorLimiter =
+    RateLimiter<NotKeyed, InMemoryState, DefaultClock, StateInformationMiddleware>;
+
+/// Independent quota for requests before authentication, keyed only by peer IP.
+///
+/// Use with [`ServiceBuilder::with_pre_auth_rate_limit`](crate::ServiceBuilder::with_pre_auth_rate_limit).
+/// Forwarded headers and claims never influence this limiter. Requests from one
+/// proxy share its peer-IP bucket. Health and readiness probes are exempt by default.
+#[cfg(feature = "governor")]
+#[derive(Debug, Clone)]
+pub struct PreAuthRateLimitConfig {
+    /// Sustained requests per minute for each peer IP.
+    pub requests_per_minute: NonZeroU32,
+    /// Requests each peer IP can send in one burst.
+    pub burst_size: NonZeroU32,
+    /// Exact request paths that bypass this independent quota.
+    pub exempt_paths: Vec<String>,
+}
+
+#[cfg(feature = "governor")]
+impl PreAuthRateLimitConfig {
+    /// Configure a nonzero sustained rate and burst for each peer IP.
+    pub fn new(requests_per_minute: NonZeroU32, burst_size: NonZeroU32) -> Self {
+        Self {
+            requests_per_minute,
+            burst_size,
+            exempt_paths: RateLimitConfig::default().exempt_paths,
+        }
+    }
+
+    pub(crate) fn into_rate_limit(self) -> RateLimitConfig {
+        RateLimitConfig {
+            anonymous_rpm: Some(self.requests_per_minute.get()),
+            anonymous_burst: Some(self.burst_size.get()),
+            exempt_paths: self.exempt_paths,
+            trust_forwarded_headers: false,
+            ..RateLimitConfig::default()
+        }
+    }
+}
 
 /// Governor-based rate limiting middleware state
 ///
@@ -420,14 +460,11 @@ impl GovernorRateLimit {
 
         // Try to acquire a permit
         match limiter.check() {
-            Ok(_) => {
-                // Calculate approximate remaining based on quota
-                // Governor doesn't expose exact counts, so we estimate
-                let remaining = requests_per_minute.saturating_sub(1);
+            Ok(snapshot) => {
+                let remaining = snapshot.remaining_burst_capacity();
                 Ok(GovernorRateLimitResult {
                     limit: requests_per_minute,
                     remaining,
-                    reset_secs: 60, // 1 minute window
                 })
             }
             Err(not_until) => {
@@ -452,7 +489,7 @@ impl GovernorRateLimit {
             .unwrap_or_else(|| Quota::per_second(NonZeroU32::MAX))
             .allow_burst(burst);
 
-        RateLimiter::direct(quota)
+        RateLimiter::direct(quota).with_middleware::<StateInformationMiddleware>()
     }
 
     /// How often one token is added back to a bucket of `requests_per_minute`.
@@ -460,7 +497,7 @@ impl GovernorRateLimit {
     /// Counted in nanoseconds: a whole-millisecond interval is zero above
     /// 60 000 requests per minute, and a zero period is not a quota.
     fn replenish_interval(requests_per_minute: u32) -> Duration {
-        Duration::from_nanos(60_000_000_000 / u64::from(requests_per_minute.max(1)))
+        Duration::from_nanos(60_000_000_000_u64.div_ceil(u64::from(requests_per_minute.max(1))))
     }
 
     /// Add rate limit headers to response
@@ -476,15 +513,8 @@ impl GovernorRateLimit {
             headers.insert(HeaderName::from_static("x-ratelimit-remaining"), value);
         }
 
-        // Calculate reset timestamp
-        let reset_timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() + result.reset_secs)
-            .unwrap_or(0);
-
-        if let Ok(value) = HeaderValue::from_str(&reset_timestamp.to_string()) {
-            headers.insert(HeaderName::from_static("x-ratelimit-reset"), value);
-        }
+        // GCRA replenishes continuously and has no fixed window reset.
+        // Omit x-ratelimit-reset rather than invent a window boundary.
     }
 
     /// Clean up stale rate limiters (call periodically)
@@ -545,10 +575,8 @@ struct Bucket {
 struct GovernorRateLimitResult {
     /// Maximum requests allowed in window
     limit: u32,
-    /// Approximate remaining requests
+    /// Remaining burst capacity at the admission decision
     remaining: u32,
-    /// Seconds until window resets
-    reset_secs: u64,
 }
 
 #[cfg(test)]
@@ -1328,6 +1356,25 @@ mod tests {
                 axum::http::StatusCode::OK,
                 "probe {n} was counted"
             );
+        }
+    }
+}
+
+#[cfg(all(test, feature = "governor"))]
+mod quota_precision_tests {
+    use super::*;
+
+    #[test]
+    fn replenish_period_does_not_round_to_a_more_permissive_rate() {
+        for (rpm, expected_ns) in [
+            (700, 85_714_286),
+            (40_000, 1_500_000),
+            (120_000, 500_000),
+            (u32::MAX, 14),
+        ] {
+            let period = GovernorRateLimit::replenish_interval(rpm);
+            assert_eq!(period, Duration::from_nanos(expected_ns));
+            assert!(period.as_nanos() * u128::from(rpm) >= 60_000_000_000);
         }
     }
 }

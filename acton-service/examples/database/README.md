@@ -131,13 +131,13 @@ The example uses acton-service's standard configuration system. Database configu
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `ACTON_DATABASE_URL` | PostgreSQL connection URL (use port 5433 for this example) | (required) |
-| `ACTON_DATABASE_MAX_CONNECTIONS` | Maximum pool connections | 50 |
-| `ACTON_DATABASE_MIN_CONNECTIONS` | Minimum pool connections | 5 |
-| `ACTON_DATABASE_CONNECTION_TIMEOUT_SECS` | Connection timeout | 10 |
-| `ACTON_DATABASE_MAX_RETRIES` | Connection retry attempts | 5 |
-| `ACTON_DATABASE_RETRY_DELAY_SECS` | Delay between retries | 2 |
-| `ACTON_DATABASE_LAZY_INIT` | Lazy pool initialization | true |
-| `ACTON_DATABASE_OPTIONAL` | Service starts without DB | false |
+| `ACTON_DATABASE__MAX_CONNECTIONS` | Maximum pool connections | 50 |
+| `ACTON_DATABASE__MIN_CONNECTIONS` | Minimum pool connections | 5 |
+| `ACTON_DATABASE__CONNECTION_TIMEOUT_SECS` | Connection timeout | 10 |
+| `ACTON_DATABASE__MAX_RETRIES` | Connection retry attempts | 5 |
+| `ACTON_DATABASE__RETRY_DELAY_SECS` | Delay between retries | 2 |
+| `ACTON_DATABASE__LAZY_INIT` | Lazy pool initialization | true |
+| `ACTON_DATABASE__OPTIONAL` | Service starts without DB | false |
 
 ## Database Schema
 

@@ -151,10 +151,10 @@ lazy_init = true
 # Override connection settings
 ACTON_TURSO_MODE=remote
 ACTON_TURSO_URL=libsql://your-db.turso.io
-ACTON_TURSO_AUTH_TOKEN=your-token
+ACTON_TURSO__AUTH_TOKEN=your-token
 
 # For production, use secrets management
-export ACTON_TURSO_AUTH_TOKEN=$(vault read -field=token secret/turso)
+export ACTON_TURSO__AUTH_TOKEN=$(vault read -field=token secret/turso)
 ```
 
 ---

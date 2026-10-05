@@ -43,7 +43,7 @@ Configuration files are searched in the following order (highest priority first)
 
 4. **Environment variables**: `ACTON_*`
    - Highest priority (overrides all file-based configs)
-   - Format: `ACTON_SERVICE_NAME="my-service"`
+   - Format: `ACTON_SERVICE__NAME="my-service"`
    - Useful for containerized deployments
 
 ---
@@ -135,14 +135,20 @@ EOF
 
 ## Using Environment Variables
 
+Use `ACTON_` followed by the configuration key in uppercase. Separate table levels with **double underscores** (`__`) and preserve single underscores within field names. For example, `service.log_level` becomes `ACTON_SERVICE__LOG_LEVEL`, and a root custom `api_key` becomes `ACTON_API_KEY`.
+
+Legacy names such as `ACTON_SERVICE_PORT` and `ACTON_DATABASE_URL` remain supported when they identify one key in the framework schema, custom defaults, or configuration files. Exact root keys take precedence over a legacy nested interpretation. Ambiguous legacy names fail with the explicit names to use; unresolved compound names fail with migration guidance. Explicit names containing `__` take precedence over a legacy override for the same key.
+
+`ACTON_PROTO_DIR` is reserved for build-time protobuf discovery and is ignored by the runtime configuration loader.
+
 Override specific configuration values using environment variables:
 
 ```bash
 # Override service port
-export ACTON_SERVICE_PORT=9090
+export ACTON_SERVICE__PORT=9090
 
 # Override log level
-export ACTON_SERVICE_LOG_LEVEL=debug
+export ACTON_SERVICE__LOG_LEVEL=debug
 
 # Override database URL
 export ACTON_DATABASE_URL=postgres://user:pass@localhost:5432/mydb
@@ -216,7 +222,7 @@ port = 8080
 port = 9090
 
 # Environment variable overrides to 7070 (highest priority)
-export ACTON_SERVICE_PORT=7070
+export ACTON_SERVICE__PORT=7070
 
 # Service will listen on port 7070
 ```
@@ -328,13 +334,13 @@ async fn handler(State(state): State<AppState<MyCustomConfig>>) -> String {
 
 ### Environment Variable Overrides
 
-Custom config fields support environment variable overrides using the `ACTON_` prefix:
+Custom fields use the same syntax: preserve underscores in root field names and use `__` between nested tables. Both `load_from` and `load_for_service` retain the failing custom key path and its file or environment source when a value cannot be parsed.
 
 ```bash
 # Override custom fields
 export ACTON_API_KEY="sk_test_xyz789"
 export ACTON_TIMEOUT_MS=3000
-export ACTON_FEATURE_FLAGS_NEW_DASHBOARD=false
+export ACTON_FEATURE_FLAGS__NEW_DASHBOARD=false
 
 # Service automatically loads overrides
 ./my-service

@@ -9,9 +9,12 @@
 
 use figment::{
     providers::{Env, Format, Serialized, Toml},
-    Figment,
+    value::{Dict, Map, Value},
+    Figment, Metadata, Profile, Provider,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::any::TypeId;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -1979,6 +1982,206 @@ fn system_config_path(_service_name: &str) -> Option<PathBuf> {
     None
 }
 
+// Retain the original Figment value tags so projected custom values still report
+// their original file/environment source instead of this internal projection.
+struct CustomConfigProjection {
+    data: Map<Profile, Dict>,
+}
+
+impl Provider for CustomConfigProjection {
+    fn metadata(&self) -> Metadata {
+        Metadata::named("custom configuration projection")
+    }
+
+    fn data(&self) -> std::result::Result<Map<Profile, Dict>, figment::Error> {
+        Ok(self.data.clone())
+    }
+}
+
+// Serde supplies a struct's accepted field names before reading any values.
+// Capture that schema without constructing optional configuration sections or
+// maintaining a second list of field names that could drift from the types.
+#[derive(Debug)]
+struct ConfigFieldNames(&'static [&'static str]);
+
+impl std::fmt::Display for ConfigFieldNames {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("configuration field schema")
+    }
+}
+
+impl std::error::Error for ConfigFieldNames {}
+
+impl serde::de::Error for ConfigFieldNames {
+    fn custom<M: std::fmt::Display>(_message: M) -> Self {
+        Self(&[])
+    }
+}
+
+struct ConfigSchemaDeserializer;
+
+impl<'de> serde::Deserializer<'de> for ConfigSchemaDeserializer {
+    type Error = ConfigFieldNames;
+
+    fn deserialize_any<V: serde::de::Visitor<'de>>(
+        self,
+        _visitor: V,
+    ) -> std::result::Result<V::Value, Self::Error> {
+        Err(ConfigFieldNames(&[]))
+    }
+
+    fn deserialize_struct<V: serde::de::Visitor<'de>>(
+        self,
+        _name: &'static str,
+        fields: &'static [&'static str],
+        _visitor: V,
+    ) -> std::result::Result<V::Value, Self::Error> {
+        Err(ConfigFieldNames(fields))
+    }
+
+    serde::forward_to_deserialize_any! {
+        bool i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 char str string bytes
+        byte_buf option unit unit_struct newtype_struct seq tuple tuple_struct
+        map enum identifier ignored_any
+    }
+}
+
+fn add_struct_paths<C: DeserializeOwned>(prefix: &str, paths: &mut BTreeSet<String>) {
+    if let Err(ConfigFieldNames(fields)) = C::deserialize(ConfigSchemaDeserializer) {
+        paths.extend(fields.iter().map(|field| {
+            if prefix.is_empty() {
+                (*field).to_string()
+            } else {
+                format!("{prefix}.{field}")
+            }
+        }));
+    }
+}
+
+fn collect_config_paths(dict: &Dict, prefix: &str, paths: &mut BTreeSet<String>) {
+    for (key, value) in dict {
+        let path = if prefix.is_empty() {
+            key.clone()
+        } else {
+            format!("{prefix}.{key}")
+        };
+        paths.insert(path.clone());
+        if let Some(children) = value.as_dict() {
+            collect_config_paths(children, &path, paths);
+        }
+    }
+}
+
+fn environment_config_paths<T: DeserializeOwned>(figment: &Figment) -> Result<BTreeSet<String>> {
+    let mut paths = BTreeSet::new();
+    for dict in figment.data()?.values() {
+        collect_config_paths(dict, "", &mut paths);
+    }
+    add_struct_paths::<T>("", &mut paths);
+    add_struct_paths::<DatabaseConfig>("database", &mut paths);
+    add_struct_paths::<RedisConfig>("redis", &mut paths);
+    add_struct_paths::<NatsConfig>("nats", &mut paths);
+    add_struct_paths::<OtlpConfig>("otlp", &mut paths);
+    add_struct_paths::<GrpcConfig>("grpc", &mut paths);
+    add_struct_paths::<ProtoConfig>("grpc.proto", &mut paths);
+    add_struct_paths::<PasetoConfig>("token", &mut paths);
+    paths.insert("token.format".into());
+    add_struct_paths::<MetricsConfig>("middleware.metrics", &mut paths);
+    add_struct_paths::<ResilienceConfig>("middleware.resilience", &mut paths);
+    add_struct_paths::<LocalRateLimitConfig>("middleware.governor", &mut paths);
+    add_struct_paths::<MetricsExporterConfig>("middleware.metrics.exporter", &mut paths);
+    add_struct_paths::<crate::agents::BackgroundWorkerConfig>("background_worker", &mut paths);
+    #[cfg(feature = "jwt")]
+    add_struct_paths::<JwtConfig>("token", &mut paths);
+    #[cfg(feature = "turso")]
+    add_struct_paths::<TursoConfig>("turso", &mut paths);
+    #[cfg(feature = "surrealdb")]
+    add_struct_paths::<SurrealDbConfig>("surrealdb", &mut paths);
+    #[cfg(feature = "clickhouse")]
+    add_struct_paths::<ClickHouseConfig>("clickhouse", &mut paths);
+    #[cfg(feature = "websocket")]
+    add_struct_paths::<crate::websocket::WebSocketConfig>("websocket", &mut paths);
+    #[cfg(feature = "cedar-authz")]
+    add_struct_paths::<CedarConfig>("cedar", &mut paths);
+    #[cfg(feature = "graphql")]
+    add_struct_paths::<GraphQLConfig>("graphql", &mut paths);
+    #[cfg(feature = "session")]
+    add_struct_paths::<crate::session::SessionConfig>("session", &mut paths);
+    #[cfg(feature = "audit")]
+    add_struct_paths::<crate::audit::AuditConfig>("audit", &mut paths);
+    #[cfg(feature = "auth")]
+    add_struct_paths::<crate::auth::AuthConfig>("auth", &mut paths);
+    #[cfg(feature = "login-lockout")]
+    add_struct_paths::<crate::lockout::LockoutConfig>("lockout", &mut paths);
+    #[cfg(feature = "tls")]
+    {
+        add_struct_paths::<TlsConfig>("tls", &mut paths);
+        add_struct_paths::<TlsConfig>("grpc.tls", &mut paths);
+        add_struct_paths::<CallerAuthConfig>("caller_auth", &mut paths);
+    }
+    #[cfg(feature = "journald")]
+    add_struct_paths::<JournaldConfig>("journald", &mut paths);
+    #[cfg(feature = "accounts")]
+    add_struct_paths::<crate::accounts::AccountsConfig>("accounts", &mut paths);
+    Ok(paths)
+}
+
+fn merge_environment<T: DeserializeOwned>(figment: Figment) -> Result<Figment> {
+    let paths = environment_config_paths::<T>(&figment)?;
+    // ACTON_PROTO_DIR is reserved for protobuf compilation, not runtime config.
+    let legacy = Env::prefixed("ACTON_").filter(|key| {
+        !key.as_str().contains("__") && !key.as_str().eq_ignore_ascii_case("PROTO_DIR")
+    });
+    let mut mapping = BTreeMap::new();
+    for (key, _) in legacy.iter() {
+        let name = key.as_str().to_ascii_lowercase();
+        let candidates: Vec<_> = paths
+            .iter()
+            .filter(|path| path.replace('.', "_") == name)
+            .collect();
+        let path = match candidates.as_slice() {
+            _ if paths.contains(&name) => name.clone(),
+            [path] => (*path).clone(),
+            [] if !name.contains('_') => name.clone(),
+            [] => {
+                return Err(figment::Error::from(format!(
+                    "Cannot resolve ACTON_{}: use double underscores between table names \
+                     and preserve underscores within keys (for example ACTON_SERVICE__LOG_LEVEL); \
+                     declare custom keys in defaults or the configuration file to use legacy names",
+                    name.to_ascii_uppercase()
+                ))
+                .into());
+            }
+            _ => {
+                let alternatives: Vec<_> = candidates
+                    .iter()
+                    .map(|path| format!("ACTON_{}", path.replace('.', "__").to_ascii_uppercase()))
+                    .collect();
+                return Err(figment::Error::from(format!(
+                    "Ambiguous environment variable ACTON_{}: use one of {}",
+                    name.to_ascii_uppercase(),
+                    alternatives.join(", ")
+                ))
+                .into());
+            }
+        };
+        mapping.insert(name, path);
+    }
+    Ok(figment
+        .merge(legacy.map(move |key| {
+            mapping
+                .get(&key.as_str().to_ascii_lowercase())
+                .cloned()
+                .unwrap_or_else(|| key.as_str().to_string())
+                .into()
+        }))
+        .merge(
+            Env::prefixed("ACTON_")
+                .filter(|key| key.as_str().contains("__"))
+                .split("__"),
+        ))
+}
+
 impl<T> Config<T>
 where
     T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
@@ -2028,11 +2231,7 @@ where
             }
         }
 
-        // Environment variables have highest priority
-        figment = figment.merge(Env::prefixed("ACTON_").split("_"));
-
-        let config = figment.extract()?;
-        Ok(config)
+        Self::extract_config(merge_environment::<T>(figment)?)
     }
 
     /// Load configuration from a specific file
@@ -2040,16 +2239,78 @@ where
     /// This bypasses XDG directories and loads directly from the given path.
     /// Useful for testing or non-standard deployments.
     pub fn load_from(path: &str) -> Result<Self> {
-        let config = Figment::new()
-            // Start with defaults
+        let figment = Figment::new()
             .merge(Serialized::defaults(Config::<T>::default()))
-            // Load from config file (if exists)
-            .merge(Toml::file(path))
-            // Override with environment variables
-            .merge(Env::prefixed("ACTON_").split("_"))
-            .extract()?;
+            .merge(Toml::file(path));
+        Self::extract_config(merge_environment::<T>(figment)?)
+    }
 
-        Ok(config)
+    fn extract_config(figment: Figment) -> Result<Self> {
+        let framework: Config<()> = figment.extract()?;
+        let custom = if TypeId::of::<T>() == TypeId::of::<()>() {
+            T::default()
+        } else {
+            let framework_defaults = Serialized::defaults(Config::<()>::default()).data()?;
+            let framework_keys: BTreeSet<_> = framework_defaults
+                .values()
+                .flat_map(|dict| dict.keys().cloned())
+                .collect();
+            let projected = figment
+                .data()?
+                .into_iter()
+                .map(|(profile, mut dict)| {
+                    dict.retain(|key, _| !framework_keys.contains(key));
+                    let mut root = Dict::new();
+                    root.insert("__acton_custom".into(), Value::from(dict));
+                    (profile, root)
+                })
+                .collect();
+            figment
+                .merge(CustomConfigProjection { data: projected })
+                .focus("__acton_custom")
+                .extract::<T>()?
+        };
+        Ok(Self {
+            service: framework.service,
+            token: framework.token,
+            rate_limit: framework.rate_limit,
+            middleware: framework.middleware,
+            database: framework.database,
+            #[cfg(feature = "turso")]
+            turso: framework.turso,
+            #[cfg(feature = "surrealdb")]
+            surrealdb: framework.surrealdb,
+            redis: framework.redis,
+            nats: framework.nats,
+            #[cfg(feature = "clickhouse")]
+            clickhouse: framework.clickhouse,
+            otlp: framework.otlp,
+            grpc: framework.grpc,
+            #[cfg(feature = "websocket")]
+            websocket: framework.websocket,
+            #[cfg(feature = "cedar-authz")]
+            cedar: framework.cedar,
+            #[cfg(feature = "graphql")]
+            graphql: framework.graphql,
+            #[cfg(feature = "session")]
+            session: framework.session,
+            #[cfg(feature = "audit")]
+            audit: framework.audit,
+            #[cfg(feature = "auth")]
+            auth: framework.auth,
+            #[cfg(feature = "login-lockout")]
+            lockout: framework.lockout,
+            #[cfg(feature = "tls")]
+            tls: framework.tls,
+            #[cfg(feature = "tls")]
+            caller_auth: framework.caller_auth,
+            #[cfg(feature = "journald")]
+            journald: framework.journald,
+            #[cfg(feature = "accounts")]
+            accounts: framework.accounts,
+            background_worker: framework.background_worker,
+            custom,
+        })
     }
 
     /// Find all possible config file paths for a service
@@ -2156,7 +2417,7 @@ where
     /// For production, you should:
     /// - Use the default restrictive CORS (secure by default)
     /// - Configure specific allowed origins in your config file
-    /// - Set ACTON_MIDDLEWARE_CORS_MODE=restrictive
+    /// - Set ACTON_MIDDLEWARE__CORS_MODE=restrictive
     ///
     /// # Example
     /// ```no_run
@@ -2237,6 +2498,406 @@ where
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    // Spawn the current test executable to isolate environment/cwd changes even
+    // under parallel `cargo test`. The parent owns cleanup when a child fails.
+    fn run_configuration_test(
+        test_name: &str,
+        variables: &[(&str, &str)],
+        test: impl FnOnce() -> Result<()>,
+    ) {
+        const CHILD_MARKER: &str = "CONFIGURATION_TEST_CHILD";
+        const COMPLETION_FILE: &str = "configuration-test-completed";
+        if std::env::var(CHILD_MARKER).as_deref() == Ok(test_name) {
+            test().expect("configuration regression test failed");
+            std::fs::write(COMPLETION_FILE, test_name).expect("record completed assertions");
+            return;
+        }
+        let directory = tempfile::tempdir().expect("create isolated configuration directory");
+        let status = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .arg("--exact")
+            .arg(format!("config::tests::{test_name}"))
+            .arg("--nocapture")
+            .env_clear()
+            .envs(variables.iter().copied())
+            .env(CHILD_MARKER, test_name)
+            .current_dir(directory.path())
+            .status()
+            .expect("run isolated configuration test");
+        assert!(
+            status.success(),
+            "isolated configuration test {test_name} failed"
+        );
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join(COMPLETION_FILE))
+                .expect("child must execute the selected test, not silently run zero tests"),
+            test_name
+        );
+    }
+
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct EnvironmentCustomConfig {
+        crm_password: String,
+        #[serde(default)]
+        shell: ShellConfig,
+    }
+
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ShellConfig {
+        snapshot_every: u32,
+        sync: u32,
+    }
+
+    fn load_test_config<T>(for_service: bool) -> Result<Config<T>>
+    where
+        T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+    {
+        if for_service {
+            Config::<T>::load_for_service("isolated-configuration-regression-test")
+        } else {
+            Config::<T>::load_from("config.toml")
+        }
+    }
+
+    #[test]
+    fn configuration_environment_preserves_snake_case_and_legacy_names() {
+        run_configuration_test(
+            "configuration_environment_preserves_snake_case_and_legacy_names",
+            &[
+                ("ACTON_SERVICE_PORT", "9090"),
+                ("ACTON_SERVICE_LOG_LEVEL", "warn"),
+                ("ACTON_SERVICE__LOG_LEVEL", "debug"),
+                ("ACTON_CRM_PASSWORD", "from-env"),
+                ("ACTON_SHELL_SYNC", "5"),
+                ("ACTON_SHELL__SNAPSHOT_EVERY", "7"),
+            ],
+            || {
+                std::fs::write(
+                    "config.toml",
+                    r#"
+crm_password = "from-file"
+[service]
+port = 8081
+log_level = "info"
+[shell]
+snapshot_every = 100
+sync = 60
+"#,
+                )?;
+                for for_service in [false, true] {
+                    let config = load_test_config::<EnvironmentCustomConfig>(for_service).expect(
+                        "strict custom config must exclude framework and spurious env keys",
+                    );
+                    assert_eq!(config.service.port, 9090);
+                    assert_eq!(config.service.log_level, "debug");
+                    assert_eq!(config.custom.crm_password, "from-env");
+                    assert_eq!(config.custom.shell.sync, 5);
+                    assert_eq!(config.custom.shell.snapshot_every, 7);
+                }
+                Ok(())
+            },
+        );
+    }
+
+    #[test]
+    fn configuration_environment_resolves_absent_framework_and_default_custom_keys() {
+        run_configuration_test(
+            "configuration_environment_resolves_absent_framework_and_default_custom_keys",
+            &[
+                ("ACTON_CRM_PASSWORD", "from-default-schema"),
+                ("ACTON_SHELL_SNAPSHOT_EVERY", "12"),
+                ("ACTON_DATABASE_URL", "postgres://localhost/example"),
+                ("ACTON_DATABASE_MAX_CONNECTIONS", "20"),
+                ("ACTON_BACKGROUND_WORKER_ENABLED", "true"),
+                ("ACTON_BACKGROUND_WORKER_MAX_CONCURRENT_TASKS", "3"),
+                ("ACTON_MIDDLEWARE_METRICS_LATENCY_BUCKETS_MS", "[5,10]"),
+            ],
+            || {
+                std::fs::write("config.toml", "")?;
+                for for_service in [false, true] {
+                    let config = load_test_config::<EnvironmentCustomConfig>(for_service).unwrap();
+                    assert_eq!(config.custom.crm_password, "from-default-schema");
+                    assert_eq!(config.custom.shell.snapshot_every, 12);
+                    assert_eq!(config.database.unwrap().max_connections, 20);
+                    assert_eq!(config.background_worker.unwrap().max_concurrent_tasks, 3);
+                    assert_eq!(
+                        config.middleware.metrics.unwrap().latency_buckets_ms,
+                        vec![5.0, 10.0]
+                    );
+                }
+                Ok(())
+            },
+        );
+    }
+
+    #[cfg(feature = "tls")]
+    #[test]
+    fn configuration_environment_reaches_strict_tls_and_caller_auth_keys() {
+        run_configuration_test(
+            "configuration_environment_reaches_strict_tls_and_caller_auth_keys",
+            &[
+                ("ACTON_TLS_CERT_PATH", "server.pem"),
+                ("ACTON_TLS__KEY_PATH", "server.key"),
+                ("ACTON_TLS_RELOAD_INTERVAL_SECS", "30"),
+                ("ACTON_CALLER_AUTH__PUBLIC_PATHS", "[\"/health\"]"),
+            ],
+            || {
+                std::fs::write("config.toml", "")?;
+                for for_service in [false, true] {
+                    let config = load_test_config::<()>(for_service).unwrap();
+                    assert_eq!(config.tls.unwrap().reload_interval_secs, Some(30));
+                    assert_eq!(config.caller_auth.unwrap().public_paths, vec!["/health"]);
+                }
+                Ok(())
+            },
+        );
+    }
+
+    #[test]
+    fn configuration_environment_ignores_reserved_protobuf_build_variable() {
+        run_configuration_test(
+            "configuration_environment_ignores_reserved_protobuf_build_variable",
+            &[("ACTON_PROTO_DIR", "shared/protos")],
+            || {
+                std::fs::write("config.toml", "")?;
+                for for_service in [false, true] {
+                    load_test_config::<EnvironmentCustomConfig>(for_service).unwrap();
+                }
+                Ok(())
+            },
+        );
+    }
+
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    struct DiagnosticCustomConfig {
+        authoring: Option<AuthoringConfig>,
+        #[serde(flatten, default, skip_serializing)]
+        unknown: BTreeMap<String, serde_json::Value>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct AuthoringConfig {
+        timeout_secs: std::num::NonZeroU64,
+        #[serde(default)]
+        mode: AuthoringMode,
+    }
+
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    enum AuthoringMode {
+        #[default]
+        Normal,
+        Fast,
+    }
+
+    #[test]
+    fn configuration_custom_value_errors_keep_figment_path_and_file_source() {
+        run_configuration_test(
+            "configuration_custom_value_errors_keep_figment_path_and_file_source",
+            &[],
+            || {
+                for invalid in ["0", "\"invalid-timeout\""] {
+                    std::fs::write(
+                        "config.toml",
+                        format!(
+                            "[service]\nname = \"demo\"\n[authoring]\ntimeout_secs = {invalid}\n"
+                        ),
+                    )?;
+                    for for_service in [false, true] {
+                        let error = load_test_config::<DiagnosticCustomConfig>(for_service)
+                            .unwrap_err()
+                            .to_string();
+                        assert!(error.contains("authoring.timeout_secs"), "{error}");
+                        assert!(error.contains("config.toml"), "{error}");
+                        assert!(!error.contains("__acton_custom"), "{error}");
+                    }
+                }
+                Ok(())
+            },
+        );
+    }
+
+    #[test]
+    fn configuration_custom_enum_errors_keep_figment_path_and_file_source() {
+        run_configuration_test(
+            "configuration_custom_enum_errors_keep_figment_path_and_file_source",
+            &[],
+            || {
+                std::fs::write(
+                    "config.toml",
+                    "[authoring]\ntimeout_secs = 5\nmode = \"invalid\"",
+                )?;
+                for for_service in [false, true] {
+                    let error = load_test_config::<DiagnosticCustomConfig>(for_service)
+                        .unwrap_err()
+                        .to_string();
+                    assert!(error.contains("authoring.mode"), "{error}");
+                    assert!(error.contains("config.toml"), "{error}");
+                }
+                Ok(())
+            },
+        );
+    }
+
+    #[test]
+    fn configuration_canonical_environment_introduces_absent_custom_table() {
+        run_configuration_test(
+            "configuration_canonical_environment_introduces_absent_custom_table",
+            &[("ACTON_AUTHORING__TIMEOUT_SECS", "5")],
+            || {
+                std::fs::write("config.toml", "")?;
+                for for_service in [false, true] {
+                    let config = load_test_config::<DiagnosticCustomConfig>(for_service).unwrap();
+                    assert_eq!(config.custom.authoring.unwrap().timeout_secs.get(), 5);
+                    assert!(config.custom.unknown.is_empty());
+                }
+                Ok(())
+            },
+        );
+    }
+
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct RootSnakeCaseConfig {
+        shell_snapshot_every: u32,
+        shell: ShellConfig,
+    }
+
+    #[test]
+    fn configuration_canonical_root_keys_win_over_legacy_nested_interpretations() {
+        run_configuration_test(
+            "configuration_canonical_root_keys_win_over_legacy_nested_interpretations",
+            &[
+                ("ACTON_SHELL_SNAPSHOT_EVERY", "12"),
+                ("ACTON_SHELL__SNAPSHOT_EVERY", "7"),
+            ],
+            || {
+                std::fs::write("config.toml", "")?;
+                for for_service in [false, true] {
+                    let config = load_test_config::<RootSnakeCaseConfig>(for_service).unwrap();
+                    assert_eq!(config.custom.shell_snapshot_every, 12);
+                    assert_eq!(config.custom.shell.snapshot_every, 7);
+                }
+                Ok(())
+            },
+        );
+    }
+
+    #[test]
+    fn configuration_custom_environment_errors_keep_figment_path_and_source() {
+        run_configuration_test(
+            "configuration_custom_environment_errors_keep_figment_path_and_source",
+            &[("ACTON_AUTHORING__TIMEOUT_SECS", "0")],
+            || {
+                std::fs::write("config.toml", "")?;
+                for for_service in [false, true] {
+                    let error = load_test_config::<DiagnosticCustomConfig>(for_service)
+                        .unwrap_err()
+                        .to_string();
+                    assert!(error.contains("AUTHORING.TIMEOUT_SECS"), "{error}");
+                    assert!(error.contains("ACTON_"), "{error}");
+                    assert!(!error.contains("__acton_custom"), "{error}");
+                }
+                Ok(())
+            },
+        );
+    }
+
+    #[test]
+    fn configuration_custom_unknown_capture_excludes_framework_keys() {
+        run_configuration_test(
+            "configuration_custom_unknown_capture_excludes_framework_keys",
+            &[("ACTON_SERVICE_PORT", "9000")],
+            || {
+                std::fs::write(
+                    "config.toml",
+                    "root_typo = true\n[authoring]\ntimeout_secs = 5",
+                )?;
+                for for_service in [false, true] {
+                    let config = load_test_config::<DiagnosticCustomConfig>(for_service).unwrap();
+                    assert_eq!(config.custom.unknown.len(), 1);
+                    assert_eq!(
+                        config.custom.unknown.get("root_typo"),
+                        Some(&serde_json::json!(true))
+                    );
+                }
+                std::fs::write(
+                    "config.toml",
+                    "[authoring]\ntimeout_secs = 5\ntimeuot_secs = 7",
+                )?;
+                for for_service in [false, true] {
+                    let error = load_test_config::<DiagnosticCustomConfig>(for_service)
+                        .unwrap_err()
+                        .to_string();
+                    assert!(error.contains("timeuot_secs"), "{error}");
+                    assert!(error.contains("authoring"), "{error}");
+                }
+                Ok(())
+            },
+        );
+    }
+
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    struct AmbiguousCustomConfig {
+        api: ApiConfig,
+        api_token: ApiTokenConfig,
+    }
+
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    struct ApiConfig {
+        token_secs: u32,
+    }
+
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    struct ApiTokenConfig {
+        secs: u32,
+    }
+
+    #[test]
+    fn configuration_environment_ambiguous_legacy_names_fail_without_secret_values() {
+        run_configuration_test(
+            "configuration_environment_ambiguous_legacy_names_fail_without_secret_values",
+            &[("ACTON_API_TOKEN_SECS", "private-secret-value")],
+            || {
+                std::fs::write("config.toml", "")?;
+                for for_service in [false, true] {
+                    let error = load_test_config::<AmbiguousCustomConfig>(for_service)
+                        .unwrap_err()
+                        .to_string();
+                    assert!(
+                        error.contains("Ambiguous environment variable ACTON_API_TOKEN_SECS"),
+                        "{error}"
+                    );
+                    assert!(error.contains("ACTON_API__TOKEN_SECS"), "{error}");
+                    assert!(!error.contains("private-secret-value"), "{error}");
+                }
+                Ok(())
+            },
+        );
+    }
+
+    #[test]
+    fn configuration_environment_unresolved_legacy_names_explain_migration() {
+        run_configuration_test(
+            "configuration_environment_unresolved_legacy_names_explain_migration",
+            &[("ACTON_AUTHORING_TIMEOUT_SECS", "private-secret-value")],
+            || {
+                std::fs::write("config.toml", "")?;
+                for for_service in [false, true] {
+                    let error = load_test_config::<DiagnosticCustomConfig>(for_service)
+                        .unwrap_err()
+                        .to_string();
+                    assert!(error.contains("ACTON_AUTHORING_TIMEOUT_SECS"), "{error}");
+                    assert!(error.contains("double underscores"), "{error}");
+                    assert!(!error.contains("private-secret-value"), "{error}");
+                }
+                Ok(())
+            },
+        );
+    }
 
     #[cfg(unix)]
     #[test]

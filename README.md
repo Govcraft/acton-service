@@ -273,7 +273,7 @@ Beyond token validation, the `auth` feature family provides a complete identity 
 - **Token generation** (`auth`) - Mint PASETO or JWT tokens with typed claims ([guide](https://govcraft.github.io/acton-service/docs/token-generation))
 - **API keys** (`auth`) - BLAKE3-hashed API key issuance and validation ([guide](https://govcraft.github.io/acton-service/docs/api-keys))
 - **Signing-key rotation** (`auth`) - Rotate token signing keys with a drain grace period for in-flight tokens
-- **OAuth 2.0 / OIDC** (`oauth`) - Pluggable provider integration built on `oauth2` and `openidconnect` ([guide](https://govcraft.github.io/acton-service/docs/oauth))
+- **OAuth 2.0 / OIDC** (`oauth`) - `OAuthProviderRegistry` builds providers from config; `MemoryOAuthStateManager` supplies bounded single-use state without Redis (`RedisOAuthStateManager` supports multiple instances) ([guide](https://govcraft.github.io/acton-service/docs/oauth))
 - **SAML 2.0 service provider** (`saml`) - SP-initiated SSO with ADFS, Shibboleth, and other SAML-only identity providers; pure Rust, XML-DSig on aws-lc-rs (Linux x86_64/aarch64) or RustCrypto elsewhere
 - **Sessions** (`session-memory` / `session-redis`) - Cookie sessions via `tower-sessions` with in-memory or Redis stores ([guide](https://govcraft.github.io/acton-service/docs/session))
 - **Login lockout** (`login-lockout`) - Progressive delays and account lockout on repeated failures ([guide](https://govcraft.github.io/acton-service/docs/login-lockout))
@@ -643,7 +643,7 @@ acton-service = { version = "0.44", features = ["grpc", "database", "cache"] }
 | `jwt` | JWT validation middleware |
 | `auth` | Argon2 password hashing, token generation, API keys, key rotation |
 | `windows-auth` | Trusted-proxy Windows/AD identity over mutually authenticated TLS (implies `http` and `tls`) |
-| `oauth` | OAuth 2.0 / OIDC providers (implies `auth`) |
+| `oauth` | `OAuthProviderRegistry`, bounded `MemoryOAuthStateManager`, and OAuth/OIDC providers (implies `auth`; Redis state additionally requires `cache`) |
 | `saml` | SAML 2.0 service provider: signed `AuthnRequest`s, ACS validation, replay protection, encrypted assertions (implies `auth`) |
 | `auth-full` | Everything: auth + oauth + saml + jwt + cache + database + lockout + accounts |
 | `cedar-authz` | AWS Cedar policy-based authorization |

@@ -16,12 +16,50 @@ use crate::{config::Config, error::Result};
 /// coordinate tracing initialization, preventing conflicts when both paths are used.
 static TRACING_INIT: Once = Once::new();
 
+// Hold an ownership token in the subscriber so a failed log compatibility
+// installation can be distinguished from a rejected global subscriber. The
+// former happens after try_init has already installed the subscriber.
+struct TracingOwnership {
+    _token: std::sync::Arc<()>,
+}
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for TracingOwnership {}
+
+fn try_install_tracing<S>(subscriber: S) -> bool
+where
+    S: tracing::Subscriber + Send + Sync + 'static,
+{
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+    let token = std::sync::Arc::new(());
+    let result = subscriber
+        .with(TracingOwnership {
+            _token: std::sync::Arc::clone(&token),
+        })
+        .try_init();
+    if let Err(error) = result {
+        if std::sync::Arc::strong_count(&token) == 1 {
+            eprintln!(
+                "Tracing already belongs to the application; keeping its subscriber: {error}"
+            );
+            return false;
+        }
+        eprintln!("Tracing initialized; keeping the application's existing log logger: {error}");
+    }
+    true
+}
+
+/// Serialize successful metrics initialization while allowing readerless calls
+/// to be retried by a later service configuration.
+#[cfg(feature = "_metrics")]
+static METRICS_INIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(feature = "observability")]
 use {
     opentelemetry::{global, trace::TracerProvider},
     opentelemetry_otlp::{SpanExporter, WithExportConfig},
     opentelemetry_sdk::{propagation::TraceContextPropagator, trace::SdkTracerProvider, Resource},
-    tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer},
+    tracing_subscriber::{layer::SubscriberExt, EnvFilter, Layer},
 };
 
 #[cfg(feature = "_metrics")]
@@ -69,8 +107,11 @@ pub static PROMETHEUS_REGISTRY: once_cell::sync::OnceCell<prometheus::Registry> 
 /// * `config` - Service configuration containing OTLP and service details
 ///
 /// # Returns
-/// * `Ok(())` on successful initialization
+/// * `Ok(())` on successful initialization or when the application already owns tracing
 /// * `Err` if tracing setup fails critically
+///
+/// An existing global subscriber is preserved. In that case acton's layers,
+/// tracer provider, and trace context propagator are not installed.
 #[cfg(feature = "observability")]
 pub fn init_tracing<T>(config: &Config<T>) -> Result<()>
 where
@@ -89,9 +130,6 @@ where
 
     // Use shared Once to ensure single initialization across all code paths
     TRACING_INIT.call_once(|| {
-        // Set global trace context propagator for distributed tracing
-        global::set_text_map_propagator(TraceContextPropagator::new());
-
         // Determine whether to suppress the fmt layer
         #[cfg(feature = "journald")]
         let suppress_fmt = journald_config
@@ -145,7 +183,18 @@ where
             .with(telemetry_layer);
         #[cfg(feature = "journald")]
         let registry = registry.with(journald_layer);
-        registry.init();
+        if !try_install_tracing(registry) {
+            // The application owns tracing. A provider built for our rejected
+            // subscriber must not replace its provider or leave exporter tasks.
+            if let Some(provider) = tracer_provider_to_set {
+                if let Err(error) = provider.shutdown() {
+                    eprintln!("Failed to shut down unused tracer provider: {error}");
+                }
+            }
+            return;
+        }
+
+        global::set_text_map_propagator(TraceContextPropagator::new());
 
         // Set global tracer provider after subscriber is initialized
         if let Some(provider) = tracer_provider_to_set {
@@ -440,12 +489,22 @@ fn seconds_histogram_view(instrument: &Instrument) -> Option<Stream> {
 /// A view is registered so that histograms declared in seconds are bucketed in
 /// seconds; see [`SECONDS_HISTOGRAM_BOUNDARIES`].
 ///
-/// This should be called once during service initialization.
+/// The first successful initialization owns the process's telemetry resource.
+/// Later calls are no-ops, including after shutdown, so all existing instruments
+/// continue to refer to the same provider and registry. A call that creates no
+/// readers leaves initialization retryable.
 #[cfg(feature = "_metrics")]
 pub fn init_meter_provider<T>(config: &Config<T>) -> Result<()>
 where
     T: serde::Serialize + serde::de::DeserializeOwned + Clone + Default + Send + Sync + 'static,
 {
+    let _initialization = METRICS_INIT.lock().map_err(|error| {
+        crate::error::Error::Internal(format!("Metrics initialization lock poisoned: {error}"))
+    })?;
+    if METER_PROVIDER.get().is_some() {
+        return Ok(());
+    }
+
     let resource = Resource::builder()
         .with_service_name(config.service.name.clone())
         .build();
@@ -454,6 +513,8 @@ where
         .with_resource(resource)
         .with_view(seconds_histogram_view);
     let mut reader_count: usize = 0;
+    #[cfg(feature = "prometheus-metrics")]
+    let mut prometheus_registry = None;
 
     #[cfg(feature = "otel-metrics")]
     if let Some(otlp_config) = &config.otlp {
@@ -482,7 +543,7 @@ where
     match prometheus_metric_reader() {
         Ok((reader, registry)) => {
             builder = builder.with_reader(reader);
-            let _ = PROMETHEUS_REGISTRY.set(registry);
+            prometheus_registry = Some(registry);
             reader_count += 1;
             tracing::info!(
                 service = %config.service.name,
@@ -503,7 +564,15 @@ where
     }
 
     let provider = builder.build();
-    let _ = METER_PROVIDER.set(provider.clone());
+    #[cfg(feature = "prometheus-metrics")]
+    if let Some(registry) = prometheus_registry {
+        PROMETHEUS_REGISTRY.set(registry).map_err(|_| {
+            crate::error::Error::Internal("Prometheus registry was already initialized".to_string())
+        })?;
+    }
+    METER_PROVIDER.set(provider.clone()).map_err(|_| {
+        crate::error::Error::Internal("Meter provider was already initialized".to_string())
+    })?;
     global::set_meter_provider(provider);
     Ok(())
 }
@@ -514,7 +583,7 @@ pub fn init_tracing<T>(config: &Config<T>) -> Result<()>
 where
     T: serde::Serialize + serde::de::DeserializeOwned + Clone + Default + Send + Sync + 'static,
 {
-    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
+    use tracing_subscriber::{layer::SubscriberExt, EnvFilter, Layer};
 
     // Check if already initialized by another path (e.g., AppState::Builder)
     if TRACING_INIT.is_completed() {
@@ -556,7 +625,9 @@ where
         let registry = tracing_subscriber::registry().with(fmt_layer);
         #[cfg(feature = "journald")]
         let registry = registry.with(journald_layer);
-        registry.init();
+        if !try_install_tracing(registry) {
+            return;
+        }
 
         tracing::info!(
             service = %service_name,
@@ -577,11 +648,13 @@ where
 /// this is a no-op.
 pub fn init_basic_tracing() {
     TRACING_INIT.call_once(|| {
-        tracing_subscriber::fmt()
+        let subscriber = tracing_subscriber::fmt()
             .with_max_level(tracing::Level::INFO)
             .with_target(false)
-            .init();
-        tracing::debug!("Tracing initialized with default configuration");
+            .finish();
+        if try_install_tracing(subscriber) {
+            tracing::debug!("Tracing initialized with default configuration");
+        }
     });
 }
 

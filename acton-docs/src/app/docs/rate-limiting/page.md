@@ -47,7 +47,7 @@ The middleware is wired by `ServiceBuilder` to the **outer** router (before any 
 
 ### Sizing the anonymous bucket
 
-A request with no claims and no matching route limit is counted per client IP. By default that bucket uses `per_user_rpm` with a burst of a tenth of it. Set `anonymous_rpm` (and optionally `anonymous_burst`) when a service's callers are not token-authenticated users, so the per-IP budget can be sized for them without changing the budget of users who are. Every rate is exact up to `u32::MAX` requests per minute.
+A request with no claims and no matching route limit is counted per client IP. By default that bucket uses `per_user_rpm` with a burst of a tenth of it. Set `anonymous_rpm` (and optionally `anonymous_burst`) when a service's callers are not token-authenticated users, so the per-IP budget can be sized for them without changing the budget of users who are. Periods use nanosecond precision and round up, so even rates up to `u32::MAX` requests per minute do not exceed the configured rate through rounding.
 
 The governor alone counts this bucket. The Redis limiter lets a request with no claims and no matching route limit through uncounted.
 
@@ -83,6 +83,24 @@ let service = ServiceBuilder::new()
 
 {% callout type="warning" title="Key only what you have verified" %}
 The limiter `ServiceBuilder` applies runs after token authentication and Cedar authorization, just before the handler. The claims a classifier reads there were verified by token authentication, and a request that authentication or Cedar rejected is never counted. Any other credential a classifier keys by, such as a header or a client certificate's identity, it must verify itself. A classifier that keys by a raw header value gives every caller a fresh bucket for each made-up value it sends, which is no limit at all. Send an unverified caller to `RateKey::Anonymous`.
+
+To bound failed-authentication and authorization work, opt into a separate quota before authentication:
+
+```rust
+use std::num::NonZeroU32;
+use acton_service::middleware::governor::PreAuthRateLimitConfig;
+
+let peer_quota = PreAuthRateLimitConfig::new(
+    NonZeroU32::new(1200).unwrap(),
+    NonZeroU32::new(100).unwrap(),
+);
+let service = ServiceBuilder::new()
+    .with_pre_auth_rate_limit(peer_quota)
+    .build();
+```
+
+This limiter counts every non-exempt request before caller authentication, token verification, audit, and Cedar. It keys only by the socket peer IP, ignores forwarded headers and claims, and is independent of `rate_limit.auto_apply` and `with_rate_classifier`. All callers behind one proxy share that proxy's quota. Its `exempt_paths` defaults to `/health` and `/ready`; change the list on `PreAuthRateLimitConfig` when needed. Without this opt-in, authentication and Cedar rejections remain outside the caller quota.
+
 {% /callout %}
 
 A classifier runs on every request that reaches the limiter, so keep it cheap: read from state the service has already published rather than calling out per request.
@@ -549,6 +567,9 @@ Governor provides in-memory rate limiting for single-instance deployments with z
 
 With the `governor` feature enabled and `auto_apply = true` (the default), `ServiceBuilder` constructs `GovernorRateLimit::new(config.rate_limit)` and attaches it for you. Nothing to write:
 
+Cargo unifies features across packages in one build. If another package enables `acton-service/governor`, the limiter becomes available to every service using that dependency, and default `auto_apply = true` activates it. Set `config.rate_limit.auto_apply = false` (or `[rate_limit] auto_apply = false`) explicitly when a service must not apply a caller limiter. Startup logs at INFO report the classifier, user/client/IP quotas and bursts, forwarded-header policy, exempt paths, and number of route overrides.
+
+
 ```toml
 [rate_limit]
 per_user_rpm = 100
@@ -670,6 +691,9 @@ X-RateLimit-Reset: 1700000060
 ### 429 Too Many Requests
 
 When a limit is exceeded, both limiters answer 429 with `Retry-After`: whole seconds until the request would be admitted, rounded up and never 0. The governor reports its own wait for a token; the Redis limiter reports the time left on the counter's window.
+
+Successful governor responses report `x-ratelimit-limit` as the sustained per-minute quota and `x-ratelimit-remaining` as the actual burst capacity left at admission. Governor replenishes continuously, so it omits `x-ratelimit-reset` rather than claim a fixed window boundary. Redis uses window-based counters and its own header semantics.
+
 
 ```http
 HTTP/1.1 429 Too Many Requests

@@ -168,6 +168,8 @@ where
     /// See [`ServiceBuilder::with_rate_classifier`].
     #[cfg(feature = "governor")]
     rate_classifier: Option<std::sync::Arc<dyn crate::middleware::RateClassifier>>,
+    #[cfg(feature = "governor")]
+    pre_auth_rate_limit: Option<crate::middleware::governor::PreAuthRateLimitConfig>,
 }
 
 impl<T> ServiceBuilder<T>
@@ -222,6 +224,8 @@ where
             shutdown: None,
             #[cfg(feature = "governor")]
             rate_classifier: None,
+            #[cfg(feature = "governor")]
+            pre_auth_rate_limit: None,
         }
     }
 
@@ -713,6 +717,22 @@ where
         classifier: impl crate::middleware::RateClassifier,
     ) -> Self {
         self.rate_classifier = Some(std::sync::Arc::new(classifier));
+        self
+    }
+
+    /// Bound authentication and authorization work with an independent peer-IP quota.
+    ///
+    /// Runs before caller and token authentication, so invalid credentials and
+    /// authorization failures consume this quota too. Keys only by the socket's
+    /// peer IP, never by claims or forwarded headers. Clients behind one proxy
+    /// share its quota. This opt-in layer is independent of `rate_limit.auto_apply`
+    /// and the post-authentication caller quota and classifier.
+    #[cfg(feature = "governor")]
+    pub fn with_pre_auth_rate_limit(
+        mut self,
+        config: crate::middleware::governor::PreAuthRateLimitConfig,
+    ) -> Self {
+        self.pre_auth_rate_limit = Some(config);
         self
     }
 
@@ -1677,7 +1697,7 @@ where
         };
 
         // Apply general middleware stack (CORS, compression, timeout, TraceLayer, etc.)
-        // Layers are applied in reverse order (bottom layer is innermost/first)
+        // Each subsequently applied Axum layer wraps the existing router.
         // Whether the HTTP listener will terminate TLS. An injected config
         // activates TLS independently of the `[tls]` section, so both sources
         // count — otherwise HSTS would be dropped on encrypted connections.
@@ -1772,10 +1792,50 @@ where
             }
         }
 
+        // Auto-apply governor rate-limit middleware if enabled.
+        //
+        // Layer order rationale: governor is applied here, BEFORE cedar and audit
+        // and BEFORE token auth in source order. Because axum applies
+        // layers in reverse, the runtime order becomes:
+        //
+        //     Token Auth -> Audit -> Cedar -> Governor -> Handler
+        //
+        // This ensures Claims (set by token auth) are visible to the governor
+        // middleware. The layer is attached to the OUTER router, so
+        // `request.uri().path()` sees the full pre-nest path -- route keys like
+        // "POST /api/v1/uploads" match as documented.
+        #[cfg(feature = "governor")]
+        if config.rate_limit.auto_apply {
+            let mut gov =
+                crate::middleware::governor::GovernorRateLimit::new(config.rate_limit.clone());
+            let custom_classifier = self.rate_classifier.is_some();
+            if let Some(classifier) = self.rate_classifier.take() {
+                gov = gov.with_shared_classifier(classifier);
+            }
+            let (anonymous_rpm, anonymous_burst) = config.rate_limit.anonymous_quota();
+            tracing::info!(
+                classifier = if custom_classifier { "custom" } else { "claims-or-ip" },
+                per_user_rpm = config.rate_limit.per_user_rpm,
+                per_user_burst = (config.rate_limit.per_user_rpm / 10).max(1),
+                per_client_rpm = config.rate_limit.per_client_rpm,
+                per_client_burst = (config.rate_limit.per_client_rpm / 10).max(1),
+                anonymous_rpm,
+                anonymous_burst,
+                trust_forwarded_headers = config.rate_limit.trust_forwarded_headers,
+                exempt_paths = ?config.rate_limit.exempt_paths,
+                route_overrides = config.rate_limit.routes.len(),
+                "Auto-applying governor rate-limit middleware"
+            );
+            app = app.layer(axum::middleware::from_fn_with_state(
+                gov,
+                crate::middleware::governor::GovernorRateLimit::middleware,
+            ));
+        }
+
         // Auto-apply Cedar middleware if available (resolved earlier so the
         // GraphQL transport can share the same instance for resolver checks).
         // NOTE: Cedar must be applied BEFORE JWT because Axum layers run in reverse order
-        // This ensures the execution order is: Request → General Middleware → JWT → Cedar → Handler
+        // Token authentication executes before Cedar; the governor executes after it.
         #[cfg(feature = "cedar-authz")]
         if let Some(cedar) = cedar_authz {
             app = app.layer(axum::middleware::from_fn_with_state(
@@ -1786,7 +1846,7 @@ where
 
         // Apply audit middleware if configured
         // NOTE: Applied BEFORE token auth in layer order, so it runs AFTER token auth.
-        // Execution order: Request → General MW → Token Auth → Audit MW → Cedar → Handler
+        // Token authentication executes before audit; Cedar and governor execute after it.
         // This ensures Claims are available when the audit middleware runs.
         #[cfg(feature = "audit")]
         if let Some(ref logger) = audit_logger {
@@ -1796,35 +1856,9 @@ where
             ));
         }
 
-        // Auto-apply governor rate-limit middleware if enabled.
-        //
-        // Layer order rationale: governor is applied here, AFTER cedar (above)
-        // and BEFORE token auth (below) in source order. Because axum applies
-        // layers in reverse, the runtime order becomes:
-        //
-        //     Request -> General MW -> Token Auth -> Audit -> Cedar -> Governor -> Handler
-        //
-        // This ensures Claims (set by token auth) are visible to the governor
-        // middleware. The layer is attached to the OUTER router, so
-        // `request.uri().path()` sees the full pre-nest path -- route keys like
-        // "POST /api/v1/uploads" match as documented.
-        #[cfg(feature = "governor")]
-        if config.rate_limit.auto_apply {
-            let mut gov =
-                crate::middleware::governor::GovernorRateLimit::new(config.rate_limit.clone());
-            if let Some(classifier) = self.rate_classifier.take() {
-                gov = gov.with_shared_classifier(classifier);
-            }
-            tracing::debug!("Auto-applying governor rate-limit middleware");
-            app = app.layer(axum::middleware::from_fn_with_state(
-                gov,
-                crate::middleware::governor::GovernorRateLimit::middleware,
-            ));
-        }
-
         // Auto-apply token authentication middleware if configured
         // NOTE: Token auth must be applied AFTER Cedar because Axum layers run in reverse order
-        // This ensures the execution order is: Request → General Middleware → Token Auth → Cedar → Handler
+        // Token authentication executes before audit, Cedar, and governor.
         //
         // The constructed validators are also kept for the gRPC routes below,
         // so both listeners enforce the same identity configuration.
@@ -1982,6 +2016,25 @@ where
                 );
                 app = app.layer(crate::caller_auth::CallerAuthLayer::http(policy.clone()));
             }
+        }
+
+        #[cfg(feature = "governor")]
+        if let Some(pre_auth) = self.pre_auth_rate_limit.take() {
+            tracing::info!(
+                requests_per_minute = pre_auth.requests_per_minute.get(),
+                burst_size = pre_auth.burst_size.get(),
+                exempt_paths = ?pre_auth.exempt_paths,
+                "Applying pre-authentication peer-IP rate limit"
+            );
+            let gov =
+                crate::middleware::governor::GovernorRateLimit::new(pre_auth.into_rate_limit())
+                    .with_classifier(|request: &crate::middleware::RateRequest<'_>| {
+                        crate::middleware::RateKey::Anonymous(request.client_ip())
+                    });
+            app = app.layer(axum::middleware::from_fn_with_state(
+                gov,
+                crate::middleware::governor::GovernorRateLimit::middleware,
+            ));
         }
 
         // Inject AuditLogger as a request extension so auth middleware can access it.
@@ -4839,5 +4892,214 @@ mod audit_request_tracking_tests {
         for audit_http in [true, false] {
             assert_request_correlation(config.clone(), &token, audit_http).await;
         }
+    }
+}
+
+#[cfg(all(test, feature = "governor", feature = "jwt"))]
+mod rate_limit_posture_tests {
+    use super::*;
+    use crate::config::{JwtConfig, RateLimitConfig, TokenConfig};
+    use crate::middleware::governor::PreAuthRateLimitConfig;
+    use crate::prelude::{ApiVersion, VersionedApiBuilder};
+    use axum::{body::Body, extract::ConnectInfo, http::Request, routing::get};
+    use std::net::SocketAddr;
+    use std::num::NonZeroU32;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    use tower::ServiceExt;
+
+    fn fixture(auto_apply: bool) -> (Config<()>, tempfile::NamedTempFile, String) {
+        crate::crypto::ensure_jwt_crypto_provider();
+        let key = [42_u8; 32];
+        let key_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(key_file.path(), key).unwrap();
+        let mut config = Config::<()> {
+            token: Some(TokenConfig::Jwt(JwtConfig {
+                public_key_path: key_file.path().into(),
+                algorithm: "HS256".into(),
+                issuer: None,
+                audience: None,
+                public_paths: vec!["/health".into(), "/ready".into()],
+            })),
+            rate_limit: RateLimitConfig {
+                auto_apply,
+                per_user_rpm: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        #[cfg(feature = "audit")]
+        {
+            config.audit = None;
+        }
+        // Keep the mutable binding valid in feature sets without audit.
+        config.service.name = "rate-posture-test".into();
+        let token = jsonwebtoken::encode(
+            &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
+            &serde_json::json!({"sub":"user:alice", "exp":chrono::Utc::now().timestamp()+3600}),
+            &jsonwebtoken::EncodingKey::from_secret(&key),
+        )
+        .unwrap();
+        (config, key_file, token)
+    }
+
+    fn request(path: &str, peer: &str, credential: &str) -> Request<Body> {
+        let mut request = Request::builder()
+            .uri(path)
+            .header("authorization", format!("Bearer {credential}"))
+            .header(
+                "x-forwarded-for",
+                if credential == "invalid-two" {
+                    "10.55.0.2"
+                } else {
+                    "10.55.0.1"
+                },
+            )
+            .body(Body::empty())
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(peer.parse::<SocketAddr>().unwrap()));
+        request
+    }
+
+    fn routes() -> VersionedRoutes {
+        VersionedApiBuilder::new()
+            .with_base_path("/api")
+            .add_version(ApiVersion::V1, |router| {
+                router.route("/resource", get(|| async { "ok" }))
+            })
+            .build_routes()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pre_auth_limits_invalid_credentials_by_peer_and_exempts_probes() {
+        let (config, _key, token) = fixture(false);
+        let app = ServiceBuilder::new()
+            .with_config(config)
+            .with_routes(routes())
+            .with_pre_auth_rate_limit(PreAuthRateLimitConfig::new(
+                NonZeroU32::MIN,
+                NonZeroU32::MIN,
+            ))
+            .try_build()
+            .unwrap()
+            .app;
+        let response = app
+            .clone()
+            .oneshot(request("/api/v1/resource", "10.0.0.1:1", "invalid-one"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), http::StatusCode::UNAUTHORIZED);
+        let response = app
+            .clone()
+            .oneshot(request("/api/v1/resource", "10.0.0.1:2", "invalid-two"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), http::StatusCode::TOO_MANY_REQUESTS);
+        assert!(response.headers().contains_key("retry-after"));
+        let response = app
+            .clone()
+            .oneshot(request("/api/v1/resource", "10.0.0.2:1", &token))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            http::StatusCode::OK,
+            "peer buckets are independent"
+        );
+        let response = app
+            .oneshot(request("/health", "10.0.0.1:1", "invalid"))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            http::StatusCode::OK,
+            "probes bypass the peer quota"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn post_auth_counts_only_verified_requests_when_pre_auth_is_not_configured() {
+        let (config, _key, token) = fixture(true);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let captured = calls.clone();
+        let app = ServiceBuilder::new()
+            .with_config(config)
+            .with_routes(routes())
+            .with_rate_classifier(move |request: &crate::middleware::RateRequest<'_>| {
+                captured.fetch_add(1, Ordering::SeqCst);
+                assert!(request
+                    .extensions()
+                    .get::<crate::middleware::Claims>()
+                    .is_some());
+                crate::middleware::RateKey::Anonymous(request.client_ip())
+            })
+            .try_build()
+            .unwrap()
+            .app;
+        for credential in ["invalid-one", "invalid-two"] {
+            let response = app
+                .clone()
+                .oneshot(request("/api/v1/resource", "10.0.0.1:1", credential))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), http::StatusCode::UNAUTHORIZED);
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        let response = app
+            .oneshot(request("/api/v1/resource", "10.0.0.1:1", &token))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), http::StatusCode::OK);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(feature = "cedar-authz")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cedar_denials_do_not_reach_the_post_auth_classifier() {
+        let (config, _key, token) = fixture(true);
+        let dir = tempfile::tempdir().unwrap();
+        let policy = dir.path().join("policy.cedar");
+        std::fs::write(&policy, "forbid(principal, action, resource);").unwrap();
+        let cedar = crate::middleware::cedar::CedarAuthz::from_config(crate::config::CedarConfig {
+            enabled: true,
+            policy_path: policy,
+            hot_reload: false,
+            cache_enabled: false,
+            hot_reload_interval_secs: 60,
+            cache_ttl_secs: 60,
+            fail_open: false,
+        })
+        .await
+        .unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let captured = calls.clone();
+        let app = ServiceBuilder::new()
+            .with_config(config)
+            .with_routes(routes())
+            .with_cedar(cedar)
+            .with_rate_classifier(move |request: &crate::middleware::RateRequest<'_>| {
+                captured.fetch_add(1, Ordering::SeqCst);
+                crate::middleware::RateKey::Anonymous(request.client_ip())
+            })
+            .try_build()
+            .unwrap()
+            .app;
+        for _ in 0..3 {
+            let response = app
+                .clone()
+                .oneshot(request("/api/v1/resource", "10.0.0.1:1", &token))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "Cedar evaluates before caller quota"
+        );
     }
 }

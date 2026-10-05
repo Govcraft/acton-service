@@ -587,7 +587,7 @@ let results: Vec<Option<String>> = pipe()
 ```bash
 # Production environment
 export ACTON_REDIS_URL=redis://cache.prod.example.com:6379
-export ACTON_REDIS_MAX_CONNECTIONS=100
+export ACTON_REDIS__MAX_CONNECTIONS=100
 ```
 
 ### Kubernetes Secret Integration

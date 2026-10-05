@@ -1,5 +1,10 @@
 # Example configuration file for acton-service microservices
 # Copy this to config.toml and customize for your service
+# Environment overrides: ACTON_ prefix, uppercase keys, __ between table levels.
+# Preserve underscores within fields: ACTON_SERVICE__LOG_LEVEL=debug.
+# Custom root api_key uses ACTON_API_KEY; feature_flags.new_dashboard uses
+# ACTON_FEATURE_FLAGS__NEW_DASHBOARD. Unambiguous legacy names still work.
+# ACTON_PROTO_DIR is reserved for build-time protobuf discovery.
 
 [service]
 name = "my-service"

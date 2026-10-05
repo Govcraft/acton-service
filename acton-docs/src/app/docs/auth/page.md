@@ -119,11 +119,11 @@ OAuth integration provides authentication via external identity providers: Googl
 
 **When to use**: Social login (Sign in with Google/GitHub), enterprise SSO via OIDC, reducing password management burden.
 
-**Core types**: `OAuthProvider` trait, `GoogleProvider`, `GitHubProvider`, `CustomOidcProvider`
+**Core types**: `OAuthProvider` trait, `OAuthProviderRegistry`, `MemoryOAuthStateManager`, `GoogleProvider`, `GitHubProvider`, `CustomOidcProvider`. Use `RedisOAuthStateManager` with `cache` for multiple processes.
 
 ```toml
 [dependencies]
-acton-service = { version = "{% version() %}", features = ["auth", "oauth", "cache"] }
+acton-service = { version = "{% version() %}", features = ["oauth"] }
 ```
 
 **Details**: [OAuth/OIDC Guide](/docs/oauth)
@@ -166,7 +166,7 @@ Password Hashing + Token Auth
 | Use Case | Capabilities | Features |
 |----------|-------------|----------|
 | REST API with user accounts | Password Hashing + Tokens + Sessions | `auth`, `cache` |
-| Mobile app with social login | OAuth + Tokens + Sessions | `auth`, `oauth`, `cache` |
+| Mobile app with social login | OAuth + Tokens + Sessions | `oauth`, `session-memory` (add `cache` for Redis OAuth state) |
 | Microservices communication | API Keys | `auth`, `cache` |
 | SPA with refresh tokens | Tokens + Sessions | `auth`, `cache` |
 | Third-party API access | API Keys | `auth`, `cache` |

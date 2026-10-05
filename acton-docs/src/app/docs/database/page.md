@@ -497,7 +497,7 @@ tx.commit().await?;
 ```bash
 # Production environment
 export ACTON_DATABASE_URL=postgres://user:pass@db.prod.example.com/mydb
-export ACTON_DATABASE_MAX_CONNECTIONS=100
+export ACTON_DATABASE__MAX_CONNECTIONS=100
 ```
 
 ### Kubernetes Secret Integration

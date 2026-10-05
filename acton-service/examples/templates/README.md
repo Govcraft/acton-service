@@ -27,7 +27,7 @@ cp config.toml.example config.toml
 ```
 
 Configuration precedence (highest to lowest):
-1. Environment variables (`ACTON_SERVICE_PORT=8080`)
+1. Environment variables (`ACTON_SERVICE__PORT=8080`)
 2. `config.toml` file
 3. Default values
 
@@ -83,26 +83,26 @@ cp examples/templates/build.rs.example build.rs
 
 ### Environment Variables
 
-All config values can be overridden via environment variables:
+Use `ACTON_` followed by uppercase keys. Separate nested table levels with `__` and keep single underscores within field names. Unambiguous legacy names such as `ACTON_DATABASE_URL` remain supported.
 
 ```bash
 # Service settings
-export ACTON_SERVICE_NAME=my-service
-export ACTON_SERVICE_PORT=8080
+export ACTON_SERVICE__NAME=my-service
+export ACTON_SERVICE__PORT=8080
 
 # Database
 export ACTON_DATABASE_URL=postgres://localhost/mydb
 
 # Redis cache
-export ACTON_CACHE_ENABLED=true
-export ACTON_CACHE_URL=redis://localhost:6379
+export ACTON_REDIS__URL=redis://localhost:6379
 
-# JWT
-export ACTON_JWT_SECRET=your-secret-key
+# Token validation (default PASETO format)
+export ACTON_TOKEN__FORMAT=paseto
+export ACTON_TOKEN__KEY_PATH=keys/paseto.key
 
 # Cedar authorization
-export ACTON_CEDAR_ENABLED=true
-export ACTON_CEDAR_POLICY_PATH=policies.cedar
+export ACTON_CEDAR__ENABLED=true
+export ACTON_CEDAR__POLICY_PATH=policies.cedar
 ```
 
 ### Feature Flags
@@ -131,10 +131,13 @@ config/
 └── production.toml    # Production overrides
 ```
 
-Load based on environment:
-```bash
-export ACTON_CONFIG=config/production.toml
+Select an explicit file in application code:
+
+```rust
+let config = acton_service::config::Config::<()>::load_from("config/production.toml")?;
 ```
+
+For automatic discovery, place `config.toml` in the current directory or the service's platform configuration directory. `ACTON_PROTO_DIR` controls protobuf compilation only; it is excluded from runtime configuration overrides.
 
 ## Next Steps
 
