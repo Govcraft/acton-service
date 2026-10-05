@@ -23,6 +23,7 @@ release/
 
 # Exception: Allow specific markdown files
 !README.md
+!SECURITY.md
 !TUTORIAL.md
 !CHANGELOG.md
 !acton-docs/
