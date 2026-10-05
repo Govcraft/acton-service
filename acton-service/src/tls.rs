@@ -38,11 +38,10 @@
 //! accessors are `ServiceBuilder`-only, since `Server` has no builder to
 //! register them on.
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::borrow::Cow;
 use std::io;
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -55,9 +54,11 @@ use tokio_rustls::rustls::server::WebPkiClientVerifier;
 use tokio_rustls::rustls::{RootCertStore, ServerConfig};
 use tokio_rustls::server::TlsStream;
 use tokio_rustls::TlsAcceptor;
+use tokio_util::sync::CancellationToken;
 
 use crate::config::TlsConfig;
 use crate::error::Result;
+use crate::reload::{BoxError, Fingerprint, Reloadable};
 
 /// The credentials a TLS listener serves, replaceable while it runs.
 ///
@@ -109,7 +110,7 @@ struct TlsConfigSourceInner {
     /// baseline so a rotation that lands between this load and the poll task
     /// being spawned is caught on the first tick rather than missed until the
     /// next rotation.
-    initial_fingerprint: Option<u64>,
+    initial_fingerprint: Option<Fingerprint>,
 }
 
 impl TlsConfigSource {
@@ -183,7 +184,7 @@ impl TlsConfigSource {
     /// `None` for a static source, or when the files could not be hashed at
     /// load. Seeds the reload poll's baseline so a rotation between this load and
     /// the poll task being spawned is detected on the first tick.
-    pub(crate) fn initial_fingerprint(&self) -> Option<u64> {
+    pub(crate) fn initial_fingerprint(&self) -> Option<Fingerprint> {
         self.inner.initial_fingerprint
     }
 
@@ -211,38 +212,42 @@ impl TlsConfigSource {
     /// silently stopped working will keep working until the certificate expires
     /// and then fail all at once.
     pub fn reload(&self) -> Result<()> {
+        let result = self.try_reload();
+        match (&result, self.inner.origin.as_ref()) {
+            (Ok(()), Some(origin)) => tracing::info!(
+                cert_path = %origin.cert_path.display(),
+                key_path = %origin.key_path.display(),
+                "TLS credentials reloaded; new handshakes use the new certificate"
+            ),
+            (Err(e), Some(origin)) => tracing::error!(
+                cert_path = %origin.cert_path.display(),
+                key_path = %origin.key_path.display(),
+                error = %e,
+                "TLS credential reload failed; continuing to serve the previous \
+                 certificate. New credentials will not take effect until a reload \
+                 succeeds."
+            ),
+            (Err(e), None) => tracing::error!("{}", e),
+            (Ok(()), None) => {}
+        }
+        result
+    }
+
+    /// [`reload`](Self::reload) without the logging, for the watched-file
+    /// poll, which reports the outcome itself.
+    fn try_reload(&self) -> Result<()> {
         let Some(ref origin) = self.inner.origin else {
-            let err = crate::error::Error::Tls(
+            return Err(crate::error::Error::Tls(
                 "TLS credentials cannot be reloaded: this source was built from an \
                  already-loaded ServerConfig and has no files to reread"
                     .to_string(),
-            );
-            tracing::error!("{}", err);
-            return Err(err);
+            ));
         };
-
-        match load_server_config(origin) {
-            Ok(server_config) => {
-                self.inner.current.store(server_config);
-                tracing::info!(
-                    cert_path = %origin.cert_path.display(),
-                    key_path = %origin.key_path.display(),
-                    "TLS credentials reloaded; new handshakes use the new certificate"
-                );
-                Ok(())
-            }
-            Err(e) => {
-                tracing::error!(
-                    cert_path = %origin.cert_path.display(),
-                    key_path = %origin.key_path.display(),
-                    error = %e,
-                    "TLS credential reload failed; continuing to serve the previous \
-                     certificate. New credentials will not take effect until a reload \
-                     succeeds."
-                );
-                Err(e)
-            }
-        }
+        // Every fallible step is in `load_server_config`. The store is the
+        // last step and cannot fail, as `Reloadable::reload` requires.
+        let server_config = load_server_config(origin)?;
+        self.inner.current.store(server_config);
+        Ok(())
     }
 }
 
@@ -443,167 +448,63 @@ impl std::fmt::Debug for TlsReloadHandle {
 /// Returns an error when any file cannot be read. A caller must treat that as
 /// "unknown, try again", not as "unchanged" (which would strand a rotation) and
 /// not as "changed" (which would reload from a half-written file every tick).
-fn fingerprint_credentials(tls_config: &TlsConfig) -> std::io::Result<u64> {
-    let mut hasher = DefaultHasher::new();
+fn fingerprint_credentials(tls_config: &TlsConfig) -> std::io::Result<Fingerprint> {
+    crate::reload::fingerprint_files(&credential_paths(tls_config))
+}
 
-    // Hash the paths as well as the bytes: a config edit that repoints at a
-    // different file with identical contents is not a rotation, but a config
-    // that swaps which of two files is authoritative should not alias.
-    for path in [
+/// The files a TLS source reloads from, in a fixed order: certificate, key,
+/// then the client-CA bundle if there is one.
+fn credential_paths(tls_config: &TlsConfig) -> Vec<PathBuf> {
+    [
         Some(&tls_config.cert_path),
         Some(&tls_config.key_path),
         tls_config.client_ca_path.as_ref(),
     ]
     .into_iter()
     .flatten()
-    {
-        path.hash(&mut hasher);
-        // Length-prefix each file so concatenation cannot forge equality
-        // between different splits of the same total bytes.
-        let bytes = std::fs::read(path)?;
-        bytes.len().hash(&mut hasher);
-        bytes.hash(&mut hasher);
-    }
-
-    Ok(hasher.finish())
+    .cloned()
+    .collect()
 }
 
-/// What one poll tick concluded about a source's credential files.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ReloadTick {
-    /// The files hash to what they hashed last tick; nothing was reloaded.
-    Unchanged,
-    /// The files changed and the new credentials are installed. The caller
-    /// stores this fingerprint as the new baseline.
-    Reloaded { fingerprint: u64 },
-    /// The files could not be read. The baseline is deliberately left alone so
-    /// the next tick retries.
-    ReadFailed,
-    /// The files changed but failed to load or parse; the previous credentials
-    /// keep serving. The baseline is left alone so the next tick retries even
-    /// if the (still broken) files do not change again — a truncated file that
-    /// is later completed in place must not be mistaken for "already seen".
-    ReloadFailed,
-}
-
-/// Run one poll tick against a source: read, hash, compare, reload on change.
-///
-/// Split out from the timer loop so the decision logic is testable without
-/// waiting on real clocks. `last_seen` is the fingerprint this source was last
-/// known to be serving, or `None` if that is not yet established.
-///
-/// Never panics and never propagates an error: a poll task that dies takes
-/// rotation down silently and leaves the service to expire, which is a worse
-/// failure than any single bad tick.
-pub(crate) fn reload_tick(
-    source: &TlsConfigSource,
+/// One listener's credentials as the watched-file poll sees them.
+#[derive(Clone)]
+struct ListenerCredentials {
+    source: TlsConfigSource,
     listener: TlsListenerKind,
-    last_seen: Option<u64>,
-) -> ReloadTick {
-    let Some(origin) = source.origin() else {
-        // Callers filter static sources out before spawning a poll task; if one
-        // reaches here, doing nothing is the only correct answer.
-        return ReloadTick::Unchanged;
-    };
+}
 
-    let fingerprint = match fingerprint_credentials(origin) {
-        Ok(fingerprint) => fingerprint,
-        Err(e) => {
-            tracing::warn!(
-                listener = listener.as_str(),
-                cert_path = %origin.cert_path.display(),
-                error = %e,
-                "could not read TLS credential files while polling for rotation; \
-                 continuing to serve the current certificate and retrying next tick"
-            );
-            return ReloadTick::ReadFailed;
-        }
-    };
-
-    if last_seen == Some(fingerprint) {
-        return ReloadTick::Unchanged;
+impl Reloadable for ListenerCredentials {
+    fn label(&self) -> Cow<'_, str> {
+        Cow::Owned(format!("the {} listener's TLS credentials", self.listener))
     }
 
-    match source.reload() {
-        Ok(()) => {
-            tracing::info!(
-                listener = listener.as_str(),
-                cert_path = %origin.cert_path.display(),
-                "TLS credential files changed on disk; the {listener} listener now \
-                 serves the new certificate"
-            );
-            ReloadTick::Reloaded { fingerprint }
-        }
-        // `reload` has already logged the failure at ERROR with the cause.
-        Err(_) => ReloadTick::ReloadFailed,
+    /// Empty for a static source, which the poll then leaves alone.
+    fn watched_paths(&self) -> Vec<PathBuf> {
+        self.source
+            .origin()
+            .map(credential_paths)
+            .unwrap_or_default()
+    }
+
+    fn reload(&self) -> std::result::Result<(), BoxError> {
+        self.source.try_reload().map_err(Into::into)
     }
 }
 
-/// Poll a source's credential files on an interval, reloading on content change.
-///
-/// The returned task runs until it is aborted. It holds only a clone of the
-/// source, so it never keeps a listener alive.
+/// Polls a source's credential files on an interval, reloading on content
+/// change, through [`crate::reload::spawn_reload_poll`].
 ///
 /// The baseline is the fingerprint the source captured when it *loaded* its
-/// credentials (not when this task spawns), so a rotation that lands during the
-/// rest of startup — after the load, before this task exists — is caught on the
-/// first tick rather than mistaken for the baseline. A service that starts and
-/// never rotates still does no reloading at all.
+/// credentials (not when this task spawns), so a rotation that lands during
+/// the rest of startup is caught on the first tick rather than mistaken for
+/// the baseline.
 pub(crate) fn spawn_reload_poll(
     source: TlsConfigSource,
     listener: TlsListenerKind,
     period: Duration,
 ) -> tokio::task::JoinHandle<()> {
-    // Seed the baseline from the load-time fingerprint the source recorded. A
-    // source whose files could not be hashed at load carries `None`, so the
-    // first successful tick establishes it — reloading once, redundantly, rather
-    // than missing a rotation.
-    let mut last_seen = source.initial_fingerprint();
-
-    tracing::info!(
-        listener = listener.as_str(),
-        interval_secs = period.as_secs(),
-        "polling TLS credential files for rotation"
-    );
-
-    tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(period);
-        // A tick missed because a reload ran long should not be made up for by
-        // a burst of back-to-back ticks; rotation is not time-critical to the
-        // second.
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        // The first tick of a tokio interval completes immediately; consume it
-        // so the first real check happens one period in, after the baseline.
-        ticker.tick().await;
-
-        loop {
-            ticker.tick().await;
-            // The tick reads and hashes the credential files with blocking
-            // `std::fs`. Run it on the blocking pool so a slow or networked
-            // secret mount stalls only a blocking thread, never a runtime worker
-            // that is also driving live connections. The tick stays fail-closed:
-            // it installs new credentials only on a clean read-and-load.
-            let source_for_tick = source.clone();
-            match tokio::task::spawn_blocking(move || {
-                reload_tick(&source_for_tick, listener, last_seen)
-            })
-            .await
-            {
-                Ok(ReloadTick::Reloaded { fingerprint }) => last_seen = Some(fingerprint),
-                Ok(_) => {}
-                // The tick never panics by construction; a `JoinError` here would
-                // mean the blocking thread was cancelled or panicked. Log and
-                // retry next tick rather than letting the poll task die and take
-                // rotation down silently.
-                Err(e) => tracing::error!(
-                    listener = listener.as_str(),
-                    error = %e,
-                    "TLS reload poll tick did not run to completion; \
-                     retrying on the next tick"
-                ),
-            }
-        }
-    })
+    let baseline = source.initial_fingerprint();
+    crate::reload::spawn_reload_poll(ListenerCredentials { source, listener }, period, baseline)
 }
 
 /// Reload every source in `handle` when the process receives `SIGHUP`.
@@ -737,15 +638,12 @@ pub(crate) fn validate_reload_interval(
     tls_cfg: &TlsConfig,
     section: &str,
 ) -> Result<Option<Duration>> {
-    match tls_cfg.reload_interval_secs {
-        None => Ok(None),
-        Some(0) => Err(crate::error::Error::Tls(format!(
-            "{section} sets reload_interval_secs = 0, which would poll the certificate \
-             files without pause. Omit the field to disable polling, or set a positive \
-             number of seconds."
-        ))),
-        Some(secs) => Ok(Some(Duration::from_secs(secs))),
-    }
+    crate::reload::validate_reload_interval(
+        tls_cfg.reload_interval_secs,
+        section,
+        "reload_interval_secs",
+    )
+    .map_err(|e| crate::error::Error::Tls(e.to_string()))
 }
 
 /// Warn when a section configures rotation triggers that its source cannot honour.
@@ -871,7 +769,10 @@ pub struct TlsListener {
     rx: Option<mpsc::Receiver<(TlsStream<TcpStream>, SocketAddr)>>,
     /// The pump task, kept so `Drop` can abort it rather than let it outlive the
     /// listener holding the socket open.
-    pump: Option<tokio::task::JoinHandle<()>>,
+    pump: Option<tokio::task::AbortHandle>,
+    /// Cancelled when the pump stops while this listener is still alive. See
+    /// [`stopped`](Self::stopped).
+    stopped: CancellationToken,
 }
 
 impl Drop for TlsListener {
@@ -930,10 +831,20 @@ async fn handshake_pump(
                     let _ = tx.send((tls_stream, addr)).await;
                 }
                 Ok(Err(e)) => {
-                    tracing::warn!("TLS handshake failed from {}: {}", addr, e);
+                    let kind = HandshakeFailureKind::of(&e);
+                    count_handshake_failure(kind);
+                    tracing::warn!(
+                        kind = kind.as_str(),
+                        "TLS handshake failed from {}: {}",
+                        addr,
+                        e
+                    );
                 }
                 Err(_elapsed) => {
+                    let kind = HandshakeFailureKind::Timeout;
+                    count_handshake_failure(kind);
                     tracing::warn!(
+                        kind = kind.as_str(),
                         "TLS handshake from {} did not complete within {:?}; dropping the \
                          connection",
                         addr,
@@ -942,6 +853,127 @@ async fn handshake_pump(
                 }
             }
         });
+    }
+}
+
+/// Why a TLS handshake on a [`TlsListener`] failed, as a bounded label.
+///
+/// Every failed handshake is counted on the `tls.handshake_failures` counter
+/// (Prometheus: `tls_handshake_failures_total`) with this as its `kind`
+/// attribute, and logged at WARN with the same value in a `kind` field. The
+/// label set is small and fixed, so an operator can tell a plaintext probe on
+/// the TLS port from a client that presented no certificate or an untrusted
+/// one without reading error prose, and alert on each separately.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum HandshakeFailureKind {
+    /// The peer did not speak TLS at all: typically plaintext HTTP sent to an
+    /// HTTPS port. Label `plaintext`.
+    Plaintext,
+    /// Mutual TLS required a client certificate and the peer presented none.
+    /// Label `no_client_cert`.
+    NoClientCert,
+    /// The peer's certificate, or a revocation list checked against it, was
+    /// rejected: an untrusted issuer, an expired or revoked certificate, a
+    /// malformed chain. Label `bad_cert`.
+    BadCert,
+    /// The handshake did not finish within the listener's handshake timeout.
+    /// Label `timeout`.
+    Timeout,
+    /// The peer closed the connection before the handshake finished. Label
+    /// `eof`.
+    Eof,
+    /// Any other failure: no shared protocol version or cipher suite, a fatal
+    /// alert from the peer, a malformed handshake message. Label `other`.
+    Other,
+}
+
+impl HandshakeFailureKind {
+    /// The label recorded for this kind.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Plaintext => "plaintext",
+            Self::NoClientCert => "no_client_cert",
+            Self::BadCert => "bad_cert",
+            Self::Timeout => "timeout",
+            Self::Eof => "eof",
+            Self::Other => "other",
+        }
+    }
+
+    /// Classify the error a server-side handshake returned.
+    ///
+    /// Pure. Never returns [`Timeout`](Self::Timeout): a timed-out handshake
+    /// yields no error to classify, and the listener labels it directly.
+    #[must_use]
+    pub fn of(error: &io::Error) -> Self {
+        use tokio_rustls::rustls::{Error as TlsError, InvalidMessage};
+
+        if error.kind() == io::ErrorKind::UnexpectedEof {
+            return Self::Eof;
+        }
+        match error
+            .get_ref()
+            .and_then(|inner| inner.downcast_ref::<TlsError>())
+        {
+            Some(TlsError::InvalidMessage(InvalidMessage::InvalidContentType)) => Self::Plaintext,
+            Some(TlsError::NoCertificatesPresented) => Self::NoClientCert,
+            Some(TlsError::InvalidCertificate(_) | TlsError::InvalidCertRevocationList(_)) => {
+                Self::BadCert
+            }
+            _ => Self::Other,
+        }
+    }
+}
+
+impl std::fmt::Display for HandshakeFailureKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Count one failed handshake on `tls.handshake_failures{kind}`.
+///
+/// A no-op when no meter provider is installed or the build has no metrics.
+fn count_handshake_failure(kind: HandshakeFailureKind) {
+    #[cfg(feature = "_metrics")]
+    if let Some(meter) = crate::observability::get_meter() {
+        meter
+            .u64_counter("tls.handshake_failures")
+            .with_description("TLS handshakes that failed, by why they failed")
+            .build()
+            .add(1, &[opentelemetry::KeyValue::new("kind", kind.as_str())]);
+    }
+    #[cfg(not(feature = "_metrics"))]
+    let _ = kind;
+}
+
+/// Wait for the handshake pump to end, and mark the listener stopped if it
+/// ended any way other than being aborted.
+///
+/// The pump loops forever, so it ends only by panicking or by the listener's
+/// `Drop` aborting it. An abort is the listener going away on purpose; anything
+/// else leaves a listener that will never accept again, which must not be
+/// silent.
+async fn watch_pump(pump: tokio::task::JoinHandle<()>, stopped: CancellationToken, addr: String) {
+    match pump.await {
+        Err(e) if e.is_cancelled() => {}
+        Err(e) => {
+            tracing::error!(
+                listener = %addr,
+                "the TLS handshake pump panicked ({e}); this listener accepts no further \
+                 connections"
+            );
+            stopped.cancel();
+        }
+        Ok(()) => {
+            tracing::error!(
+                listener = %addr,
+                "the TLS handshake pump returned; this listener accepts no further connections"
+            );
+            stopped.cancel();
+        }
     }
 }
 
@@ -973,6 +1005,7 @@ impl TlsListener {
             handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
             rx: None,
             pump: None,
+            stopped: CancellationToken::new(),
         }
     }
 
@@ -991,6 +1024,21 @@ impl TlsListener {
     #[must_use]
     pub fn config_source(&self) -> &TlsConfigSource {
         &self.config_source
+    }
+
+    /// Resolves if this listener stops accepting while it is still alive.
+    ///
+    /// The handshake pump that feeds [`accept`](axum::serve::Listener::accept)
+    /// runs as its own task. If it ends (it can only panic; it never returns),
+    /// `accept` has nothing left to hand out and parks forever, which to
+    /// `axum::serve` looks exactly like a quiet listener. Await this beside the
+    /// serve future to turn that silent stop into an exit: `ActonService::serve`
+    /// does, and returns an error when it fires.
+    ///
+    /// Never resolves for a healthy listener, nor for one dropped on purpose.
+    /// Take it before handing the listener to `axum::serve`, which consumes it.
+    pub fn stopped(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
+        self.stopped.clone().cancelled_owned()
     }
 }
 
@@ -1011,10 +1059,16 @@ impl axum::serve::Listener for TlsListener {
                 self.handshake_timeout,
                 tx,
             ));
+            self.pump = Some(pump.abort_handle());
+            let addr = self
+                .tcp
+                .local_addr()
+                .map_or_else(|e| format!("<unknown: {e}>"), |a| a.to_string());
+            tokio::spawn(watch_pump(pump, self.stopped.clone(), addr));
             self.rx = Some(rx);
-            self.pump = Some(pump);
         }
 
+        let stopped = self.stopped.clone();
         let rx = self
             .rx
             .as_mut()
@@ -1024,12 +1078,16 @@ impl axum::serve::Listener for TlsListener {
             match rx.recv().await {
                 Some(conn) => conn,
                 // The pump loops forever holding a `tx`, so the channel can only
-                // close if the pump task itself is gone — unreachable in normal
-                // operation. Returning would hand axum a bogus connection and
-                // busy-loop its serve loop, so park this future forever instead;
-                // a graceful shutdown drops the whole listener rather than
-                // relying on `accept()` to resolve.
-                None => std::future::pending().await,
+                // close once the pump task is gone. Returning would hand axum a
+                // bogus connection and busy-loop its serve loop, so park this
+                // future forever instead, and report the stop through
+                // `stopped()` so whoever serves this listener can exit rather
+                // than wait on it. `watch_pump` usually reports first; this
+                // covers any exit it could not see.
+                None => {
+                    stopped.cancel();
+                    std::future::pending().await
+                }
             }
         }
     }
@@ -1330,6 +1388,16 @@ impl axum::extract::connect_info::Connected<axum::serve::IncomingStream<'_, TlsL
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::reload::{reload_tick, PollState, ReloadTick};
+
+    /// One poll tick over the HTTP listener's credentials, from `serving`.
+    fn poll_once(source: &TlsConfigSource, serving: Option<Fingerprint>) -> ReloadTick {
+        let credentials = ListenerCredentials {
+            source: source.clone(),
+            listener: TlsListenerKind::Http,
+        };
+        reload_tick(&credentials, &mut PollState::new(serving))
+    }
     use std::io::Write;
     use std::path::PathBuf;
 
@@ -1797,7 +1865,7 @@ mod tests {
         std::fs::write(&tls_config.key_path, &second.key_pem).expect("rewrite key");
 
         // The very first tick, seeded from the load-time baseline, must catch it.
-        let tick = reload_tick(&source, TlsListenerKind::Http, source.initial_fingerprint());
+        let tick = poll_once(&source, source.initial_fingerprint());
         let ReloadTick::Reloaded { fingerprint } = tick else {
             panic!("a rotation between load and the first poll must be detected, got {tick:?}");
         };
@@ -1858,9 +1926,8 @@ mod tests {
     //
     // The tick logic is exercised directly rather than through
     // `spawn_reload_poll`, so these tests assert what the poll decides without
-    // waiting on a real clock. What the timer loop adds on top — call
-    // `reload_tick` on an interval, carry the fingerprint forward on success —
-    // is the whole of the loop body and is visible in one screen.
+    // waiting on a real clock. The timer loop itself is generic and tested in
+    // `crate::reload`.
 
     #[test]
     fn poll_reloads_when_the_certificate_files_change() {
@@ -1876,7 +1943,7 @@ mod tests {
         std::fs::write(&tls_config.cert_path, &second.cert_pem).expect("rewrite cert");
         std::fs::write(&tls_config.key_path, &second.key_pem).expect("rewrite key");
 
-        let tick = reload_tick(&source, TlsListenerKind::Http, Some(baseline));
+        let tick = poll_once(&source, Some(baseline));
 
         let ReloadTick::Reloaded { fingerprint } = tick else {
             panic!("rewritten credentials must be detected and installed, got {tick:?}");
@@ -1901,7 +1968,7 @@ mod tests {
         let baseline = fingerprint_credentials(&tls_config).expect("baseline fingerprint");
         let before = source.load();
 
-        let tick = reload_tick(&source, TlsListenerKind::Http, Some(baseline));
+        let tick = poll_once(&source, Some(baseline));
 
         assert_eq!(
             tick,
@@ -1934,12 +2001,11 @@ mod tests {
         )
         .expect("write partial cert");
 
-        let tick = reload_tick(&source, TlsListenerKind::Http, Some(baseline));
+        let tick = poll_once(&source, Some(baseline));
 
-        assert_eq!(
-            tick,
-            ReloadTick::ReloadFailed,
-            "an unparseable certificate must fail the tick, not the task"
+        assert!(
+            matches!(tick, ReloadTick::ReloadFailed { .. }),
+            "an unparseable certificate must fail the tick, not the task, got {tick:?}"
         );
         assert!(
             Arc::ptr_eq(&source.load(), &last_good),
@@ -1952,7 +2018,7 @@ mod tests {
         std::fs::write(&tls_config.cert_path, &replacement.cert_pem).expect("finish cert");
         std::fs::write(&tls_config.key_path, &replacement.key_pem).expect("finish key");
 
-        let tick = reload_tick(&source, TlsListenerKind::Http, Some(baseline));
+        let tick = poll_once(&source, Some(baseline));
 
         assert!(
             matches!(tick, ReloadTick::Reloaded { .. }),
@@ -1978,7 +2044,7 @@ mod tests {
 
         std::fs::remove_file(&tls_config.cert_path).expect("remove cert");
 
-        let tick = reload_tick(&source, TlsListenerKind::Http, Some(baseline));
+        let tick = poll_once(&source, Some(baseline));
 
         assert_eq!(
             tick,
@@ -2010,7 +2076,7 @@ mod tests {
             TlsConfigSource::from_server_config(load_server_config(&config).expect("config"));
 
         assert_eq!(
-            reload_tick(&source, TlsListenerKind::Http, None),
+            poll_once(&source, None),
             ReloadTick::Unchanged,
             "a source with no files must not be reported as a failure every tick"
         );
@@ -2044,7 +2110,7 @@ mod tests {
             "identical contents must fingerprint identically however recently written"
         );
         assert_eq!(
-            reload_tick(&source, TlsListenerKind::Http, Some(baseline)),
+            poll_once(&source, Some(baseline)),
             ReloadTick::Unchanged,
             "a touched-but-unchanged file must not be mistaken for a rotation"
         );
@@ -2656,5 +2722,197 @@ mod tests {
         let certs = info.peer_certificates().expect("chain present");
         assert_eq!(certs.as_slice().len(), 1);
         assert_eq!(certs.leaf(), &leaf.der, "the leaf must be the first cert");
+    }
+
+    mod handshake_failure_kind {
+        use super::super::HandshakeFailureKind;
+        use std::io;
+        use tokio_rustls::rustls::{
+            CertRevocationListError, CertificateError, Error as TlsError, InvalidMessage,
+        };
+
+        fn wrapped(error: TlsError) -> io::Error {
+            io::Error::new(io::ErrorKind::InvalidData, error)
+        }
+
+        #[test]
+        fn a_record_that_is_not_tls_is_plaintext() {
+            let error = wrapped(TlsError::InvalidMessage(InvalidMessage::InvalidContentType));
+            assert_eq!(
+                HandshakeFailureKind::of(&error),
+                HandshakeFailureKind::Plaintext
+            );
+        }
+
+        #[test]
+        fn a_missing_client_certificate_is_no_client_cert() {
+            let error = wrapped(TlsError::NoCertificatesPresented);
+            assert_eq!(
+                HandshakeFailureKind::of(&error),
+                HandshakeFailureKind::NoClientCert
+            );
+        }
+
+        #[test]
+        fn a_rejected_certificate_or_crl_is_bad_cert() {
+            for error in [
+                TlsError::InvalidCertificate(CertificateError::UnknownIssuer),
+                TlsError::InvalidCertificate(CertificateError::Expired),
+                TlsError::InvalidCertificate(CertificateError::Revoked),
+                TlsError::InvalidCertRevocationList(CertRevocationListError::BadSignature),
+            ] {
+                let error = wrapped(error);
+                assert_eq!(
+                    HandshakeFailureKind::of(&error),
+                    HandshakeFailureKind::BadCert,
+                    "{error}"
+                );
+            }
+        }
+
+        #[test]
+        fn an_early_close_is_eof() {
+            let error = io::Error::new(io::ErrorKind::UnexpectedEof, "tls handshake eof");
+            assert_eq!(HandshakeFailureKind::of(&error), HandshakeFailureKind::Eof);
+        }
+
+        #[test]
+        fn anything_else_is_other() {
+            for error in [
+                wrapped(TlsError::InvalidMessage(
+                    InvalidMessage::InvalidEmptyPayload,
+                )),
+                wrapped(TlsError::PeerIncompatible(
+                    tokio_rustls::rustls::PeerIncompatible::Tls13RequiredForQuic,
+                )),
+                io::Error::new(io::ErrorKind::ConnectionReset, "reset"),
+                io::Error::new(io::ErrorKind::InvalidData, "not a rustls error"),
+            ] {
+                assert_eq!(
+                    HandshakeFailureKind::of(&error),
+                    HandshakeFailureKind::Other,
+                    "{error}"
+                );
+            }
+        }
+
+        #[test]
+        fn labels_are_stable() {
+            let labels = [
+                HandshakeFailureKind::Plaintext,
+                HandshakeFailureKind::NoClientCert,
+                HandshakeFailureKind::BadCert,
+                HandshakeFailureKind::Timeout,
+                HandshakeFailureKind::Eof,
+                HandshakeFailureKind::Other,
+            ]
+            .map(HandshakeFailureKind::as_str);
+            assert_eq!(
+                labels,
+                [
+                    "plaintext",
+                    "no_client_cert",
+                    "bad_cert",
+                    "timeout",
+                    "eof",
+                    "other"
+                ]
+            );
+            assert_eq!(HandshakeFailureKind::BadCert.to_string(), "bad_cert");
+        }
+    }
+
+    mod pump_supervision {
+        use super::super::{watch_pump, TlsConfigSource, TlsListener};
+        use super::{generate_cert, write_credentials};
+        use std::time::Duration;
+        use tokio::net::TcpListener;
+        use tokio_util::sync::CancellationToken;
+
+        const SETTLE: Duration = Duration::from_secs(5);
+
+        #[tokio::test]
+        async fn a_panicking_pump_marks_the_listener_stopped() {
+            let stopped = CancellationToken::new();
+            let pump = tokio::spawn(async { panic!("pump fault injected by the test") });
+            tokio::time::timeout(SETTLE, watch_pump(pump, stopped.clone(), "test".into()))
+                .await
+                .expect("the watcher returns once the pump ends");
+            assert!(stopped.is_cancelled());
+        }
+
+        #[tokio::test]
+        async fn an_aborted_pump_is_a_deliberate_stop_not_a_failure() {
+            let stopped = CancellationToken::new();
+            let pump = tokio::spawn(std::future::pending::<()>());
+            pump.abort();
+            tokio::time::timeout(SETTLE, watch_pump(pump, stopped.clone(), "test".into()))
+                .await
+                .expect("the watcher returns once the pump ends");
+            assert!(!stopped.is_cancelled());
+        }
+
+        async fn listener() -> TlsListener {
+            crate::crypto::ensure_default_crypto_provider();
+            let dir = tempfile::tempdir().expect("temp dir");
+            let tls_config = write_credentials(dir.path(), &generate_cert("localhost"));
+            let source =
+                TlsConfigSource::from_tls_config(&tls_config).expect("server config loads");
+            let tcp = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+            TlsListener::with_config_source(tcp, source)
+        }
+
+        /// The silent stop this guards against: with the pump gone, `accept()`
+        /// parks forever and `axum::serve` waits on it with nothing to say.
+        #[tokio::test]
+        async fn a_dead_pump_under_a_live_listener_resolves_stopped() {
+            use axum::serve::Listener as _;
+
+            let mut listener = listener().await;
+            let stopped = listener.stopped();
+            // The first accept spawns the pump; nothing connects, so it pends.
+            assert!(
+                tokio::time::timeout(Duration::from_millis(50), listener.accept())
+                    .await
+                    .is_err()
+            );
+            listener
+                .pump
+                .as_ref()
+                .expect("the first accept spawned the pump")
+                .abort();
+            // The next accept finds the channel closed and reports it.
+            let accept = listener.accept();
+            tokio::select! {
+                () = stopped => {}
+                _ = accept => panic!("accept cannot yield a connection with no pump"),
+                () = tokio::time::sleep(SETTLE) => panic!("stopped() never resolved"),
+            }
+        }
+
+        #[tokio::test]
+        async fn a_healthy_listener_never_resolves_stopped() {
+            use axum::serve::Listener as _;
+
+            let mut listener = listener().await;
+            let stopped = listener.stopped();
+            let _ = tokio::time::timeout(Duration::from_millis(50), listener.accept()).await;
+            assert!(tokio::time::timeout(Duration::from_millis(200), stopped)
+                .await
+                .is_err());
+        }
+
+        #[tokio::test]
+        async fn dropping_the_listener_is_not_a_stop() {
+            use axum::serve::Listener as _;
+
+            let mut listener = listener().await;
+            let stopped = listener.stopped();
+            let _ = tokio::time::timeout(Duration::from_millis(50), listener.accept()).await;
+            drop(listener);
+            assert!(tokio::time::timeout(Duration::from_millis(200), stopped)
+                .await
+                .is_err());
+        }
     }
 }

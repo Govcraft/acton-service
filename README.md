@@ -557,6 +557,47 @@ ServiceBuilder::<MyCustomConfig>::new()
 
 See the [Configuration Guide](https://govcraft.github.io/acton-service/docs/configuration#custom-configuration-extensions) for details.
 
+### Binding, Shutdown and Supervision
+
+`serve()` binds and serves in one step. Split it when you need the bound
+address first, for example with `port = 0` in a test harness or a supervisor
+that must publish where the service listens:
+
+```rust
+let stop = tokio_util::sync::CancellationToken::new();
+
+let bound = ServiceBuilder::new()
+    .with_config(config)                     // [service] port = 0
+    .with_routes(routes)
+    .with_shutdown(stop.clone().cancelled_owned())
+    .build()
+    .bind()                                  // binds every listener, accepts nothing yet
+    .await?;
+
+println!("listening on {}", bound.local_addr());
+bound.serve().await?;                        // returns after stop.cancel() or SIGINT/SIGTERM
+```
+
+- `with_listener(tokio::net::TcpListener)` serves on a socket you bound
+  yourself; `with_metrics_listener` does the same for the Prometheus exporter.
+- `with_shutdown(future)` starts the graceful drain when the future resolves,
+  in addition to SIGINT and SIGTERM. A future that has already resolved when
+  `serve()` starts means nothing is accepted and `serve()` returns `Ok(())`.
+- Dropping a `BoundService` without serving closes its sockets; no task runs
+  until `serve()`.
+
+`serve()` supervises everything it starts. If the HTTP listener, the
+separate-port gRPC listener, a TLS listener's handshake pump or the metrics
+exporter stops before shutdown was requested, the rest drain and `serve()`
+returns an error naming what stopped, instead of the process running on while
+serving less than it was configured to.
+
+Every failed TLS handshake is logged at WARN with a `kind` field and counted on
+`tls.handshake_failures{kind}` (Prometheus: `tls_handshake_failures_total`),
+where `kind` is one of `plaintext`, `no_client_cert`, `bad_cert`, `timeout`,
+`eof` or `other`. A plaintext probe on the TLS port and a client presenting an
+untrusted certificate are different incidents; the label tells them apart.
+
 ## Feature Flags
 
 Defaults: `http`, `observability`, `crypto-aws-lc-rs`. Enable only what you need:

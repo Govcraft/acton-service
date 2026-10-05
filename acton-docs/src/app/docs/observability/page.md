@@ -316,6 +316,10 @@ These are refused at startup, before anything binds, rather than surfacing later
 
 The exporter binds *before* the service's own listeners, so a port clash refuses to start rather than leaving a half-serving process; it drains *after* them, so the final scrape still observes the drain.
 
+To serve the exporter on a socket you bound yourself, for example an ephemeral port in a test, pass it with `ServiceBuilder::with_metrics_listener(listener)`. That turns the exporter on even without the table and takes precedence over it; `BoundService::metrics_local_addr()` reports where it listens.
+
+The exporter is supervised with the service: if it stops while the service is running, the service listeners drain and `serve()` returns an error, because a service nobody can scrape is not one that should keep running unnoticed.
+
 {% callout type="note" title="`enabled = false` is not a contradiction here" %}
 `[middleware.metrics] enabled = false` suppresses the HTTP request instruments, not the registry — API-version counters and anything your application records through `get_meter()` still land there. So an exporter alongside `enabled = false` is legitimate and starts normally; it just serves a document with no `http_server_*` families in it. The service logs one warning at startup saying so, rather than refusing.
 {% /callout %}
