@@ -17,7 +17,9 @@ jobs:
   # always runs, and never these jobs directly.
   changes:
     name: detect code changes
-    runs-on: ubuntu-latest
+    # A repository setting can select an existing self-hosted Linux runner.
+    # Fork PRs always use GitHub-hosted runners.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
     outputs:
       code: ${{ steps.detect.outputs.code }}
       docs: ${{ steps.detect.outputs.docs }}
@@ -145,7 +147,9 @@ jobs:
     name: crypto-aws-lc-rs (default)
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
+    # A repository setting can select an existing self-hosted Linux runner.
+    # Fork PRs always use GitHub-hosted runners.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       # Installed from the Ubuntu archive rather than downloaded from GitHub
@@ -175,7 +179,9 @@ jobs:
     name: crypto-ring (opt-in)
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
+    # A repository setting can select an existing self-hosted Linux runner.
+    # Fork PRs always use GitHub-hosted runners.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       # Installed from the Ubuntu archive rather than downloaded from GitHub
@@ -229,7 +235,9 @@ jobs:
     name: audit storage (${{ matrix.backend }})
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
+    # A repository setting can select an existing self-hosted Linux runner.
+    # Fork PRs always use GitHub-hosted runners.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -260,7 +268,9 @@ jobs:
     name: Microsoft SQL Server parity
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
+    # A repository setting can select an existing self-hosted Linux runner.
+    # Fork PRs always use GitHub-hosted runners.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - name: Install protoc
@@ -293,7 +303,9 @@ jobs:
     name: lint ${{ matrix.combo }}
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
+    # A repository setting can select an existing self-hosted Linux runner.
+    # Fork PRs always use GitHub-hosted runners.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -383,7 +395,9 @@ jobs:
     name: docs build
     needs: changes
     if: needs.changes.outputs.docs == 'true'
-    runs-on: ubuntu-latest
+    # A repository setting can select an existing self-hosted Linux runner.
+    # Fork PRs always use GitHub-hosted runners.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
     defaults:
       run:
         working-directory: ./acton-docs
@@ -412,7 +426,9 @@ jobs:
     name: ci-gate
     needs: [changes, aws-lc-rs, ring, windows, audit-storage, mssql, feature-combos, docs-build]
     if: always()
-    runs-on: ubuntu-latest
+    # A repository setting can select an existing self-hosted Linux runner.
+    # Fork PRs always use GitHub-hosted runners.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
     steps:
       - name: Verify no required job failed
         env:
