@@ -166,6 +166,7 @@ where
 
 /// Service-level configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ServiceConfig {
     /// Service name
     pub name: String,
@@ -324,6 +325,7 @@ pub struct JwtConfig {
 
 /// Rate limiting configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RateLimitConfig {
     /// Requests per minute per user (global default)
     #[serde(default = "default_per_user_rpm")]
@@ -464,6 +466,7 @@ impl RateLimitConfig {
 /// Configures rate limiting for a specific route or route pattern.
 /// When a request matches a route pattern, these settings override the global defaults.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RouteRateLimitConfig {
     /// Maximum requests per minute for this route
     pub requests_per_minute: u32,
@@ -1237,6 +1240,7 @@ impl CallerAuthConfig {
 /// build a [`crate::client_tls::ClientIdentitySource`] from each.
 #[cfg(feature = "tls")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ClientIdentityConfig {
     /// Enable the client identity (default: true when the section is present).
     ///
@@ -1341,6 +1345,7 @@ pub struct JournaldConfig {
 /// Controls HTTP security headers (HSTS, X-Content-Type-Options, etc.).
 /// No feature gate required -- uses existing `tower-http` `set-header`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SecurityHeadersConfig {
     /// Enable security headers middleware (default: true)
     #[serde(default = "default_true")]
@@ -1402,6 +1407,7 @@ impl Default for SecurityHeadersConfig {
 
 /// Middleware configuration (all optional, feature-gated)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MiddlewareConfig {
     /// Request tracking configuration (request IDs, header propagation)
     #[serde(default)]
@@ -1458,6 +1464,7 @@ impl Default for MiddlewareConfig {
 
 /// Request tracking configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RequestTrackingConfig {
     /// Enable request ID generation
     #[serde(default = "default_true")]
@@ -1489,6 +1496,7 @@ impl Default for RequestTrackingConfig {
 
 /// Resilience configuration (circuit breaker, retry, bulkhead)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ResilienceConfig {
     /// Enable circuit breaker
     #[serde(default = "default_true")]
@@ -1690,6 +1698,7 @@ impl MetricsExporterConfig {
 
 /// Local rate limiting configuration (governor-based)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LocalRateLimitConfig {
     /// Enable local rate limiting
     #[serde(default = "default_true")]
@@ -2893,6 +2902,159 @@ sync = 60
                     assert!(error.contains("ACTON_AUTHORING_TIMEOUT_SECS"), "{error}");
                     assert!(error.contains("double underscores"), "{error}");
                     assert!(!error.contains("private-secret-value"), "{error}");
+                }
+                Ok(())
+            },
+        );
+    }
+
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    struct StrictFrameworkCustomConfig {
+        tick_interval_ms: u64,
+        #[cfg(feature = "tls")]
+        peer: Option<ClientIdentityConfig>,
+        #[serde(flatten, default, skip_serializing)]
+        unknown: BTreeMap<String, serde_json::Value>,
+    }
+
+    fn assert_unknown_config_field(error: crate::error::Error, path: &[&str], field: &str) {
+        let crate::error::Error::Config(error) = error else {
+            panic!("expected a configuration error, received {error}");
+        };
+        assert!(
+            matches!(&error.kind, figment::error::Kind::UnknownField(name, _) if name == field),
+            "expected unknown field {field}, received {error}"
+        );
+        assert_eq!(
+            error.path, path,
+            "the error must identify the exact table/key"
+        );
+        assert!(error.to_string().contains("config.toml"), "{error}");
+        assert!(!error.to_string().contains("__acton_custom"), "{error}");
+    }
+
+    #[test]
+    fn configuration_framework_tables_reject_unknown_keys_with_source_and_path() {
+        run_configuration_test(
+            "configuration_framework_tables_reject_unknown_keys_with_source_and_path",
+            &[],
+            || {
+                let cases: &[(&str, &[&str])] = &[
+                    (
+                        "[service]\nname = \"demo\"\nlog_level = \"debug\"\n",
+                        &["service", "bogus_key"],
+                    ),
+                    (
+                        "[rate_limit]\nper_user_rpm = 700\n",
+                        &["rate_limit", "bogus_key"],
+                    ),
+                    (
+                        "[rate_limit.routes.\"/api/v1/heavy\"]\nrequests_per_minute = 10\n",
+                        &["rate_limit", "routes", "/api/v1/heavy", "bogus_key"],
+                    ),
+                    (
+                        "[middleware.security_headers]\nhsts = false\n",
+                        &["middleware", "security_headers", "bogus_key"],
+                    ),
+                    (
+                        "[middleware]\ncompression = false\n",
+                        &["middleware", "bogus_key"],
+                    ),
+                    (
+                        "[middleware.request_tracking]\nrequest_id_enabled = false\n",
+                        &["middleware", "request_tracking", "bogus_key"],
+                    ),
+                    (
+                        "[middleware.resilience]\nbulkhead_max_concurrent = 8\n",
+                        &["middleware", "resilience", "bogus_key"],
+                    ),
+                    (
+                        "[middleware.governor]\nrequests_per_period = 10\n",
+                        &["middleware", "governor", "bogus_key"],
+                    ),
+                ];
+                for (table, path) in cases {
+                    let valid = format!("tick_interval_ms = 250\n{table}");
+                    std::fs::write("config.toml", &valid)?;
+                    for for_service in [false, true] {
+                        let config = load_test_config::<StrictFrameworkCustomConfig>(for_service)
+                            .expect("valid framework and flattened root custom fields must load");
+                        assert_eq!(config.custom.tick_interval_ms, 250);
+                        assert!(config.custom.unknown.is_empty());
+                    }
+                    std::fs::write("config.toml", format!("{valid}bogus_key = true\n"))?;
+                    for for_service in [false, true] {
+                        let error = load_test_config::<StrictFrameworkCustomConfig>(for_service)
+                            .expect_err("unknown framework keys must fail startup");
+                        assert_unknown_config_field(error, path, "bogus_key");
+                    }
+                }
+                Ok(())
+            },
+        );
+    }
+
+    #[test]
+    fn configuration_misplaced_custom_keys_are_rejected_inside_framework_tables() {
+        run_configuration_test(
+            "configuration_misplaced_custom_keys_are_rejected_inside_framework_tables",
+            &[],
+            || {
+                std::fs::write("config.toml", "[middleware]\ntick_interval_ms = 250\n")?;
+                for for_service in [false, true] {
+                    let error = load_test_config::<StrictFrameworkCustomConfig>(for_service)
+                        .expect_err("custom fields belong at the root, not inside middleware");
+                    assert_unknown_config_field(
+                        error,
+                        &["middleware", "tick_interval_ms"],
+                        "tick_interval_ms",
+                    );
+                }
+                std::fs::write(
+                    "config.toml",
+                    "tick_interval_ms = 250\nroot_typo = true\n[middleware]\ncompression = false\n",
+                )?;
+                for for_service in [false, true] {
+                    let config =
+                        load_test_config::<StrictFrameworkCustomConfig>(for_service).unwrap();
+                    assert_eq!(config.custom.tick_interval_ms, 250);
+                    assert_eq!(
+                        config.custom.unknown.get("root_typo"),
+                        Some(&serde_json::json!(true))
+                    );
+                    assert_eq!(config.custom.unknown.len(), 1);
+                }
+                Ok(())
+            },
+        );
+    }
+
+    #[cfg(feature = "tls")]
+    #[test]
+    fn configuration_embedded_client_identity_rejects_unknown_trust_keys() {
+        run_configuration_test(
+            "configuration_embedded_client_identity_rejects_unknown_trust_keys",
+            &[],
+            || {
+                let valid = "tick_interval_ms = 250\n[peer]\ncert_path = \"client.pem\"\nkey_path = \"client.key\"\nroot_ca_path = \"private-ca.pem\"\nexclusive_roots = true\nconnect_timeout_secs = 10\n";
+                std::fs::write("config.toml", valid)?;
+                for for_service in [false, true] {
+                    let config =
+                        load_test_config::<StrictFrameworkCustomConfig>(for_service).unwrap();
+                    assert!(config.custom.unknown.is_empty());
+                    let identity = config.custom.peer.expect("embedded identity must load");
+                    assert_eq!(identity.root_ca_path, Some(PathBuf::from("private-ca.pem")));
+                    assert!(identity.exclusive_roots);
+                    assert_eq!(identity.connect_timeout_secs, Some(10));
+                }
+                std::fs::write(
+                    "config.toml",
+                    format!("{valid}root_ca_pth = \"untrusted-ca.pem\"\n"),
+                )?;
+                for for_service in [false, true] {
+                    let error = load_test_config::<StrictFrameworkCustomConfig>(for_service)
+                        .expect_err("a misspelled outbound trust key must fail startup");
+                    assert_unknown_config_field(error, &["peer", "root_ca_pth"], "root_ca_pth");
                 }
                 Ok(())
             },

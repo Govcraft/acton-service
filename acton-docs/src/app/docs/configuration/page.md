@@ -66,6 +66,10 @@ Each service has its own subdirectory under `~/.config/acton-service/`, allowing
 
 ## Setting Up Configuration
 
+Framework configuration tables reject unknown keys during loading. A misspelled key, or an application key placed below a framework table header, produces an error naming its path and source instead of silently retaining a default. This includes `[service]`, `[rate_limit]`, route rate limits, middleware tables, and embedded client TLS identities.
+
+Keep application root keys before the first TOML table header, or under their application table. For example, a root `tick_interval_ms` written below `[middleware]` belongs to that table in TOML and is rejected. When upgrading to 0.45.0, remove obsolete keys and correct their names or table placement.
+
 ### For Development
 
 During development, simply place a `config.toml` in your project directory:

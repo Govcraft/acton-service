@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Framework service, rate-limit, middleware, security-header, request-tracking, resilience, local-governor, and outbound client-identity tables reject unknown keys at startup with the exact Figment path and file source. Custom fields remain supported at the configuration root (#167).
 - Configuration loaders preserve Figment key paths and file/environment source information for custom `Config<T>` value errors, while excluding framework keys from application unknown-key capture (#152).
 - Environment overrides support underscores inside keys through canonical double-underscore table separators, such as `ACTON_SERVICE__LOG_LEVEL`. Unambiguous legacy names remain supported; ambiguous names fail with migration guidance and no secret values. `ACTON_PROTO_DIR` is reserved for protobuf compilation (#161).
 - Existing application tracing subscribers no longer cause service construction to panic, and their tracer provider and propagation settings remain intact (#157).
