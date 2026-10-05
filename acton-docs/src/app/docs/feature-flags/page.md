@@ -1045,7 +1045,7 @@ Some features work better together:
 | Feature | Recommended Companions | Why |
 |---------|----------------------|-----|
 | `auth` | `cache` or `database` | Refresh token and API key storage backends |
-| `oauth` | `auth`, `cache` | OAuth state management needs Redis for CSRF protection |
+| `oauth` | `auth` | `OAuthProviderRegistry` selects configured providers; `MemoryOAuthStateManager` needs no Redis. Redis OAuth state additionally requires `cache`. |
 | `cedar-authz` | `cache` | Policy decision caching dramatically improves performance (10-50ms → 1-5ms) |
 | `cache` | `governor` | Distributed rate limiting needs Redis |
 | `otel-metrics` | `observability` | Metrics require tracing foundation |

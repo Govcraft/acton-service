@@ -8,9 +8,11 @@
 [service]
 name = "cedar-authz-example"
 port = 8080
-host = "127.0.0.1"
+bind = "127.0.0.1"
+timeout_secs = 30
 
-[jwt]
+[token]
+format = "jwt"
 # Path to your JWT public key (RS256/ES256) or secret (HS256)
 # Note: Figment doesn't expand ~ so use absolute path or relative path
 public_key_path = ".config/acton-service/cedar-authz-example/jwt-public.pem"
@@ -25,7 +27,7 @@ algorithm = "RS256"
 enabled = true
 
 # Path to Cedar policy file
-policy_path = "~/.config/acton-service/cedar-authz-example/policies.cedar"
+policy_path = ".config/acton-service/cedar-authz-example/policies.cedar"
 
 # Enable hot-reload of policy file (watches for changes)
 hot_reload = false
@@ -47,14 +49,14 @@ fail_open = false
 # Redis configuration (required if cache_enabled = true)
 [redis]
 url = "redis://localhost:6379"
-pool_size = 10
+max_connections = 10
 connection_timeout_secs = 5
 
 # Rate limiting (optional)
 [rate_limit]
-enabled = false
-requests_per_second = 100
-burst_size = 200
+auto_apply = false
+anonymous_rpm = 6000
+anonymous_burst = 200
 
 # OpenTelemetry (optional)
 [otlp]
@@ -63,11 +65,7 @@ enabled = false
 
 # Middleware configuration
 [middleware]
-# Request timeout in seconds
-timeout_secs = 30
-
-# Enable CORS
-cors_enabled = true
-
-# CORS allowed origins (empty = allow all, not recommended for production)
-cors_allowed_origins = ["http://localhost:3000"]
+# Restrictive CORS rejects cross-origin requests by default.
+# Supported modes: restrictive, permissive, disabled. An origin allow-list
+# requires application middleware; it is not a configuration option.
+cors_mode = "restrictive"

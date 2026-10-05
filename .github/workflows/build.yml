@@ -17,7 +17,9 @@ jobs:
   # always runs, and never these jobs directly.
   changes:
     name: detect code changes
-    runs-on: ubuntu-latest
+    # A repository setting can select an existing self-hosted Linux runner.
+    # Fork PRs always use GitHub-hosted runners.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
     outputs:
       code: ${{ steps.detect.outputs.code }}
       docs: ${{ steps.detect.outputs.docs }}
@@ -78,7 +80,9 @@ jobs:
           esac
 
           echo "Changed files:"
-          echo "$files" | sed 's/^/  /'
+          while IFS= read -r file; do
+            printf '  %s\n' "$file"
+          done <<< "$files"
 
           # The documentation site is built whenever its sources change, so that broken
           # Markdoc fails the pull request instead of reaching the deploy job on main.
@@ -143,7 +147,9 @@ jobs:
     name: crypto-aws-lc-rs (default)
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
+    # A repository setting can select an existing self-hosted Linux runner.
+    # Fork PRs always use GitHub-hosted runners.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       # Installed from the Ubuntu archive rather than downloaded from GitHub
@@ -155,7 +161,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - name: Reuse local compiler artifacts
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/../.cargo-target" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
+        if: runner.environment != 'self-hosted'
       - uses: taiki-e/install-action@nextest
       - name: Clippy
         run: cargo clippy -p acton-service --all-targets --features full -- -D warnings
@@ -173,7 +184,9 @@ jobs:
     name: crypto-ring (opt-in)
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
+    # A repository setting can select an existing self-hosted Linux runner.
+    # Fork PRs always use GitHub-hosted runners.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       # Installed from the Ubuntu archive rather than downloaded from GitHub
@@ -185,7 +198,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - name: Reuse local compiler artifacts
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/../.cargo-target" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
+        if: runner.environment != 'self-hosted'
       - uses: taiki-e/install-action@nextest
       - name: Clippy
         run: cargo clippy -p acton-service --all-targets --no-default-features --features "full,crypto-ring" -- -D warnings
@@ -205,7 +223,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - name: Reuse local compiler artifacts
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/../.cargo-target" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
+        if: runner.environment != 'self-hosted'
         with:
           key: windows
       - name: Clippy default features
@@ -227,7 +250,9 @@ jobs:
     name: audit storage (${{ matrix.backend }})
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
+    # A repository setting can select an existing self-hosted Linux runner.
+    # Fork PRs always use GitHub-hosted runners.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -245,7 +270,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - name: Reuse local compiler artifacts
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/../.cargo-target" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
+        if: runner.environment != 'self-hosted'
         with:
           key: audit-${{ matrix.backend }}
       - uses: taiki-e/install-action@nextest
@@ -258,7 +288,9 @@ jobs:
     name: Microsoft SQL Server parity
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
+    # A repository setting can select an existing self-hosted Linux runner.
+    # Fork PRs always use GitHub-hosted runners.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - name: Install protoc
@@ -266,7 +298,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - name: Reuse local compiler artifacts
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/../.cargo-target" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
+        if: runner.environment != 'self-hosted'
         with:
           key: mssql
       - uses: taiki-e/install-action@nextest
@@ -291,7 +328,9 @@ jobs:
     name: lint ${{ matrix.combo }}
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
+    # A repository setting can select an existing self-hosted Linux runner.
+    # Fork PRs always use GitHub-hosted runners.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -326,6 +365,15 @@ jobs:
           # The mirror image: gRPC transport with no TLS material.
           - combo: grpc-no-tls
             features: "http,grpc,crypto-aws-lc-rs"
+          # OAuth's memory state and config registry must work without Redis.
+          - combo: oauth-no-cache
+            features: "http,oauth,crypto-aws-lc-rs"
+            test: true
+          # Readerless metrics initialization must remain retryable without a
+          # Prometheus reader forcing an immediate first initialization.
+          - combo: otel-only
+            features: "http,otel-metrics,crypto-aws-lc-rs"
+            test: true
           # Token validation and issuance without cache-backed revocation.
           - combo: tokens
             features: "http,jwt,auth,crypto-aws-lc-rs"
@@ -345,7 +393,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - name: Reuse local compiler artifacts
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/../.cargo-target" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
+        if: runner.environment != 'self-hosted'
         with:
           key: combo-${{ matrix.combo }}
       - uses: taiki-e/install-action@nextest
@@ -372,7 +425,9 @@ jobs:
     name: docs build
     needs: changes
     if: needs.changes.outputs.docs == 'true'
-    runs-on: ubuntu-latest
+    # A repository setting can select an existing self-hosted Linux runner.
+    # Fork PRs always use GitHub-hosted runners.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
     defaults:
       run:
         working-directory: ./acton-docs
@@ -401,7 +456,9 @@ jobs:
     name: ci-gate
     needs: [changes, aws-lc-rs, ring, windows, audit-storage, mssql, feature-combos, docs-build]
     if: always()
-    runs-on: ubuntu-latest
+    # A repository setting can select an existing self-hosted Linux runner.
+    # Fork PRs always use GitHub-hosted runners.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
     steps:
       - name: Verify no required job failed
         env:

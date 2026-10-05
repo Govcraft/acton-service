@@ -109,12 +109,11 @@ docker run -p 8080:8080 \
 
 ## Configuration Files
 
-Mount configuration files into the container:
+Mount `config.toml` at the system path for the service name. `Config::load()` infers `my-service` from the binary name; match the directory to the name supplied to `load_for_service` when using that API:
 
 ```bash
 docker run -p 8080:8080 \
-  -v $(pwd)/config:/etc/acton-service \
-  -e ACTON_CONFIG_DIR=/etc/acton-service \
+  -v "$(pwd)/config.toml:/etc/acton-service/my-service/config.toml:ro" \
   my-service:latest
 ```
 

@@ -144,7 +144,7 @@ idle_timeout_secs = 3600
 ### Environment Variable Override
 
 ```bash
-ACTON_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES=131072 cargo run
+ACTON_WEBSOCKET__MAX_MESSAGE_SIZE_BYTES=131072 cargo run
 ```
 
 ---

@@ -86,10 +86,10 @@ facility = 13                     # 13 = audit (RFC 5424)
 ### Environment Variable Override
 
 ```bash
-ACTON_AUDIT_ENABLED=true
-ACTON_AUDIT_AUDIT_ALL_REQUESTS=true
-ACTON_AUDIT_SYSLOG_TRANSPORT=tcp
-ACTON_AUDIT_SYSLOG_ADDRESS=syslog.example.com:514
+ACTON_AUDIT__ENABLED=true
+ACTON_AUDIT__AUDIT_ALL_REQUESTS=true
+ACTON_AUDIT__SYSLOG__TRANSPORT=tcp
+ACTON_AUDIT__SYSLOG__ADDRESS=syslog.example.com:514
 ```
 
 ### Configuration Options
@@ -483,11 +483,11 @@ facility = 13
 
 ```yaml
 env:
-  - name: ACTON_AUDIT_ENABLED
+  - name: ACTON_AUDIT__ENABLED
     value: "true"
-  - name: ACTON_AUDIT_SYSLOG_TRANSPORT
+  - name: ACTON_AUDIT__SYSLOG__TRANSPORT
     value: "tcp"
-  - name: ACTON_AUDIT_SYSLOG_ADDRESS
+  - name: ACTON_AUDIT__SYSLOG__ADDRESS
     value: "syslog-service.logging.svc.cluster.local:514"
 ```
 

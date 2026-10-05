@@ -145,29 +145,10 @@ impl OAuthProvider for GitHubProvider {
             .await
             .map_err(|e| Error::External(format!("Failed to parse GitHub user info: {}", e)))?;
 
-        // GitHub's user endpoint may not return email if it's private
-        // Try to get primary verified email from the emails endpoint
-        let email = if user_info["email"].is_null() {
-            self.get_primary_email(access_token).await.ok()
-        } else {
-            user_info["email"].as_str().map(|s| s.to_string())
-        };
-
-        Ok(OAuthUserInfo {
-            provider: "github".to_string(),
-            provider_user_id: user_info["id"]
-                .as_i64()
-                .ok_or_else(|| Error::External("Missing id in GitHub response".to_string()))?
-                .to_string(),
-            email,
-            email_verified: true, // GitHub only shows verified emails
-            name: user_info["name"]
-                .as_str()
-                .or(user_info["login"].as_str())
-                .map(|s| s.to_string()),
-            picture: user_info["avatar_url"].as_str().map(|s| s.to_string()),
-            raw: user_info,
-        })
+        // A profile email alone does not attest verification. Only the verified
+        // emails endpoint can supply that claim, even for a public profile email.
+        let verified_email = self.get_primary_email(access_token).await.ok();
+        normalize_user_info(user_info, verified_email)
     }
 
     async fn refresh_token(&self, _refresh_token: &str) -> Result<OAuthTokens, Error> {
@@ -223,9 +204,75 @@ impl GitHubProvider {
     }
 }
 
+fn normalize_user_info(
+    user_info: serde_json::Value,
+    verified_email: Option<String>,
+) -> Result<OAuthUserInfo, Error> {
+    let email_verified = verified_email.is_some();
+    let email = verified_email.or_else(|| user_info["email"].as_str().map(str::to_string));
+    Ok(OAuthUserInfo {
+        provider: "github".to_string(),
+        provider_user_id: user_info["id"]
+            .as_i64()
+            .ok_or_else(|| Error::External("Missing id in GitHub response".to_string()))?
+            .to_string(),
+        email,
+        email_verified,
+        name: user_info["name"]
+            .as_str()
+            .or(user_info["login"].as_str())
+            .map(str::to_string),
+        picture: user_info["avatar_url"].as_str().map(str::to_string),
+        raw: user_info,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verified_lookup_takes_precedence_over_public_profile_email() {
+        let info = normalize_user_info(
+            serde_json::json!({"id": 42, "email": "public@example.com"}),
+            Some("verified@example.com".to_string()),
+        )
+        .expect("valid profile");
+        assert_eq!(info.email.as_deref(), Some("verified@example.com"));
+        assert!(info.email_verified);
+    }
+
+    #[test]
+    fn profile_email_fallback_is_not_marked_verified() {
+        let info = normalize_user_info(
+            serde_json::json!({"id": 42, "email": "public@example.com"}),
+            None,
+        )
+        .expect("valid profile");
+        assert_eq!(info.email.as_deref(), Some("public@example.com"));
+        assert!(!info.email_verified);
+    }
+
+    #[test]
+    fn private_profile_uses_verified_lookup_or_reports_no_email() {
+        let profile = serde_json::json!({"id": 42, "email": null});
+        let verified =
+            normalize_user_info(profile.clone(), Some("verified@example.com".to_string()))
+                .expect("valid profile");
+        assert_eq!(verified.email.as_deref(), Some("verified@example.com"));
+        assert!(verified.email_verified);
+        let missing = normalize_user_info(profile, None).expect("valid profile");
+        assert!(missing.email.is_none());
+        assert!(!missing.email_verified);
+    }
+
+    #[test]
+    fn missing_github_identity_is_rejected() {
+        assert!(matches!(
+            normalize_user_info(serde_json::json!({"email": "public@example.com"}), None),
+            Err(Error::External(_))
+        ));
+    }
 
     #[test]
     fn test_authorization_url_generation() {

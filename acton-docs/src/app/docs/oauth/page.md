@@ -16,7 +16,7 @@ This guide covers OAuth/OIDC integration. See the [Authentication Overview](/doc
 
 OAuth integration in acton-service provides authentication through external identity providers. The framework includes pre-built providers for Google and GitHub, plus support for custom OIDC-compliant providers for enterprise SSO.
 
-The `OAuthProvider` trait abstracts provider differences, normalizing user information across Google, GitHub, and custom providers. State management with Redis prevents CSRF attacks during the OAuth flow. After authentication, you can generate your own tokens using the [Token Generation](/docs/token-generation) module.
+The `OAuthProvider` trait abstracts provider differences, normalizing user information across Google, GitHub, and custom providers. Single-use state storage prevents replay of OAuth callbacks. Use bounded in-memory storage for one process or Redis for multiple instances. After authentication, you can generate your own tokens using the [Token Generation](/docs/token-generation) module.
 
 **Key characteristics:**
 
@@ -24,6 +24,7 @@ The `OAuthProvider` trait abstracts provider differences, normalizing user infor
 - **Custom OIDC**: Connect to any OIDC-compliant identity provider
 - **Normalized user info**: Consistent data structure regardless of provider
 - **CSRF protection**: Cryptographically secure state values with TTL expiration
+- **Configured provider registry**: Select providers from `[auth.oauth.providers]` at startup
 - **Flexible scopes**: Default scopes with optional additional permissions
 
 ---
@@ -32,36 +33,54 @@ The `OAuthProvider` trait abstracts provider differences, normalizing user infor
 
 ```toml
 [dependencies]
-acton-service = { version = "{% version() %}", features = ["auth", "oauth", "cache"] }
+acton-service = { version = "{% version() %}", features = ["oauth"] }
 ```
 
 ```rust
-use acton_service::auth::oauth::{GoogleProvider, OAuthProvider};
-use acton_service::auth::config::OAuthProviderConfig;
-
-let config = OAuthProviderConfig {
-    client_id: "your-client-id".to_string(),
-    client_secret: "your-client-secret".to_string(),
-    redirect_uri: "https://example.com/auth/google/callback".to_string(),
-    scopes: vec![], // Use defaults: openid, email, profile
-    // Endpoints are only set for custom OIDC providers; built-in
-    // providers like Google supply their own.
-    authorization_endpoint: None,
-    token_endpoint: None,
-    userinfo_endpoint: None,
+use acton_service::auth::config::{OAuthConfig, OAuthProviderConfig};
+use acton_service::auth::oauth::{
+    MemoryOAuthStateManager, OAuthProviderRegistry, OAuthStateManager, StateData,
 };
 
-let provider = GoogleProvider::new(&config)?;
+let config = OAuthConfig {
+    enabled: true,
+    state_ttl_secs: 600,
+    providers: [("google".to_string(), OAuthProviderConfig {
+        client_id: "your-client-id".to_string(),
+        client_secret: "your-client-secret".to_string(),
+        redirect_uri: "https://example.com/auth/google/callback".to_string(),
+        scopes: vec![],
+        authorization_endpoint: None,
+        token_endpoint: None,
+        userinfo_endpoint: None,
+    })].into(),
+};
+let providers = OAuthProviderRegistry::from_config(&config)?;
+let states = MemoryOAuthStateManager::new(config.state_ttl_secs);
+let provider = providers.get("google").ok_or_else(|| {
+    acton_service::error::Error::NotFound("Unknown OAuth provider".to_string())
+})?;
 
-// Generate authorization URL
-let state = generate_state(); // Cryptographically random
+let state = states.create_state(&StateData {
+    provider: "google".to_string(),
+    redirect_uri: Some("/dashboard".to_string()),
+    created_at: chrono::Utc::now().timestamp(),
+    extra: None,
+}).await?;
 let auth_url = provider.authorization_url(&state, &[]);
-// Redirect user to auth_url
+// Redirect the browser to auth_url.
 
-// In callback handler:
+// In the callback handler, use the same states manager and consume state first.
+let data = states.validate_state(&returned_state).await?;
+let provider = providers.get(&data.provider).ok_or_else(|| {
+    acton_service::error::Error::NotFound("Unknown OAuth provider".to_string())
+})?;
 let tokens = provider.exchange_code(&authorization_code).await?;
 let user_info = provider.get_user_info(&tokens.access_token).await?;
 ```
+
+Keep the registry and state manager in shared application state, typically `Arc`. Each process must use the same manager for its login and callback handlers. Applications own routes and account creation or linking policy.
+
 
 ---
 
@@ -76,7 +95,7 @@ let user_info = provider.get_user_info(&tokens.access_token).await?;
      │─────────────────────>│                      │
      │                      │                      │
      │                      │ 2. Generate state    │
-     │                      │    Store in Redis    │
+     │                      │    Store state       │
      │                      │                      │
      │  3. Redirect to provider                    │
      │<─────────────────────│─────────────────────>│
@@ -153,8 +172,8 @@ let provider = GitHubProvider::new(&config)?;
 
 **User info returned**:
 - `provider_user_id`: GitHub's numeric user ID
-- `email`: Primary verified email (fetched from `/user/emails` if needed)
-- `email_verified`: Always `true` (GitHub only exposes verified emails)
+- `email`: Primary verified email from `/user/emails`, or the public profile email when that lookup fails
+- `email_verified`: `true` only when the verified-emails lookup succeeded; profile fallback is `false`
 - `name`: Display name or username
 - `picture`: Avatar URL
 
@@ -174,12 +193,13 @@ let config = CustomOidcConfig {
     client_secret: env::var("OIDC_CLIENT_SECRET")?,
     redirect_uri: "https://example.com/auth/enterprise/callback".to_string(),
     scopes: vec!["openid".to_string(), "email".to_string(), "profile".to_string()],
-    authorization_endpoint: "https://idp.example.com/authorize".to_string(),
-    token_endpoint: "https://idp.example.com/token".to_string(),
-    userinfo_endpoint: "https://idp.example.com/userinfo".to_string(),
+    auth_url: "https://idp.example.com/authorize".to_string(),
+    token_url: "https://idp.example.com/token".to_string(),
+    userinfo_url: Some("https://idp.example.com/userinfo".to_string()),
+    name: "enterprise".to_string(),
 };
 
-let provider = CustomOidcProvider::new(&config)?;
+let provider = CustomOidcProvider::new(config)?;
 ```
 
 ---
@@ -188,54 +208,58 @@ let provider = CustomOidcProvider::new(&config)?;
 
 State values prevent CSRF attacks by ensuring the callback originated from a request your app initiated.
 
-### Generate and Store State
+### Single Process: Memory Storage
+
+`MemoryOAuthStateManager` requires only `oauth`. It stores at most 10,000 pending logins by default, consumes a state exactly once, and sweeps expired entries on each operation. At capacity, it evicts the oldest pending login. That user's callback fails, so they must start login again.
 
 ```rust
 use acton_service::auth::oauth::{
-    generate_state, RedisOAuthStateManager, OAuthStateManager, StateData,
+    MemoryOAuthStateManager, OAuthStateManager, StateData,
 };
-use chrono::Utc;
+use std::num::NonZeroUsize;
 
-// Create state manager with 10-minute TTL
-let state_manager = RedisOAuthStateManager::new(redis_pool, 600);
-
-// Create state data
-let state_data = StateData {
+let state_manager = MemoryOAuthStateManager::new(600);
+// Or explicitly bound the number of pending logins:
+let bounded = MemoryOAuthStateManager::with_max_entries(
+    600, NonZeroUsize::new(1_000).expect("nonzero capacity"),
+);
+let state = state_manager.create_state(&StateData {
     provider: "google".to_string(),
-    redirect_uri: Some("/dashboard".to_string()), // Where to go after auth
-    created_at: Utc::now().timestamp(),
-    extra: None, // Custom data if needed
-};
-
-// Store state and get token
-let state = state_manager.create_state(&state_data).await?;
-
-// Use in authorization URL
+    redirect_uri: Some("/dashboard".to_string()),
+    created_at: chrono::Utc::now().timestamp(),
+    extra: None,
+}).await?;
 let auth_url = provider.authorization_url(&state, &[]);
 ```
+
+TTL begins when the state is stored and uses a monotonic clock. `created_at` is application metadata and does not control expiry. A zero TTL refuses every callback. Memory state is lost when the process restarts.
+
+### Multiple Processes: Redis Storage
+
+Enable `cache` alongside `oauth`, then give every instance the same Redis backend and key prefix. Redis provides the shared state needed when login and callback reach different processes.
+
+```rust
+use acton_service::auth::oauth::RedisOAuthStateManager;
+
+let state_manager = RedisOAuthStateManager::new(redis_pool, 600);
+```
+
+Both managers implement `OAuthStateManager` and return `Error::BadRequest` for invalid, expired, or reused state.
 
 ### Validate in Callback
 
 ```rust
-async fn callback(
-    Query(params): Query<CallbackParams>,
-    State(state_manager): State<RedisOAuthStateManager>,
-    State(provider): State<GoogleProvider>,
-) -> Result<Response, Error> {
-    // Validate and consume state (one-time use)
-    let state_data = state_manager.validate_state(&params.state).await?;
-
-    // Exchange code for tokens
-    let tokens = provider.exchange_code(&params.code).await?;
-
-    // Get user info
-    let user_info = provider.get_user_info(&tokens.access_token).await?;
-
-    // Create or update user in your database
-    // Generate your own session/tokens
-    // Redirect to state_data.redirect_uri
+// Consume state before contacting the provider.
+let state_data = state_manager.validate_state(&params.state).await?;
+if state_data.provider != provider.name() {
+    return Err(Error::BadRequest("OAuth provider mismatch".to_string()));
 }
+let tokens = provider.exchange_code(&params.code).await?;
+let user_info = provider.get_user_info(&tokens.access_token).await?;
 ```
+
+Use `user_info` according to your application's account and session policy, then redirect to the validated application's destination.
+
 
 ---
 
@@ -386,31 +410,41 @@ scopes = ["read:user", "user:email"]
 
 ---
 
-## Complete OAuth Flow Example
+## Provider Registry and Route Handlers
+
+`OAuthProviderRegistry::from_config(&config)` builds every configured provider at startup. Exact keys `google` and `github` select built-in providers. Any other key requires `authorization_endpoint`, `token_endpoint`, and `userinfo_endpoint` as absolute HTTP(S) URLs. A missing or invalid custom endpoint fails construction before login starts. `get` returns a provider by name; `names` lists configured names in unspecified order.
+
+When `audit` is enabled, use `OAuthProviderRegistry::from_config_audited(&config, audit_logger)` to emit `AuthOAuthCallback` on authorization-code exchanges, including failures. Applications still decide whether `config.enabled` permits mounting OAuth routes.
+
+The following handlers show how the registry and state manager fit together. Your application decides how to create or link accounts and issue its own session after receiving `OAuthUserInfo`.
 
 ```rust
+use std::sync::Arc;
 use acton_service::prelude::*;
 use acton_service::auth::oauth::{
-    GoogleProvider, OAuthProvider, RedisOAuthStateManager, OAuthStateManager, StateData,
+    MemoryOAuthStateManager, OAuthProviderRegistry, OAuthStateManager,
+    OAuthUserInfo, StateData,
 };
-use acton_service::auth::{PasetoGenerator, TokenGenerator, ClaimsBuilder};
+use serde::Deserialize;
 
-// Initiate OAuth flow
-async fn login_google(
-    Extension(google): Extension<GoogleProvider>,
-    Extension(state_manager): Extension<RedisOAuthStateManager>,
-) -> impl IntoResponse {
-    let state_data = StateData {
-        provider: "google".to_string(),
-        redirect_uri: Some("/dashboard".to_string()),
+struct OAuthAppState {
+    providers: OAuthProviderRegistry,
+    states: MemoryOAuthStateManager,
+}
+
+async fn login(
+    Path(provider_name): Path<String>,
+    Extension(app): Extension<Arc<OAuthAppState>>,
+) -> Result<Redirect, Error> {
+    let provider = app.providers.get(&provider_name)
+        .ok_or_else(|| Error::NotFound("Unknown OAuth provider".to_string()))?;
+    let state = app.states.create_state(&StateData {
+        provider: provider_name,
+        redirect_uri: None,
         created_at: chrono::Utc::now().timestamp(),
         extra: None,
-    };
-
-    let oauth_state = state_manager.create_state(&state_data).await.unwrap();
-    let auth_url = google.authorization_url(&oauth_state, &[]);
-
-    Redirect::to(&auth_url)
+    }).await?;
+    Ok(Redirect::to(&provider.authorization_url(&state, &[])))
 }
 
 #[derive(Deserialize)]
@@ -419,142 +453,26 @@ struct CallbackQuery {
     state: String,
 }
 
-// Handle OAuth callback
-async fn callback_google(
-    Query(params): Query<CallbackQuery>,
-    Extension(google): Extension<GoogleProvider>,
-    Extension(state_manager): Extension<RedisOAuthStateManager>,
-    Extension(token_generator): Extension<PasetoGenerator>,
-) -> Result<impl IntoResponse, Error> {
-    // 1. Validate state (CSRF protection)
-    let state_data = state_manager
-        .validate_state(&params.state)
-        .await?;
-
-    // 2. Exchange code for tokens
-    let oauth_tokens = google
-        .exchange_code(&params.code)
-        .await?;
-
-    // 3. Get user info
-    let user_info = google
-        .get_user_info(&oauth_tokens.access_token)
-        .await?;
-
-    // 4. Find or create user in your database
-    let user = find_or_create_user(&user_info).await?;
-
-    // 5. Generate your own tokens
-    let claims = ClaimsBuilder::new()
-        .user(&user.id)
-        .email(user_info.email.as_deref().unwrap_or(""))
-        .build()?;
-
-    let token = token_generator.generate_token(&claims)?;
-
-    // 6. Set token in cookie or return in response
-    let redirect = state_data.redirect_uri.unwrap_or("/".to_string());
-
-    Ok((
-        [("Set-Cookie", format!("token={}; HttpOnly; Secure; Path=/", token))],
-        Redirect::to(&redirect),
-    ))
-}
-
-async fn find_or_create_user(info: &OAuthUserInfo) -> Result<User, Error> {
-    // Look up by provider + provider_user_id
-    if let Some(user) = find_user_by_oauth(
-        &info.provider,
-        &info.provider_user_id,
-    ).await? {
-        return Ok(user);
-    }
-
-    // Check if email exists (link accounts)
-    if let Some(email) = &info.email {
-        if let Some(user) = find_user_by_email(email).await? {
-            // Link OAuth to existing account
-            link_oauth_account(&user.id, &info.provider, &info.provider_user_id).await?;
-            return Ok(user);
-        }
-    }
-
-    // Create new user
-    create_user(CreateUser {
-        email: info.email.clone(),
-        name: info.name.clone(),
-        picture: info.picture.clone(),
-        oauth_provider: Some(info.provider.clone()),
-        oauth_provider_id: Some(info.provider_user_id.clone()),
-    }).await
-}
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    let google = GoogleProvider::new(&google_config)?;
-    let state_manager = RedisOAuthStateManager::new(redis_pool, 600);
-    let token_generator = PasetoGenerator::new(&secret_key)?;
-
-    let routes = VersionedApiBuilder::new()
-        .with_base_path("/api")
-        .add_version(ApiVersion::V1, |router| {
-            router
-                .route("/auth/google", get(login_google))
-                .route("/auth/google/callback", get(callback_google))
-                .layer(Extension(google.clone()))
-                .layer(Extension(state_manager.clone()))
-                .layer(Extension(token_generator.clone()))
-        })
-        .build_routes();
-
-    ServiceBuilder::new()
-        .with_routes(routes)
-        .build()
-        .serve()
-        .await?;
-
-    Ok(())
-}
-```
-
----
-
-## Multiple Providers
-
-Support multiple OAuth providers in the same application:
-
-```rust
-use std::collections::HashMap;
-use acton_service::auth::oauth::{
-    GoogleProvider, GitHubProvider, OAuthProvider,
-};
-
-// Store providers by name
-let mut providers: HashMap<String, Box<dyn OAuthProvider>> = HashMap::new();
-providers.insert("google".to_string(), Box::new(GoogleProvider::new(&google_config)?));
-providers.insert("github".to_string(), Box::new(GitHubProvider::new(&github_config)?));
-
-// Dynamic login endpoint
-async fn login(
+async fn callback(
     Path(provider_name): Path<String>,
-    State(state): State<AppState>,
-) -> Result<Redirect, Error> {
-    let provider = state.providers.get(&provider_name)
-        .ok_or(Error::NotFound("Unknown provider".into()))?;
-
-    let state_data = StateData {
-        provider: provider_name,
-        redirect_uri: Some("/dashboard".to_string()),
-        created_at: chrono::Utc::now().timestamp(),
-        extra: None,
-    };
-
-    let oauth_state = state.state_manager.create_state(&state_data).await?;
-    let auth_url = provider.authorization_url(&oauth_state, &[]);
-
-    Ok(Redirect::to(&auth_url))
+    Query(params): Query<CallbackQuery>,
+    Extension(app): Extension<Arc<OAuthAppState>>,
+) -> Result<Json<OAuthUserInfo>, Error> {
+    let data = app.states.validate_state(&params.state).await?;
+    if data.provider != provider_name {
+        return Err(Error::BadRequest("OAuth provider mismatch".to_string()));
+    }
+    let provider = app.providers.get(&data.provider)
+        .ok_or_else(|| Error::NotFound("Unknown OAuth provider".to_string()))?;
+    let tokens = provider.exchange_code(&params.code).await?;
+    let user_info = provider.get_user_info(&tokens.access_token).await?;
+    Ok(Json(user_info))
 }
 ```
+
+Construct `OAuthAppState` once from your `OAuthConfig`, put it in `Arc`, and attach it with `Extension` to both handlers. Provider routes should match the configured redirect URI. Bind login intent to the browser session in your application and apply an explicit policy for account linking; an email address alone is not sufficient proof that two accounts belong to the same person.
+
+These providers exchange OAuth authorization codes and normalize user information. They do not validate OIDC ID tokens or add PKCE automatically.
 
 ---
 
@@ -590,7 +508,7 @@ redirect_uri: "http://localhost:3000/auth/callback".to_string()
 Keep state TTL short (10 minutes or less) to limit the attack window:
 
 ```rust
-let state_manager = RedisOAuthStateManager::new(redis_pool, 600); // 10 minutes
+let state_manager = MemoryOAuthStateManager::new(600); // 10 minutes
 ```
 
 ### Secure Token Storage

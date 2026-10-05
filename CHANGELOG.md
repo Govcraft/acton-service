@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- OAuth login flows no longer require Redis: `MemoryOAuthStateManager` stores bounded, expiring, single-use state in one process. `OAuthProviderRegistry::from_config` builds Google, GitHub, and custom OIDC providers with startup endpoint validation; the audited constructor wraps all providers consistently (#164).
+- `ServiceBuilder::with_pre_auth_rate_limit` adds an independent, opt-in peer-IP quota before authentication and authorization. Invalid credentials consume this quota; forwarded headers and claims cannot create fresh buckets. The existing post-authentication caller quota remains separate (#159).
+
 - `ActonService::bind()` binds every listener (metrics exporter, HTTP, separate-port gRPC) without accepting, and returns a `#[must_use]` `BoundService` reporting the addresses the operating system assigned (`local_addr`, `grpc_local_addr`, `metrics_local_addr`). `BoundService::serve()` then accepts on exactly those sockets. Dropping a `BoundService` closes its sockets; nothing is spawned before `serve()`. `ActonService::serve()` is now `bind()` followed by `serve()`.
 - `ServiceBuilder::with_listener(tokio::net::TcpListener)` serves HTTP (or single-port HTTP+gRPC) on a socket the caller bound, instead of binding `[service] bind`/`port`.
 - `ServiceBuilder::with_metrics_listener(tokio::net::TcpListener)` (`prometheus-metrics`) serves the plaintext exporter on a caller-bound socket, with or without a `[middleware.metrics.exporter]` table, and takes precedence over it.
@@ -25,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Auto-applied governor quotas, classifier, bursts, proxy-header policy, exemptions, and route-override count are logged at INFO during service construction. Documentation explains Cargo feature unification and explicit `auto_apply = false` opt-out (#156).
+
 - `serve()` supervises every task it starts. If the HTTP listener, the separate-port gRPC listener, a TLS listener's handshake pump or the metrics exporter stops before shutdown was requested, the remaining listeners drain and `serve()` returns an error naming each failure. Before, the separate-port gRPC task's result was discarded and read only after HTTP stopped, the exporter task was never observed, and a dead handshake pump left the listener silently accepting nothing. `Server::serve()` applies the same supervision to its listener, handshake pump and exporter.
 - A SIGINT or SIGTERM handler that cannot be installed is logged at ERROR and the other shutdown sources keep working; `serve()` no longer panics on it.
 - The separate-port gRPC listener, when plaintext, now carries the peer `SocketAddr` as connect-info, as the HTTP listener always has.
@@ -32,6 +37,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - A rotation whose new files are rejected, or whose reload panics, is now logged at `ERROR` once per distinct content, not on every poll tick. A half-written file that is later completed changes its content, so it is still retried. A revert to the serving files followed by the same bad files is reported again.
   - The poll's own log lines name the listener as "the http listener's TLS credentials".
   - `TlsConfigSource::reload`, SIGHUP and `TlsReloadHandle::reload_all` log as before.
+
+### Fixed
+
+- Framework service, rate-limit, middleware, security-header, request-tracking, resilience, local-governor, and outbound client-identity tables reject unknown keys at startup with the exact Figment path and file source. Custom fields remain supported at the configuration root (#167).
+- Configuration loaders preserve Figment key paths and file/environment source information for custom `Config<T>` value errors, while excluding framework keys from application unknown-key capture (#152).
+- Environment overrides support underscores inside keys through canonical double-underscore table separators, such as `ACTON_SERVICE__LOG_LEVEL`. Unambiguous legacy names remain supported; ambiguous names fail with migration guidance and no secret values. `ACTON_PROTO_DIR` is reserved for protobuf compilation (#161).
+- Existing application tracing subscribers no longer cause service construction to panic, and their tracer provider and propagation settings remain intact (#157).
+- Metrics initialize once across concurrent and sequential service builds, so local meters, global meters, and the Prometheus scrape share the first successful provider and service identity. Readerless calls remain retryable (#127).
+- Governor response headers report actual remaining burst capacity and omit the unsupported fixed-window reset header. Rejections retain the real, rounded-up `Retry-After` wait (#163).
+- Governor periods round up at nanosecond precision, preventing configured rates from becoming more permissive through truncation; regression coverage includes 700, 40,000, 120,000, and `u32::MAX` requests per minute (#141).
+- Governor middleware now follows its documented position after audit and Cedar authorization, ensuring authorization rejections do not consume the post-authentication caller quota (#159).
 
 ## [acton-service-v0.44.0] - 2026-09-24
 

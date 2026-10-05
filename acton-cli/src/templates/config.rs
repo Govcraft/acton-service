@@ -38,8 +38,8 @@ optional = true       # Service can start without database
 lazy_init = true      # Connect in background
 max_retries = 5       # Retry up to 5 times
 retry_delay_secs = 2  # Base delay for exponential backoff
-pool_min_size = 5
-pool_max_size = 20
+min_connections = 5
+max_connections = 20
 
 "#,
             );
@@ -49,12 +49,12 @@ pool_max_size = 20
     // Add cache configuration
     if template.cache.is_some() {
         content.push_str(
-            r#"[cache]
+            r#"[redis]
 url = "redis://localhost:6379"
-# For production, use environment variable: ACTON_CACHE_URL
+# For production, use environment variable: ACTON_REDIS_URL
 optional = true
 lazy_init = true
-pool_size = 10
+max_connections = 10
 
 "#,
         );
@@ -63,9 +63,9 @@ pool_size = 10
     // Add events configuration
     if template.events.is_some() {
         content.push_str(
-            r#"[events]
+            r#"[nats]
 url = "nats://localhost:4222"
-# For production, use environment variable: ACTON_EVENTS_URL
+# For production, use environment variable: ACTON_NATS_URL
 optional = true
 lazy_init = true
 
@@ -209,14 +209,148 @@ port = 9090
     if template.rate_limit {
         content.push_str(
             r#"# Rate limiting
-[middleware.rate_limit]
-enabled = true
-requests_per_minute = 100
-burst_size = 20
+[rate_limit]
+auto_apply = true
+per_user_rpm = 100
+per_client_rpm = 100
+anonymous_rpm = 100
+anonymous_burst = 20
 
 "#,
         );
     }
 
     content
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+    struct UnclaimedSections {
+        #[serde(flatten)]
+        unknown: BTreeMap<String, serde_json::Value>,
+    }
+
+    fn template(name: &str) -> ServiceTemplate {
+        ServiceTemplate {
+            name: name.into(),
+            pascal_name: "GeneratedConfig".into(),
+            snake_name: name.into(),
+            http: true,
+            grpc: false,
+            database: None,
+            cache: None,
+            events: None,
+            auth: None,
+            observability: false,
+            resilience: false,
+            rate_limit: false,
+            openapi: false,
+            audit: false,
+            graphql: false,
+        }
+    }
+
+    fn load_generated(
+        template: &ServiceTemplate,
+    ) -> acton_service::config::Config<UnclaimedSections> {
+        let path = std::env::temp_dir().join(format!(
+            "acton-cli-generated-config-{}-{}.toml",
+            std::process::id(),
+            template.name,
+        ));
+        std::fs::write(&path, generate(template)).expect("generated config is written");
+        let loaded = acton_service::config::Config::<UnclaimedSections>::load_from(
+            path.to_str().expect("temporary path is UTF-8"),
+        );
+        std::fs::remove_file(path).expect("temporary config is removed");
+        loaded.expect("generated framework configuration deserializes")
+    }
+
+    #[test]
+    fn generated_config_uses_actual_framework_sections_and_values() {
+        let minimal = template("minimal-config");
+        assert!(load_generated(&minimal).custom.unknown.is_empty());
+
+        let mut complete = template("complete-config");
+        complete.database = Some("postgres".into());
+        complete.cache = Some("redis".into());
+        complete.events = Some("nats".into());
+        complete.grpc = true;
+        complete.observability = true;
+        complete.resilience = true;
+        complete.rate_limit = true;
+        complete.audit = true;
+        let config = load_generated(&complete);
+        // The audit table needs the selected service's audit feature. The CLI's
+        // own acton-service dependency may not compile that optional type.
+        assert!(config.custom.unknown.keys().all(|key| key == "audit"));
+        let database = config.database.expect("database table is recognized");
+        assert_eq!(database.min_connections, 5);
+        assert_eq!(database.max_connections, 20);
+        let redis = config.redis.expect("Redis table is recognized");
+        assert_eq!(redis.max_connections, 10);
+        assert_eq!(redis.url, "redis://localhost:6379");
+        assert_eq!(
+            config.nats.expect("NATS table is recognized").url,
+            "nats://localhost:4222"
+        );
+        assert!(config.grpc.expect("gRPC table is recognized").enabled);
+        assert!(config.otlp.expect("OTLP table is recognized").enabled);
+        assert!(
+            config
+                .middleware
+                .resilience
+                .expect("resilience table is recognized")
+                .bulkhead_enabled
+        );
+        assert!(config
+            .middleware
+            .metrics
+            .expect("metrics table is recognized")
+            .exporter
+            .is_some());
+        assert!(config.rate_limit.auto_apply);
+        assert_eq!(config.rate_limit.per_user_rpm, 100);
+        assert_eq!(config.rate_limit.per_client_rpm, 100);
+        assert_eq!(config.rate_limit.anonymous_quota(), (100, 20));
+        assert!(complete
+            .features()
+            .iter()
+            .any(|feature| feature == "governor"));
+        assert!(!complete
+            .features()
+            .iter()
+            .any(|feature| feature == "rate-limit"));
+    }
+
+    #[test]
+    fn surrealdb_scaffold_selects_its_own_feature_and_configuration() {
+        let mut surreal = template("surreal-config");
+        surreal.database = Some("surrealdb".into());
+        let config = load_generated(&surreal);
+        // The generated service enables SurrealDB. When the CLI itself does
+        // not, this table remains an extension rather than a framework type.
+        assert!(config.custom.unknown.keys().all(|key| key == "surrealdb"));
+        assert!(
+            config.database.is_none(),
+            "SurrealDB does not configure a SQL pool"
+        );
+        assert!(surreal
+            .features()
+            .iter()
+            .any(|feature| feature == "surrealdb"));
+        assert!(!surreal
+            .features()
+            .iter()
+            .any(|feature| feature == "database"));
+        if let Some(table) = config.custom.unknown.get("surrealdb") {
+            assert_eq!(table["url"], "ws://localhost:8000");
+            assert_eq!(table["namespace"], "default");
+            assert_eq!(table["database"], "default");
+        }
+    }
 }

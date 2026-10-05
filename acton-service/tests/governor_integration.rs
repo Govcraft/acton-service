@@ -164,3 +164,37 @@ async fn anonymous_request_ip_limited() {
         "anonymous requests from the same IP must be rate-limited"
     );
 }
+
+#[tokio::test]
+async fn response_headers_track_real_capacity_and_rejections_include_retry_after() {
+    let config = RateLimitConfig {
+        anonymous_rpm: Some(1),
+        anonymous_burst: Some(3),
+        ..Default::default()
+    };
+    let app = build_app(config, true);
+    let peer = "10.0.0.50:34567".parse().unwrap();
+    for remaining in [2, 1, 0] {
+        let response = app.clone().oneshot(upload_request(peer)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()["x-ratelimit-remaining"],
+            remaining.to_string()
+        );
+        assert_eq!(response.headers()["x-ratelimit-limit"], "1");
+        assert!(
+            !response.headers().contains_key("x-ratelimit-reset"),
+            "continuously replenishing buckets have no fixed window reset"
+        );
+    }
+    let response = app.oneshot(upload_request(peer)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(
+        response.headers()["retry-after"]
+            .to_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+            >= 1
+    );
+}
