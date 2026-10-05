@@ -38,11 +38,10 @@
 //! accessors are `ServiceBuilder`-only, since `Server` has no builder to
 //! register them on.
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::borrow::Cow;
 use std::io;
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -59,6 +58,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::TlsConfig;
 use crate::error::Result;
+use crate::reload::{BoxError, Fingerprint, Reloadable};
 
 /// The credentials a TLS listener serves, replaceable while it runs.
 ///
@@ -110,7 +110,7 @@ struct TlsConfigSourceInner {
     /// baseline so a rotation that lands between this load and the poll task
     /// being spawned is caught on the first tick rather than missed until the
     /// next rotation.
-    initial_fingerprint: Option<u64>,
+    initial_fingerprint: Option<Fingerprint>,
 }
 
 impl TlsConfigSource {
@@ -184,7 +184,7 @@ impl TlsConfigSource {
     /// `None` for a static source, or when the files could not be hashed at
     /// load. Seeds the reload poll's baseline so a rotation between this load and
     /// the poll task being spawned is detected on the first tick.
-    pub(crate) fn initial_fingerprint(&self) -> Option<u64> {
+    pub(crate) fn initial_fingerprint(&self) -> Option<Fingerprint> {
         self.inner.initial_fingerprint
     }
 
@@ -212,38 +212,42 @@ impl TlsConfigSource {
     /// silently stopped working will keep working until the certificate expires
     /// and then fail all at once.
     pub fn reload(&self) -> Result<()> {
+        let result = self.try_reload();
+        match (&result, self.inner.origin.as_ref()) {
+            (Ok(()), Some(origin)) => tracing::info!(
+                cert_path = %origin.cert_path.display(),
+                key_path = %origin.key_path.display(),
+                "TLS credentials reloaded; new handshakes use the new certificate"
+            ),
+            (Err(e), Some(origin)) => tracing::error!(
+                cert_path = %origin.cert_path.display(),
+                key_path = %origin.key_path.display(),
+                error = %e,
+                "TLS credential reload failed; continuing to serve the previous \
+                 certificate. New credentials will not take effect until a reload \
+                 succeeds."
+            ),
+            (Err(e), None) => tracing::error!("{}", e),
+            (Ok(()), None) => {}
+        }
+        result
+    }
+
+    /// [`reload`](Self::reload) without the logging, for the watched-file
+    /// poll, which reports the outcome itself.
+    fn try_reload(&self) -> Result<()> {
         let Some(ref origin) = self.inner.origin else {
-            let err = crate::error::Error::Tls(
+            return Err(crate::error::Error::Tls(
                 "TLS credentials cannot be reloaded: this source was built from an \
                  already-loaded ServerConfig and has no files to reread"
                     .to_string(),
-            );
-            tracing::error!("{}", err);
-            return Err(err);
+            ));
         };
-
-        match load_server_config(origin) {
-            Ok(server_config) => {
-                self.inner.current.store(server_config);
-                tracing::info!(
-                    cert_path = %origin.cert_path.display(),
-                    key_path = %origin.key_path.display(),
-                    "TLS credentials reloaded; new handshakes use the new certificate"
-                );
-                Ok(())
-            }
-            Err(e) => {
-                tracing::error!(
-                    cert_path = %origin.cert_path.display(),
-                    key_path = %origin.key_path.display(),
-                    error = %e,
-                    "TLS credential reload failed; continuing to serve the previous \
-                     certificate. New credentials will not take effect until a reload \
-                     succeeds."
-                );
-                Err(e)
-            }
-        }
+        // Every fallible step is in `load_server_config`. The store is the
+        // last step and cannot fail, as `Reloadable::reload` requires.
+        let server_config = load_server_config(origin)?;
+        self.inner.current.store(server_config);
+        Ok(())
     }
 }
 
@@ -444,167 +448,63 @@ impl std::fmt::Debug for TlsReloadHandle {
 /// Returns an error when any file cannot be read. A caller must treat that as
 /// "unknown, try again", not as "unchanged" (which would strand a rotation) and
 /// not as "changed" (which would reload from a half-written file every tick).
-fn fingerprint_credentials(tls_config: &TlsConfig) -> std::io::Result<u64> {
-    let mut hasher = DefaultHasher::new();
+fn fingerprint_credentials(tls_config: &TlsConfig) -> std::io::Result<Fingerprint> {
+    crate::reload::fingerprint_files(&credential_paths(tls_config))
+}
 
-    // Hash the paths as well as the bytes: a config edit that repoints at a
-    // different file with identical contents is not a rotation, but a config
-    // that swaps which of two files is authoritative should not alias.
-    for path in [
+/// The files a TLS source reloads from, in a fixed order: certificate, key,
+/// then the client-CA bundle if there is one.
+fn credential_paths(tls_config: &TlsConfig) -> Vec<PathBuf> {
+    [
         Some(&tls_config.cert_path),
         Some(&tls_config.key_path),
         tls_config.client_ca_path.as_ref(),
     ]
     .into_iter()
     .flatten()
-    {
-        path.hash(&mut hasher);
-        // Length-prefix each file so concatenation cannot forge equality
-        // between different splits of the same total bytes.
-        let bytes = std::fs::read(path)?;
-        bytes.len().hash(&mut hasher);
-        bytes.hash(&mut hasher);
-    }
-
-    Ok(hasher.finish())
+    .cloned()
+    .collect()
 }
 
-/// What one poll tick concluded about a source's credential files.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ReloadTick {
-    /// The files hash to what they hashed last tick; nothing was reloaded.
-    Unchanged,
-    /// The files changed and the new credentials are installed. The caller
-    /// stores this fingerprint as the new baseline.
-    Reloaded { fingerprint: u64 },
-    /// The files could not be read. The baseline is deliberately left alone so
-    /// the next tick retries.
-    ReadFailed,
-    /// The files changed but failed to load or parse; the previous credentials
-    /// keep serving. The baseline is left alone so the next tick retries even
-    /// if the (still broken) files do not change again — a truncated file that
-    /// is later completed in place must not be mistaken for "already seen".
-    ReloadFailed,
-}
-
-/// Run one poll tick against a source: read, hash, compare, reload on change.
-///
-/// Split out from the timer loop so the decision logic is testable without
-/// waiting on real clocks. `last_seen` is the fingerprint this source was last
-/// known to be serving, or `None` if that is not yet established.
-///
-/// Never panics and never propagates an error: a poll task that dies takes
-/// rotation down silently and leaves the service to expire, which is a worse
-/// failure than any single bad tick.
-pub(crate) fn reload_tick(
-    source: &TlsConfigSource,
+/// One listener's credentials as the watched-file poll sees them.
+#[derive(Clone)]
+struct ListenerCredentials {
+    source: TlsConfigSource,
     listener: TlsListenerKind,
-    last_seen: Option<u64>,
-) -> ReloadTick {
-    let Some(origin) = source.origin() else {
-        // Callers filter static sources out before spawning a poll task; if one
-        // reaches here, doing nothing is the only correct answer.
-        return ReloadTick::Unchanged;
-    };
+}
 
-    let fingerprint = match fingerprint_credentials(origin) {
-        Ok(fingerprint) => fingerprint,
-        Err(e) => {
-            tracing::warn!(
-                listener = listener.as_str(),
-                cert_path = %origin.cert_path.display(),
-                error = %e,
-                "could not read TLS credential files while polling for rotation; \
-                 continuing to serve the current certificate and retrying next tick"
-            );
-            return ReloadTick::ReadFailed;
-        }
-    };
-
-    if last_seen == Some(fingerprint) {
-        return ReloadTick::Unchanged;
+impl Reloadable for ListenerCredentials {
+    fn label(&self) -> Cow<'_, str> {
+        Cow::Owned(format!("the {} listener's TLS credentials", self.listener))
     }
 
-    match source.reload() {
-        Ok(()) => {
-            tracing::info!(
-                listener = listener.as_str(),
-                cert_path = %origin.cert_path.display(),
-                "TLS credential files changed on disk; the {listener} listener now \
-                 serves the new certificate"
-            );
-            ReloadTick::Reloaded { fingerprint }
-        }
-        // `reload` has already logged the failure at ERROR with the cause.
-        Err(_) => ReloadTick::ReloadFailed,
+    /// Empty for a static source, which the poll then leaves alone.
+    fn watched_paths(&self) -> Vec<PathBuf> {
+        self.source
+            .origin()
+            .map(credential_paths)
+            .unwrap_or_default()
+    }
+
+    fn reload(&self) -> std::result::Result<(), BoxError> {
+        self.source.try_reload().map_err(Into::into)
     }
 }
 
-/// Poll a source's credential files on an interval, reloading on content change.
-///
-/// The returned task runs until it is aborted. It holds only a clone of the
-/// source, so it never keeps a listener alive.
+/// Polls a source's credential files on an interval, reloading on content
+/// change, through [`crate::reload::spawn_reload_poll`].
 ///
 /// The baseline is the fingerprint the source captured when it *loaded* its
-/// credentials (not when this task spawns), so a rotation that lands during the
-/// rest of startup — after the load, before this task exists — is caught on the
-/// first tick rather than mistaken for the baseline. A service that starts and
-/// never rotates still does no reloading at all.
+/// credentials (not when this task spawns), so a rotation that lands during
+/// the rest of startup is caught on the first tick rather than mistaken for
+/// the baseline.
 pub(crate) fn spawn_reload_poll(
     source: TlsConfigSource,
     listener: TlsListenerKind,
     period: Duration,
 ) -> tokio::task::JoinHandle<()> {
-    // Seed the baseline from the load-time fingerprint the source recorded. A
-    // source whose files could not be hashed at load carries `None`, so the
-    // first successful tick establishes it — reloading once, redundantly, rather
-    // than missing a rotation.
-    let mut last_seen = source.initial_fingerprint();
-
-    tracing::info!(
-        listener = listener.as_str(),
-        interval_secs = period.as_secs(),
-        "polling TLS credential files for rotation"
-    );
-
-    tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(period);
-        // A tick missed because a reload ran long should not be made up for by
-        // a burst of back-to-back ticks; rotation is not time-critical to the
-        // second.
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        // The first tick of a tokio interval completes immediately; consume it
-        // so the first real check happens one period in, after the baseline.
-        ticker.tick().await;
-
-        loop {
-            ticker.tick().await;
-            // The tick reads and hashes the credential files with blocking
-            // `std::fs`. Run it on the blocking pool so a slow or networked
-            // secret mount stalls only a blocking thread, never a runtime worker
-            // that is also driving live connections. The tick stays fail-closed:
-            // it installs new credentials only on a clean read-and-load.
-            let source_for_tick = source.clone();
-            match tokio::task::spawn_blocking(move || {
-                reload_tick(&source_for_tick, listener, last_seen)
-            })
-            .await
-            {
-                Ok(ReloadTick::Reloaded { fingerprint }) => last_seen = Some(fingerprint),
-                Ok(_) => {}
-                // The tick never panics by construction; a `JoinError` here would
-                // mean the blocking thread was cancelled or panicked. Log and
-                // retry next tick rather than letting the poll task die and take
-                // rotation down silently.
-                Err(e) => tracing::error!(
-                    listener = listener.as_str(),
-                    error = %e,
-                    "TLS reload poll tick did not run to completion; \
-                     retrying on the next tick"
-                ),
-            }
-        }
-    })
+    let baseline = source.initial_fingerprint();
+    crate::reload::spawn_reload_poll(ListenerCredentials { source, listener }, period, baseline)
 }
 
 /// Reload every source in `handle` when the process receives `SIGHUP`.
@@ -738,15 +638,12 @@ pub(crate) fn validate_reload_interval(
     tls_cfg: &TlsConfig,
     section: &str,
 ) -> Result<Option<Duration>> {
-    match tls_cfg.reload_interval_secs {
-        None => Ok(None),
-        Some(0) => Err(crate::error::Error::Tls(format!(
-            "{section} sets reload_interval_secs = 0, which would poll the certificate \
-             files without pause. Omit the field to disable polling, or set a positive \
-             number of seconds."
-        ))),
-        Some(secs) => Ok(Some(Duration::from_secs(secs))),
-    }
+    crate::reload::validate_reload_interval(
+        tls_cfg.reload_interval_secs,
+        section,
+        "reload_interval_secs",
+    )
+    .map_err(|e| crate::error::Error::Tls(e.to_string()))
 }
 
 /// Warn when a section configures rotation triggers that its source cannot honour.
@@ -1491,6 +1388,16 @@ impl axum::extract::connect_info::Connected<axum::serve::IncomingStream<'_, TlsL
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::reload::{reload_tick, PollState, ReloadTick};
+
+    /// One poll tick over the HTTP listener's credentials, from `serving`.
+    fn poll_once(source: &TlsConfigSource, serving: Option<Fingerprint>) -> ReloadTick {
+        let credentials = ListenerCredentials {
+            source: source.clone(),
+            listener: TlsListenerKind::Http,
+        };
+        reload_tick(&credentials, &mut PollState::new(serving))
+    }
     use std::io::Write;
     use std::path::PathBuf;
 
@@ -1958,7 +1865,7 @@ mod tests {
         std::fs::write(&tls_config.key_path, &second.key_pem).expect("rewrite key");
 
         // The very first tick, seeded from the load-time baseline, must catch it.
-        let tick = reload_tick(&source, TlsListenerKind::Http, source.initial_fingerprint());
+        let tick = poll_once(&source, source.initial_fingerprint());
         let ReloadTick::Reloaded { fingerprint } = tick else {
             panic!("a rotation between load and the first poll must be detected, got {tick:?}");
         };
@@ -2019,9 +1926,8 @@ mod tests {
     //
     // The tick logic is exercised directly rather than through
     // `spawn_reload_poll`, so these tests assert what the poll decides without
-    // waiting on a real clock. What the timer loop adds on top — call
-    // `reload_tick` on an interval, carry the fingerprint forward on success —
-    // is the whole of the loop body and is visible in one screen.
+    // waiting on a real clock. The timer loop itself is generic and tested in
+    // `crate::reload`.
 
     #[test]
     fn poll_reloads_when_the_certificate_files_change() {
@@ -2037,7 +1943,7 @@ mod tests {
         std::fs::write(&tls_config.cert_path, &second.cert_pem).expect("rewrite cert");
         std::fs::write(&tls_config.key_path, &second.key_pem).expect("rewrite key");
 
-        let tick = reload_tick(&source, TlsListenerKind::Http, Some(baseline));
+        let tick = poll_once(&source, Some(baseline));
 
         let ReloadTick::Reloaded { fingerprint } = tick else {
             panic!("rewritten credentials must be detected and installed, got {tick:?}");
@@ -2062,7 +1968,7 @@ mod tests {
         let baseline = fingerprint_credentials(&tls_config).expect("baseline fingerprint");
         let before = source.load();
 
-        let tick = reload_tick(&source, TlsListenerKind::Http, Some(baseline));
+        let tick = poll_once(&source, Some(baseline));
 
         assert_eq!(
             tick,
@@ -2095,12 +2001,11 @@ mod tests {
         )
         .expect("write partial cert");
 
-        let tick = reload_tick(&source, TlsListenerKind::Http, Some(baseline));
+        let tick = poll_once(&source, Some(baseline));
 
-        assert_eq!(
-            tick,
-            ReloadTick::ReloadFailed,
-            "an unparseable certificate must fail the tick, not the task"
+        assert!(
+            matches!(tick, ReloadTick::ReloadFailed { .. }),
+            "an unparseable certificate must fail the tick, not the task, got {tick:?}"
         );
         assert!(
             Arc::ptr_eq(&source.load(), &last_good),
@@ -2113,7 +2018,7 @@ mod tests {
         std::fs::write(&tls_config.cert_path, &replacement.cert_pem).expect("finish cert");
         std::fs::write(&tls_config.key_path, &replacement.key_pem).expect("finish key");
 
-        let tick = reload_tick(&source, TlsListenerKind::Http, Some(baseline));
+        let tick = poll_once(&source, Some(baseline));
 
         assert!(
             matches!(tick, ReloadTick::Reloaded { .. }),
@@ -2139,7 +2044,7 @@ mod tests {
 
         std::fs::remove_file(&tls_config.cert_path).expect("remove cert");
 
-        let tick = reload_tick(&source, TlsListenerKind::Http, Some(baseline));
+        let tick = poll_once(&source, Some(baseline));
 
         assert_eq!(
             tick,
@@ -2171,7 +2076,7 @@ mod tests {
             TlsConfigSource::from_server_config(load_server_config(&config).expect("config"));
 
         assert_eq!(
-            reload_tick(&source, TlsListenerKind::Http, None),
+            poll_once(&source, None),
             ReloadTick::Unchanged,
             "a source with no files must not be reported as a failure every tick"
         );
@@ -2205,7 +2110,7 @@ mod tests {
             "identical contents must fingerprint identically however recently written"
         );
         assert_eq!(
-            reload_tick(&source, TlsListenerKind::Http, Some(baseline)),
+            poll_once(&source, Some(baseline)),
             ReloadTick::Unchanged,
             "a touched-but-unchanged file must not be mistaken for a rotation"
         );

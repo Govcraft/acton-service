@@ -101,6 +101,7 @@ pub mod health;
 pub mod ids;
 pub mod middleware;
 pub mod pool_health;
+pub mod reload;
 pub mod responses;
 pub mod server;
 pub mod service_builder;
