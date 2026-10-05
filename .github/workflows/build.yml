@@ -17,6 +17,8 @@ jobs:
   # always runs, and never these jobs directly.
   changes:
     name: detect code changes
+    permissions:
+      contents: read
     # A repository setting can select an existing self-hosted Linux runner.
     # Fork PRs always use GitHub-hosted runners.
     runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
@@ -38,7 +40,8 @@ jobs:
           # inert data rather than a command.
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
-          ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          GH_TOKEN: ${{ github.token }}
           PUSH_BEFORE: ${{ github.event.before }}
           PUSH_AFTER: ${{ github.event.after }}
           PUSH_FORCED: ${{ github.event.forced }}
@@ -109,13 +112,18 @@ jobs:
               # Skipping is a CI bypass, so it is limited to people who already have
               # write access. For anyone else the marker is ignored rather than
               # honoured, and the normal path rules decide.
-              case "$ASSOCIATION" in
-                OWNER|MEMBER|COLLABORATOR)
-                  echo "Found [skip-matrix] from $ASSOCIATION; skipping the Rust matrix."
+              # Association describes contribution history, not repository access.
+              # Ask GitHub for the author's effective permission; API errors deny
+              # the override and keep the normal matrix decision.
+              permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$PR_AUTHOR/permission" \
+                --jq '.permission' 2>/dev/null || true)
+              case "$permission" in
+                admin|write)
+                  echo "Found [skip-matrix] from an author with $permission access; skipping the Rust matrix."
                   emit false "$docs"
                   ;;
                 *)
-                  echo "::warning::Ignoring [skip-matrix] from $ASSOCIATION -- write access is required to skip CI."
+                  echo "::warning::Ignoring [skip-matrix] -- verified write access is required to skip CI."
                   ;;
               esac
             fi
