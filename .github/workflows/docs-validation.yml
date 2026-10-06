@@ -1,0 +1,44 @@
+name: Documentation validation
+
+on:
+  workflow_call:
+    inputs:
+      sha:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify exact revision
+        env:
+          EXPECTED_SHA: ${{ inputs.sha }}
+        run: python -c 'import sys; sys.path.insert(0, "scripts/ci"); import os; from run_profile import verify_revision; verify_revision(os.environ["EXPECTED_SHA"])'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+          cache-dependency-path: acton-docs/pnpm-lock.yaml
+      - name: Install dependencies
+        working-directory: acton-docs
+        run: pnpm install --frozen-lockfile
+      - name: Build documentation
+        working-directory: acton-docs
+        run: pnpm run build
+        env:
+          GITHUB_ACTIONS: true

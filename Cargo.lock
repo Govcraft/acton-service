@@ -10,7 +10,7 @@ checksum = "fe438c63458706e03479442743baae6c88256498e6431708f6dfc520a26515d3"
 
 [[package]]
 name = "acton-cli"
-version = "0.46.0"
+version = "0.47.0"
 dependencies = [
  "acton-service",
  "anyhow",
@@ -80,9 +80,16 @@ dependencies = [
 
 [[package]]
 name = "acton-service"
-version = "0.46.0"
+version = "0.47.0"
 dependencies = [
  "acton-reactive",
+ "acton-service-audit",
+ "acton-service-clickhouse",
+ "acton-service-core",
+ "acton-service-mssql",
+ "acton-service-postgres",
+ "acton-service-surrealdb",
+ "acton-service-turso",
  "anyhow",
  "arc-swap",
  "argon2",
@@ -125,7 +132,6 @@ dependencies = [
  "paginator-sqlx",
  "prometheus",
  "prost 0.14.3",
- "prost-build",
  "rand 0.10.1",
  "rcgen",
  "redis",
@@ -140,7 +146,6 @@ dependencies = [
  "sqlx",
  "surrealdb",
  "tempfile",
- "testcontainers-modules",
  "thiserror 2.0.18",
  "tiberius",
  "time",
@@ -150,7 +155,6 @@ dependencies = [
  "tokio-util",
  "toml 1.1.4+spec-1.1.0",
  "tonic 0.14.6",
- "tonic-build",
  "tonic-health",
  "tonic-prost",
  "tonic-prost-build",
@@ -172,6 +176,126 @@ dependencies = [
  "webpki-roots 1.0.9",
  "x509-parser",
  "zeroize",
+]
+
+[[package]]
+name = "acton-service-audit"
+version = "0.47.0"
+dependencies = [
+ "acton-service-core",
+ "async-trait",
+ "blake3",
+ "chrono",
+ "mti",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "acton-service-clickhouse"
+version = "0.47.0"
+dependencies = [
+ "acton-service-audit",
+ "acton-service-core",
+ "async-trait",
+ "chrono",
+ "clickhouse",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "acton-service-core"
+version = "0.47.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "acton-service-integration-tests"
+version = "0.47.0"
+dependencies = [
+ "acton-service",
+ "chrono",
+ "prost 0.14.3",
+ "serde_json",
+ "testcontainers-modules",
+ "tokio",
+ "tonic 0.14.6",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "acton-service-mssql"
+version = "0.47.0"
+dependencies = [
+ "acton-service-audit",
+ "acton-service-core",
+ "async-trait",
+ "bb8",
+ "bb8-tiberius",
+ "chrono",
+ "serde_json",
+ "tiberius",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "acton-service-postgres"
+version = "0.47.0"
+dependencies = [
+ "acton-service-audit",
+ "acton-service-core",
+ "async-trait",
+ "chrono",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "acton-service-surrealdb"
+version = "0.47.0"
+dependencies = [
+ "acton-service-audit",
+ "acton-service-core",
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "surrealdb",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "acton-service-turso"
+version = "0.47.0"
+dependencies = [
+ "acton-service-audit",
+ "acton-service-core",
+ "async-trait",
+ "chrono",
+ "libsql",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

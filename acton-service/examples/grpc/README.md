@@ -16,7 +16,7 @@ Demonstrates:
 
 Run with:
 ```bash
-cargo run --manifest-path=../../Cargo.toml --example single-port --features grpc
+cargo run -p acton-service-integration-tests --example single-port --features grpc
 ```
 
 ### cedar-grpc.rs
@@ -32,7 +32,7 @@ Demonstrates:
 
 Run with:
 ```bash
-cargo run --manifest-path=../../Cargo.toml --example cedar-grpc --features "grpc,cedar-authz,auth"
+cargo run -p acton-service-integration-tests --example cedar-grpc --features "grpc,cedar-authz"
 ```
 
 The example prints ready-to-use test tokens on startup; see the module docs

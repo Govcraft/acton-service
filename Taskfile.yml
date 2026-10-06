@@ -134,9 +134,10 @@ tasks:
       - cargo release --manifest-path {{.CLI_PATH}}/Cargo.toml --sign --no-publish -x {{.CLI_ARGS}}
 
   release-service:
-    desc: Bump acton-service version, update changelog, sign, publish, and push
+    desc: Prepare a signed workspace release and dispatch gated publishing
     summary: |
-      Release a new version of the acton-service crate using cargo-release.
+      Prepare public workspace crates with cargo-release, then qualify and
+      publish their exact tagged commit through GitHub Actions.
 
       Usage:
         task release-service -- patch   # Bump patch version (0.2.1 -> 0.2.2)
@@ -148,14 +149,16 @@ tasks:
       - Update CHANGELOG.md with git-cliff
       - Create a signed git commit
       - Create a signed git tag
-      - Publish to crates.io
       - Push changes and tags to remote
+      - Dispatch release.yml on main
+      - Publish only after exhaustive qualification succeeds
 
       Requires:
       - cargo-release installed (cargo install cargo-release)
       - git-cliff installed (cargo install git-cliff)
       - GPG signing configured
-      - crates.io authentication (cargo login)
+      - GitHub CLI authentication
+      - Trusted publishers configured for all public workspace crates
     cmds:
       - |
         if [ -z "{{.CLI_ARGS}}" ]; then
@@ -165,7 +168,10 @@ tasks:
         fi
       - git-cliff -o CHANGELOG.md
       - git add CHANGELOG.md
-      - cargo release --manifest-path {{.SERVICE_PATH}}/Cargo.toml --sign -x {{.CLI_ARGS}}
+      - cargo release --workspace --exclude acton-cli --exclude acton-service-integration-tests --allow-branch main --tag-name 'acton-service-v{{"{{version}}"}}' --sign --no-publish -x {{.CLI_ARGS}}
+      - |
+        release_tag=$(python3 -c 'import tomllib; print("acton-service-v" + tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+        gh workflow run release.yml --repo Govcraft/acton-service --ref main -f "tag=$release_tag"
 
   default:
     desc: Build and install the CLI

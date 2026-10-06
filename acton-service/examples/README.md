@@ -14,7 +14,7 @@ Simple getting-started examples demonstrating core functionality:
 
 - **[simple-api.rs](./basic/simple-api.rs)** - Zero-configuration versioned API with automatic health checks
 - **[users-api.rs](./basic/users-api.rs)** - Multi-version API demonstrating version evolution and deprecation
-- **[ping-pong.rs](./basic/ping-pong.rs)** - Simple request/response example
+- **[ping-pong.rs](../../acton-service-integration-tests/examples/basic/ping-pong.rs)** - Simple request/response example
 
 **Best for**: First-time users, understanding basic patterns
 
@@ -41,7 +41,7 @@ Fine-grained access control using AWS Cedar policies:
 
 gRPC service integration:
 
-- **[single-port.rs](./grpc/single-port.rs)** - HTTP REST + gRPC on a single port with automatic protocol detection
+- **[single-port.rs](../../acton-service-integration-tests/examples/grpc/single-port.rs)** - HTTP REST + gRPC on a single port with automatic protocol detection
 
 **Best for**: Building services that need both REST and gRPC interfaces
 
@@ -49,7 +49,7 @@ gRPC service integration:
 
 Event bus patterns and asynchronous communication:
 
-- **[event-driven.rs](./events/event-driven.rs)** - HTTP API + gRPC service communicating via event bus
+- **[event-driven.rs](../../acton-service-integration-tests/examples/events/event-driven.rs)** - HTTP API + gRPC service communicating via event bus
 
 **Best for**: Building decoupled services with async event handling
 
@@ -73,13 +73,15 @@ Configuration and build templates for your own projects:
 
 ## Running Examples
 
-All examples can be run using `cargo run --example <name>`:
+Run facade examples with `cargo run --example <name>`. The gRPC examples live in
+the private integration harness so their protobuf build does not slow ordinary
+framework checks; select that package explicitly as shown below:
 
 ```bash
 # Basic examples
 cargo run --manifest-path=acton-service/Cargo.toml --example simple-api
 cargo run --manifest-path=acton-service/Cargo.toml --example users-api
-cargo run --manifest-path=acton-service/Cargo.toml --example ping-pong
+cargo run -p acton-service-integration-tests --example ping-pong --features grpc
 
 # Agent examples
 cargo run --manifest-path=acton-service/Cargo.toml --example background-worker
@@ -88,10 +90,10 @@ cargo run --manifest-path=acton-service/Cargo.toml --example background-worker
 cargo run --manifest-path=acton-service/Cargo.toml --example cedar-authz --features cedar-authz,cache
 
 # gRPC (requires features)
-cargo run --manifest-path=acton-service/Cargo.toml --example single-port --features grpc
+cargo run -p acton-service-integration-tests --example single-port --features grpc
 
 # Events (requires features)
-cargo run --manifest-path=acton-service/Cargo.toml --example event-driven --features grpc
+cargo run -p acton-service-integration-tests --example event-driven --features grpc
 
 # Observability (requires features)
 cargo run --manifest-path=acton-service/Cargo.toml --example test-metrics --features observability

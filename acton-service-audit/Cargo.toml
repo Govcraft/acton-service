@@ -1,0 +1,26 @@
+[package]
+name = "acton-service-audit"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Independent audit contracts and implementation for acton-service"
+repository = "https://github.com/Govcraft/acton-service"
+
+[features]
+accounts = []
+login-lockout = []
+
+[dependencies]
+acton-service-core = { version = "0.47.0", path = "../acton-service-core" }
+async-trait.workspace = true
+blake3.workspace = true
+chrono.workspace = true
+mti = "1.1.1"
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

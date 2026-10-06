@@ -1,0 +1,487 @@
+//! Audit event types
+//!
+//! Core types for representing audit trail events including authentication,
+//! HTTP requests, and custom application events.
+
+use super::id::AuditEventId;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+/// A single audit trail event
+///
+/// Events are sealed by [`AuditChain`](super::AuditChain) with BLAKE3 hash chaining
+/// before being persisted, providing tamper detection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditEvent {
+    /// Unique event identifier
+    pub id: AuditEventId,
+    /// When the event occurred
+    pub timestamp: DateTime<Utc>,
+    /// Category of the event
+    pub kind: AuditEventKind,
+    /// Severity level (maps to syslog severity 0-7)
+    pub severity: AuditSeverity,
+    /// Source information (IP, user agent, subject, request ID)
+    pub source: AuditSource,
+    /// HTTP method (if applicable)
+    pub method: Option<String>,
+    /// Request path (if applicable)
+    pub path: Option<String>,
+    /// HTTP status code (if applicable)
+    pub status_code: Option<u16>,
+    /// Request duration in milliseconds (if applicable)
+    pub duration_ms: Option<u64>,
+    /// Name of the service that generated this event
+    pub service_name: String,
+    /// Additional structured metadata
+    pub metadata: Option<serde_json::Value>,
+    /// BLAKE3 hash of this event (set by AuditChain::seal)
+    pub hash: Option<String>,
+    /// Hash of the previous event in the chain
+    pub previous_hash: Option<String>,
+    /// Monotonically increasing sequence number
+    pub sequence: u64,
+}
+
+impl AuditEvent {
+    /// Create a new audit event with the given kind and severity
+    pub fn new(kind: AuditEventKind, severity: AuditSeverity, service_name: String) -> Self {
+        Self {
+            id: AuditEventId::new(),
+            timestamp: Utc::now(),
+            kind,
+            severity,
+            source: AuditSource::default(),
+            method: None,
+            path: None,
+            status_code: None,
+            duration_ms: None,
+            service_name,
+            metadata: None,
+            hash: None,
+            previous_hash: None,
+            sequence: 0,
+        }
+    }
+
+    /// Set the source information
+    pub fn with_source(mut self, source: AuditSource) -> Self {
+        self.source = source;
+        self
+    }
+
+    /// Set HTTP request details
+    pub fn with_http(
+        mut self,
+        method: String,
+        path: String,
+        status_code: Option<u16>,
+        duration_ms: Option<u64>,
+    ) -> Self {
+        self.method = Some(method);
+        self.path = Some(path);
+        self.status_code = status_code;
+        self.duration_ms = duration_ms;
+        self
+    }
+
+    /// Set additional metadata
+    pub fn with_metadata(mut self, metadata: serde_json::Value) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+}
+
+/// Categories of audit events
+///
+/// Auth events are automatically emitted when the `auth` feature is active.
+/// HTTP events come from the audit middleware. Custom events are user-defined.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AuditEventKind {
+    /// Successful authentication
+    AuthLoginSuccess,
+    /// Bearer token validated for a protected request, not a new login.
+    AuthTokenValidated,
+    /// Failed authentication attempt
+    ///
+    /// Reserved for credential-submission failures from application login
+    /// handlers (e.g. `/auth/login`). The auth middleware no longer emits
+    /// this kind for missing or invalid bearer tokens on protected routes —
+    /// see [`Self::AuthTokenMissing`] and [`Self::AuthTokenInvalid`].
+    AuthLoginFailed,
+    /// Protected route reached without a bearer token, or with one that was
+    /// malformed at extraction time
+    AuthTokenMissing,
+    /// Bearer token failed validation (bad signature, expired, malformed claims)
+    AuthTokenInvalid,
+    /// User logout
+    AuthLogout,
+    /// Token refresh
+    AuthTokenRefresh,
+    /// Token revocation
+    AuthTokenRevoked,
+    /// Password changed
+    AuthPasswordChanged,
+    /// API key created
+    AuthApiKeyCreated,
+    /// API key revoked
+    AuthApiKeyRevoked,
+    /// OAuth callback processed
+    AuthOAuthCallback,
+    /// Permission denied
+    AuthPermissionDenied,
+    /// Account locked due to repeated login failures (requires `login-lockout` feature)
+    #[cfg(feature = "login-lockout")]
+    AuthAccountLocked,
+    /// Account unlocked (requires `login-lockout` feature)
+    #[cfg(feature = "login-lockout")]
+    AuthAccountUnlocked,
+    /// Account created (requires `accounts` feature)
+    #[cfg(feature = "accounts")]
+    AccountCreated,
+    /// Account disabled by administrator (requires `accounts` feature)
+    #[cfg(feature = "accounts")]
+    AccountDisabled,
+    /// Account enabled/re-activated (requires `accounts` feature)
+    #[cfg(feature = "accounts")]
+    AccountEnabled,
+    /// Account locked due to security event (requires `accounts` feature)
+    #[cfg(feature = "accounts")]
+    AccountLocked,
+    /// Account unlocked (requires `accounts` feature)
+    #[cfg(feature = "accounts")]
+    AccountUnlocked,
+    /// Account expired (requires `accounts` feature)
+    #[cfg(feature = "accounts")]
+    AccountExpired,
+    /// Account deleted (requires `accounts` feature)
+    #[cfg(feature = "accounts")]
+    AccountDeleted,
+    /// Account updated (profile, email verified, password changed, roles) (requires `accounts` feature)
+    #[cfg(feature = "accounts")]
+    AccountUpdated,
+    /// Signing key was rotated (new key activated, old key moved to draining)
+    AuthKeyRotated,
+    /// Signing key was retired (drain period expired)
+    AuthKeyRetired,
+    /// Key rotation failed
+    AuthKeyRotationFailed,
+    /// Configuration loaded at startup (NIST CM-3)
+    ConfigLoaded,
+    /// Active configuration differs from on-disk sources (NIST CM-3)
+    ConfigDriftDetected,
+    /// HTTP request (from audit middleware)
+    HttpRequest,
+    /// HTTP request denied (rate limit, auth failure, etc.)
+    HttpRequestDenied,
+    /// Application-defined event
+    Custom(String),
+}
+
+impl std::fmt::Display for AuditEventKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AuthTokenValidated => write!(f, "auth.token.validated"),
+            Self::AuthLoginSuccess => write!(f, "auth.login.success"),
+            Self::AuthLoginFailed => write!(f, "auth.login.failed"),
+            Self::AuthTokenMissing => write!(f, "auth.token.missing"),
+            Self::AuthTokenInvalid => write!(f, "auth.token.invalid"),
+            Self::AuthLogout => write!(f, "auth.logout"),
+            Self::AuthTokenRefresh => write!(f, "auth.token.refresh"),
+            Self::AuthTokenRevoked => write!(f, "auth.token.revoked"),
+            Self::AuthPasswordChanged => write!(f, "auth.password.changed"),
+            Self::AuthApiKeyCreated => write!(f, "auth.apikey.created"),
+            Self::AuthApiKeyRevoked => write!(f, "auth.apikey.revoked"),
+            Self::AuthOAuthCallback => write!(f, "auth.oauth.callback"),
+            Self::AuthPermissionDenied => write!(f, "auth.permission.denied"),
+            #[cfg(feature = "login-lockout")]
+            Self::AuthAccountLocked => write!(f, "auth.account.locked"),
+            #[cfg(feature = "login-lockout")]
+            Self::AuthAccountUnlocked => write!(f, "auth.account.unlocked"),
+            #[cfg(feature = "accounts")]
+            Self::AccountCreated => write!(f, "account.created"),
+            #[cfg(feature = "accounts")]
+            Self::AccountDisabled => write!(f, "account.disabled"),
+            #[cfg(feature = "accounts")]
+            Self::AccountEnabled => write!(f, "account.enabled"),
+            #[cfg(feature = "accounts")]
+            Self::AccountLocked => write!(f, "account.locked"),
+            #[cfg(feature = "accounts")]
+            Self::AccountUnlocked => write!(f, "account.unlocked"),
+            #[cfg(feature = "accounts")]
+            Self::AccountExpired => write!(f, "account.expired"),
+            #[cfg(feature = "accounts")]
+            Self::AccountDeleted => write!(f, "account.deleted"),
+            #[cfg(feature = "accounts")]
+            Self::AccountUpdated => write!(f, "account.updated"),
+            Self::AuthKeyRotated => write!(f, "auth.key.rotated"),
+            Self::AuthKeyRetired => write!(f, "auth.key.retired"),
+            Self::AuthKeyRotationFailed => write!(f, "auth.key.rotation_failed"),
+            Self::ConfigLoaded => write!(f, "config.loaded"),
+            Self::ConfigDriftDetected => write!(f, "config.drift_detected"),
+            Self::HttpRequest => write!(f, "http.request"),
+            Self::HttpRequestDenied => write!(f, "http.request.denied"),
+            Self::Custom(name) => write!(f, "custom.{}", name),
+        }
+    }
+}
+
+impl AuditEventKind {
+    /// Parse a kind back from its wire string — the exact inverse of
+    /// [`Display`](std::fmt::Display), which the chain hash and the syslog
+    /// `kind` param both consume. A verifier rebuilding events from exported
+    /// lines needs this to recompute hashes, so the two `match`es must stay
+    /// mirror images.
+    ///
+    /// Returns `None` for a string this build does not know — either a kind
+    /// introduced by a newer producer, or one behind a feature this build
+    /// compiled out. Verification cannot proceed past such an event, which is
+    /// the honest answer: an unknown kind cannot be re-hashed faithfully.
+    pub fn from_wire(s: &str) -> Option<Self> {
+        if let Some(name) = s.strip_prefix("custom.") {
+            return Some(Self::Custom(name.to_string()));
+        }
+        match s {
+            "auth.token.validated" => Some(Self::AuthTokenValidated),
+            "auth.login.success" => Some(Self::AuthLoginSuccess),
+            "auth.login.failed" => Some(Self::AuthLoginFailed),
+            "auth.token.missing" => Some(Self::AuthTokenMissing),
+            "auth.token.invalid" => Some(Self::AuthTokenInvalid),
+            "auth.logout" => Some(Self::AuthLogout),
+            "auth.token.refresh" => Some(Self::AuthTokenRefresh),
+            "auth.token.revoked" => Some(Self::AuthTokenRevoked),
+            "auth.password.changed" => Some(Self::AuthPasswordChanged),
+            "auth.apikey.created" => Some(Self::AuthApiKeyCreated),
+            "auth.apikey.revoked" => Some(Self::AuthApiKeyRevoked),
+            "auth.oauth.callback" => Some(Self::AuthOAuthCallback),
+            "auth.permission.denied" => Some(Self::AuthPermissionDenied),
+            #[cfg(feature = "login-lockout")]
+            "auth.account.locked" => Some(Self::AuthAccountLocked),
+            #[cfg(feature = "login-lockout")]
+            "auth.account.unlocked" => Some(Self::AuthAccountUnlocked),
+            #[cfg(feature = "accounts")]
+            "account.created" => Some(Self::AccountCreated),
+            #[cfg(feature = "accounts")]
+            "account.disabled" => Some(Self::AccountDisabled),
+            #[cfg(feature = "accounts")]
+            "account.enabled" => Some(Self::AccountEnabled),
+            #[cfg(feature = "accounts")]
+            "account.locked" => Some(Self::AccountLocked),
+            #[cfg(feature = "accounts")]
+            "account.unlocked" => Some(Self::AccountUnlocked),
+            #[cfg(feature = "accounts")]
+            "account.expired" => Some(Self::AccountExpired),
+            #[cfg(feature = "accounts")]
+            "account.deleted" => Some(Self::AccountDeleted),
+            #[cfg(feature = "accounts")]
+            "account.updated" => Some(Self::AccountUpdated),
+            "auth.key.rotated" => Some(Self::AuthKeyRotated),
+            "auth.key.retired" => Some(Self::AuthKeyRetired),
+            "auth.key.rotation_failed" => Some(Self::AuthKeyRotationFailed),
+            "config.loaded" => Some(Self::ConfigLoaded),
+            "config.drift_detected" => Some(Self::ConfigDriftDetected),
+            "http.request" => Some(Self::HttpRequest),
+            "http.request.denied" => Some(Self::HttpRequestDenied),
+            _ => None,
+        }
+    }
+}
+
+/// Audit event severity levels
+///
+/// Maps directly to syslog severity values (RFC 5424).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AuditSeverity {
+    /// System is unusable (syslog 0)
+    Emergency = 0,
+    /// Action must be taken immediately (syslog 1)
+    Alert = 1,
+    /// Critical conditions (syslog 2)
+    Critical = 2,
+    /// Error conditions (syslog 3)
+    Error = 3,
+    /// Warning conditions (syslog 4)
+    Warning = 4,
+    /// Normal but significant condition (syslog 5)
+    Notice = 5,
+    /// Informational messages (syslog 6)
+    Informational = 6,
+    /// Debug-level messages (syslog 7)
+    Debug = 7,
+}
+
+impl AuditSeverity {
+    /// Get the numeric syslog severity value (0-7)
+    pub fn as_syslog_severity(&self) -> u8 {
+        *self as u8
+    }
+}
+
+impl std::fmt::Display for AuditSeverity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Emergency => write!(f, "EMERGENCY"),
+            Self::Alert => write!(f, "ALERT"),
+            Self::Critical => write!(f, "CRITICAL"),
+            Self::Error => write!(f, "ERROR"),
+            Self::Warning => write!(f, "WARNING"),
+            Self::Notice => write!(f, "NOTICE"),
+            Self::Informational => write!(f, "INFO"),
+            Self::Debug => write!(f, "DEBUG"),
+        }
+    }
+}
+
+/// Source information for an audit event
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AuditSource {
+    /// Client IP address
+    pub ip: Option<String>,
+    /// User agent string
+    pub user_agent: Option<String>,
+    /// Authenticated subject (user ID, service account, etc.)
+    pub subject: Option<String>,
+    /// Request ID for correlation
+    pub request_id: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_audit_event_new() {
+        let event = AuditEvent::new(
+            AuditEventKind::AuthLoginSuccess,
+            AuditSeverity::Informational,
+            "test-service".to_string(),
+        );
+        assert_eq!(event.kind, AuditEventKind::AuthLoginSuccess);
+        assert_eq!(event.service_name, "test-service");
+        assert!(event.hash.is_none());
+        assert_eq!(event.sequence, 0);
+    }
+
+    #[test]
+    fn test_audit_event_with_http() {
+        let event = AuditEvent::new(
+            AuditEventKind::HttpRequest,
+            AuditSeverity::Informational,
+            "test-service".to_string(),
+        )
+        .with_http("GET".into(), "/api/v1/users".into(), Some(200), Some(42));
+
+        assert_eq!(event.method, Some("GET".to_string()));
+        assert_eq!(event.path, Some("/api/v1/users".to_string()));
+        assert_eq!(event.status_code, Some(200));
+        assert_eq!(event.duration_ms, Some(42));
+    }
+
+    #[test]
+    fn test_audit_event_kind_display() {
+        assert_eq!(
+            AuditEventKind::AuthLoginSuccess.to_string(),
+            "auth.login.success"
+        );
+        assert_eq!(AuditEventKind::HttpRequest.to_string(), "http.request");
+        assert_eq!(
+            AuditEventKind::Custom("user.delete".to_string()).to_string(),
+            "custom.user.delete"
+        );
+    }
+
+    #[test]
+    fn every_kind_round_trips_through_its_wire_string() {
+        let kinds = vec![
+            AuditEventKind::AuthTokenValidated,
+            AuditEventKind::AuthLoginSuccess,
+            AuditEventKind::AuthLoginFailed,
+            AuditEventKind::AuthTokenMissing,
+            AuditEventKind::AuthTokenInvalid,
+            AuditEventKind::AuthLogout,
+            AuditEventKind::AuthTokenRefresh,
+            AuditEventKind::AuthTokenRevoked,
+            AuditEventKind::AuthPasswordChanged,
+            AuditEventKind::AuthApiKeyCreated,
+            AuditEventKind::AuthApiKeyRevoked,
+            AuditEventKind::AuthOAuthCallback,
+            AuditEventKind::AuthPermissionDenied,
+            AuditEventKind::AuthKeyRotated,
+            AuditEventKind::AuthKeyRetired,
+            AuditEventKind::AuthKeyRotationFailed,
+            AuditEventKind::ConfigLoaded,
+            AuditEventKind::ConfigDriftDetected,
+            AuditEventKind::HttpRequest,
+            AuditEventKind::HttpRequestDenied,
+            AuditEventKind::Custom("user.delete".to_string()),
+        ];
+        // Shadow rather than declare `kinds` mutable up front: with neither
+        // feature enabled nothing ever extends it, and an unconditional `mut`
+        // would be an unused-mut warning reachable only in that combination.
+        #[cfg(feature = "login-lockout")]
+        let kinds = {
+            let mut kinds = kinds;
+            kinds.extend([
+                AuditEventKind::AuthAccountLocked,
+                AuditEventKind::AuthAccountUnlocked,
+            ]);
+            kinds
+        };
+        #[cfg(feature = "accounts")]
+        let kinds = {
+            let mut kinds = kinds;
+            kinds.extend([
+                AuditEventKind::AccountCreated,
+                AuditEventKind::AccountDisabled,
+                AuditEventKind::AccountEnabled,
+                AuditEventKind::AccountLocked,
+                AuditEventKind::AccountUnlocked,
+                AuditEventKind::AccountExpired,
+                AuditEventKind::AccountDeleted,
+                AuditEventKind::AccountUpdated,
+            ]);
+            kinds
+        };
+
+        for kind in kinds {
+            let wire = kind.to_string();
+            assert_eq!(
+                AuditEventKind::from_wire(&wire),
+                Some(kind),
+                "from_wire must invert Display for `{wire}`"
+            );
+        }
+
+        assert_eq!(AuditEventKind::from_wire("no.such.kind"), None);
+    }
+
+    #[test]
+    fn test_audit_severity_syslog_value() {
+        assert_eq!(AuditSeverity::Emergency.as_syslog_severity(), 0);
+        assert_eq!(AuditSeverity::Alert.as_syslog_severity(), 1);
+        assert_eq!(AuditSeverity::Informational.as_syslog_severity(), 6);
+        assert_eq!(AuditSeverity::Debug.as_syslog_severity(), 7);
+    }
+
+    #[test]
+    fn test_audit_event_serde_roundtrip() {
+        let event = AuditEvent::new(
+            AuditEventKind::AuthLoginFailed,
+            AuditSeverity::Warning,
+            "test".to_string(),
+        )
+        .with_source(AuditSource {
+            ip: Some("192.168.1.1".to_string()),
+            user_agent: Some("curl/8.0".to_string()),
+            subject: None,
+            request_id: Some("req-123".to_string()),
+        });
+
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: AuditEvent = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.id, event.id);
+        assert_eq!(deserialized.kind, AuditEventKind::AuthLoginFailed);
+        assert_eq!(deserialized.source.ip, Some("192.168.1.1".to_string()));
+    }
+}

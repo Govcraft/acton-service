@@ -27,7 +27,7 @@
 //! ACTON_PROTO_DIR=../shared/protos cargo build
 //! ```
 //!
-//! Run with: cargo run --example ping-pong --features grpc
+//! Run with: cargo run -p acton-service-integration-tests --example ping-pong --features grpc
 //!
 //! Test with:
 //!   # Via HTTP REST API:

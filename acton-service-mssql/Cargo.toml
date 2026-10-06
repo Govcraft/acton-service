@@ -1,0 +1,25 @@
+[package]
+name = "acton-service-mssql"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Independent mssql contracts and implementation for acton-service"
+repository = "https://github.com/Govcraft/acton-service"
+
+[dependencies]
+acton-service-audit = { version = "0.47.0", path = "../acton-service-audit" }
+acton-service-core = { version = "0.47.0", path = "../acton-service-core", features = ["mssql"] }
+async-trait.workspace = true
+bb8 = "0.9.1"
+bb8-tiberius = "0.16.0"
+chrono.workspace = true
+serde_json.workspace = true
+tiberius = { version = "0.12.3", features = ["chrono", "integrated-auth-gssapi"] }
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[features]
+accounts = ["acton-service-audit/accounts"]
+login-lockout = ["acton-service-audit/login-lockout"]

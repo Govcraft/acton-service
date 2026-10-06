@@ -142,6 +142,13 @@ x509-parser = { version = "0.18.1", optional = true }
 bb8 = { version = "0.9.1", optional = true }
 bb8-tiberius = { version = "0.16.0", optional = true }
 tiberius = { version = "0.12.3", features = ["chrono", "integrated-auth-gssapi"], optional = true }
+acton-service-postgres = { version = "0.47.0", path = "../acton-service-postgres", default-features = false, optional = true }
+acton-service-mssql = { version = "0.47.0", path = "../acton-service-mssql", default-features = false, optional = true }
+acton-service-turso = { version = "0.47.0", path = "../acton-service-turso", default-features = false, optional = true }
+acton-service-surrealdb = { version = "0.47.0", path = "../acton-service-surrealdb", default-features = false, optional = true }
+acton-service-clickhouse = { version = "0.47.0", path = "../acton-service-clickhouse", default-features = false, optional = true }
+acton-service-core = { version = "0.47.0", path = "../acton-service-core" }
+acton-service-audit = { version = "0.47.0", path = "../acton-service-audit", optional = true }
 
 # saml-rs's aws-lc XML-DSig backend (kryptering) compiles only on Linux
 # x86_64/aarch64 and refuses every other target with compile_error!, so the
@@ -170,6 +177,7 @@ crypto-aws-lc-rs = [
     "reqwest/rustls-tls-no-provider",
     "reqwest/rustls-tls-webpki-roots-no-provider",
     "sqlx?/tls-rustls-aws-lc-rs",
+    "acton-service-postgres?/crypto-aws-lc-rs",
     "tonic?/tls-aws-lc",
 ]
 crypto-ring = [
@@ -178,16 +186,17 @@ crypto-ring = [
     "tokio-rustls?/ring",
     "reqwest/rustls-tls",
     "sqlx?/tls-rustls-ring-webpki",
+    "acton-service-postgres?/crypto-ring",
     "tonic?/tls-ring",
 ]
 http = []
 grpc = ["dep:tonic", "dep:prost", "dep:tonic-prost", "dep:tonic-prost-build", "dep:tokio-stream", "dep:tonic-health", "dep:tonic-reflection", "dep:hyper-util"]
-database = ["dep:sqlx"]
+database = ["dep:sqlx", "dep:acton-service-postgres"]
 postgres = ["database"]
-mssql = ["dep:bb8", "dep:bb8-tiberius", "dep:tiberius"]
+mssql = ["dep:bb8", "dep:bb8-tiberius", "dep:tiberius", "dep:acton-service-mssql"]
 windows-auth = ["http", "tls"]
-turso = ["dep:libsql"]
-surrealdb = ["dep:surrealdb"]
+turso = ["dep:libsql", "dep:acton-service-turso"]
+surrealdb = ["dep:surrealdb", "dep:acton-service-surrealdb"]
 cache = ["dep:redis", "dep:deadpool-redis"]
 events = ["dep:async-nats"]
 observability = ["dep:opentelemetry", "dep:opentelemetry-otlp", "dep:opentelemetry_sdk", "dep:tracing-opentelemetry"]
@@ -255,13 +264,13 @@ handlers = ["repository"]
 tls = ["dep:tokio-rustls", "dep:rustls-pki-types", "dep:arc-swap", "dep:zeroize", "dep:webpki-roots", "dep:x509-parser"]
 
 # Audit logging with BLAKE3 hash chaining
-audit = ["dep:blake3"]
+audit = ["dep:blake3", "dep:acton-service-audit"]
 
 # Login lockout with progressive delay and account lockout
-login-lockout = ["auth", "cache"]
+login-lockout = ["auth", "cache", "acton-service-audit?/login-lockout", "acton-service-postgres?/login-lockout", "acton-service-mssql?/login-lockout", "acton-service-turso?/login-lockout", "acton-service-surrealdb?/login-lockout", "acton-service-clickhouse?/login-lockout"]
 
 # Account lifecycle management (NIST AC-2)
-accounts = ["auth"]
+accounts = ["auth", "acton-service-audit?/accounts", "acton-service-postgres?/accounts", "acton-service-mssql?/accounts", "acton-service-turso?/accounts", "acton-service-surrealdb?/accounts", "acton-service-clickhouse?/accounts"]
 
 # Pre-built REST handlers for account management
 account-handlers = ["accounts"]
@@ -269,7 +278,7 @@ account-handlers = ["accounts"]
 journald = ["dep:tracing-journald"]
 
 # ClickHouse analytical database (composable with any primary database)
-clickhouse = ["dep:clickhouse"]
+clickhouse = ["dep:clickhouse", "dep:acton-service-clickhouse"]
 
 # GraphQL transport (async-graphql + Axum integration). Adds a third sibling
 # transport to `http` and `grpc`, mounted by `ServiceBuilder` under the same
@@ -278,6 +287,12 @@ graphql = ["dep:async-graphql", "dep:async-graphql-axum", "dep:bytes"]
 # GraphQL with Cedar policy authorization callable from resolvers via
 # `acton_service::graphql::CedarResolverCheck`.
 graphql-cedar = ["graphql", "cedar-authz"]
+acton-service-postgres = ["dep:acton-service-postgres"]
+acton-service-mssql = ["dep:acton-service-mssql"]
+acton-service-turso = ["dep:acton-service-turso"]
+acton-service-surrealdb = ["dep:acton-service-surrealdb"]
+acton-service-clickhouse = ["dep:acton-service-clickhouse"]
+acton-service-audit = ["dep:acton-service-audit"]
 # Basic examples
 [[example]]
 name = "simple-api"
@@ -289,27 +304,11 @@ name = "users-api"
 path = "examples/basic/users-api.rs"
 required-features = ["http"]
 
-[[example]]
-name = "ping-pong"
-path = "examples/basic/ping-pong.rs"
-required-features = ["grpc"]
 
 # gRPC examples
-[[example]]
-name = "single-port"
-path = "examples/grpc/single-port.rs"
-required-features = ["grpc"]
 
-[[example]]
-name = "cedar-grpc"
-path = "examples/grpc/cedar-grpc.rs"
-required-features = ["grpc", "cedar-authz", "auth"]
 
 # Event-driven examples
-[[example]]
-name = "event-driven"
-path = "examples/events/event-driven.rs"
-required-features = ["grpc"]
 
 # Authorization examples
 [[example]]
@@ -357,13 +356,7 @@ name = "graphql-basic"
 path = "examples/graphql/graphql-basic.rs"
 required-features = ["graphql"]
 
-[build-dependencies]
-prost-build = "0.14.1"
-tonic-build.workspace = true
-tonic-prost-build.workspace = true
-
 [dev-dependencies]
 rcgen = "0.14.8"
 tempfile = "3.24.0"
-testcontainers-modules = { version = "0.15.0", features = ["mssql_server"] }
 toml = "1.1.4"

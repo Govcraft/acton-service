@@ -71,12 +71,12 @@
 //! - **Apache Pulsar**: Multi-tenancy, geo-replication
 //! - **Cloud providers**: AWS SQS/SNS, Google Pub/Sub, Azure Service Bus
 //!
-//! For NATS JetStream (framework default): `cargo run --example event-driven --features grpc,events`
+//! In your own service, enable `acton-service/events` when replacing broadcast with NATS JetStream.
 //!
 //! ## Running This Example
 //!
 //! ```bash
-//! cargo run --example event-driven --features grpc
+//! cargo run -p acton-service-integration-tests --example event-driven --features grpc
 //! ```
 //!
 //! ## Testing

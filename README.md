@@ -752,9 +752,9 @@ async fn main() -> Result<()> {
 | [`simple-api`](./acton-service/examples/basic/simple-api.rs) | Versioned API, zero config | `cargo run --example simple-api` |
 | [`users-api`](./acton-service/examples/basic/users-api.rs) | Deprecation headers (RFC 8594) | `cargo run --example users-api` |
 | [`custom-config`](./acton-service/examples/custom-config.rs) | Custom configuration extensions | `cargo run --example custom-config` |
-| [`ping-pong`](./acton-service/examples/basic/ping-pong.rs) | Dual-protocol HTTP + gRPC | `cargo run --example ping-pong --features grpc` |
-| [`single-port`](./acton-service/examples/grpc/single-port.rs) | Single-port protocol detection, reflection, gRPC health | `cargo run --example single-port --features grpc` |
-| [`event-driven`](./acton-service/examples/events/event-driven.rs) | Event-driven architecture with NATS | `cargo run --example event-driven --features grpc` |
+| [`ping-pong`](./acton-service-integration-tests/examples/basic/ping-pong.rs) | Dual-protocol HTTP + gRPC | `cargo run -p acton-service-integration-tests --example ping-pong --features grpc` |
+| [`single-port`](./acton-service-integration-tests/examples/grpc/single-port.rs) | Single-port protocol detection, reflection, gRPC health | `cargo run -p acton-service-integration-tests --example single-port --features grpc` |
+| [`event-driven`](./acton-service-integration-tests/examples/events/event-driven.rs) | Event-driven architecture with NATS | `cargo run -p acton-service-integration-tests --example event-driven --features grpc` |
 | [`cedar-authz`](./acton-service/examples/authorization/cedar-authz.rs) | Cedar policies ([guide](./acton-service/examples/authorization/README.md)) | `cargo run --example cedar-authz --features cedar-authz,cache` |
 | [`database-api`](./acton-service/examples/database/database-api.rs) | PostgreSQL CRUD with SQLx | `cargo run --example database-api --features database` |
 | [`chat-server`](./acton-service/examples/websocket/chat-server.rs) | WebSocket real-time chat | `cargo run --example chat-server --features websocket` |
@@ -1072,6 +1072,9 @@ Contributions are welcome! Areas of focus:
 - CLI enhancements
 
 See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for guidelines (coming soon).
+
+See [development CI and release qualification](./docs/ci.md) for selective PR
+checks, standalone storage packages, and the gated publishing workflow.
 
 ## Changelog
 

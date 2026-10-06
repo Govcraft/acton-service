@@ -40,114 +40,13 @@ pub mod surrealdb_impl;
 #[cfg(feature = "clickhouse")]
 pub mod clickhouse_impl;
 
-/// Returns true if the stored event-kind string looks like a framework-owned
-/// kind (`auth.*`, `http.*`, `account.*`, `config.*`) that should have been
-/// recognized by the parser. Used by parser catch-alls to detect likely
-/// version skew between an emitter and a reader.
-///
-/// Only compiled alongside a storage backend — nothing parses stored rows without one.
-#[cfg(any(
-    feature = "database",
-    feature = "turso",
-    feature = "surrealdb",
-    feature = "clickhouse",
-    feature = "mssql"
-))]
-pub(crate) fn looks_like_framework_kind(s: &str) -> bool {
-    s.starts_with("auth.")
-        || s.starts_with("http.")
-        || s.starts_with("account.")
-        || s.starts_with("config.")
-}
-
-/// Helper for storage-backend parser catch-alls.
-///
-/// Strips the `custom.` prefix when present (so user-defined custom events
-/// round-trip cleanly) and emits a `tracing::warn!` when the input looks
-/// like a framework-owned kind that no parser arm matched — i.e. the
-/// emitter is on a newer version than this reader.
-///
-/// Only compiled alongside a storage backend — nothing parses stored rows without one.
-#[cfg(any(
-    feature = "database",
-    feature = "turso",
-    feature = "surrealdb",
-    feature = "clickhouse",
-    feature = "mssql"
-))]
-pub(crate) fn parse_custom_kind(s: &str) -> String {
-    if looks_like_framework_kind(s) {
-        tracing::warn!(
-            stored_kind = %s,
-            "unrecognized framework audit event kind — falling back to Custom; likely version skew between emitter and reader"
-        );
-    }
-    s.strip_prefix("custom.").unwrap_or(s).to_string()
-}
-
 /// Verify a requested range fetched together with its immediate predecessor.
 /// A stored predecessor anchors local consistency, not externally trusted history.
 fn verify_stored_chain(events: &[AuditEvent], from_sequence: u64) -> Result<Option<u64>, Error> {
-    let start = from_sequence.max(1);
-    let first_requested = events
-        .iter()
-        .find(|event| event.sequence >= start)
-        .ok_or_else(|| {
-            Error::Internal(format!(
-                "Audit verification unavailable: empty range starting at sequence {start}"
-            ))
-        })?;
-    if first_requested.sequence != start {
-        return Err(Error::Internal(format!(
-            "Audit verification incomplete: requested sequence {start} is unavailable"
-        )));
-    }
-
-    let (previous_sequence, previous_hash) = if start == 1 {
-        (0, None)
-    } else {
-        let predecessor = events.first().filter(|event| event.sequence == start - 1)
-            .ok_or_else(|| Error::Internal(format!(
-                "Audit verification incomplete: predecessor anchor at sequence {} is unavailable; a trusted retention checkpoint is required",
-                start - 1
-            )))?;
-        // Include the anchor's content hash in verification, but make no claim
-        // about its linkage to history preceding the fetched range.
-        let previous_hash = if predecessor.sequence == 1 {
-            None
-        } else {
-            predecessor.previous_hash.as_deref()
-        };
-        (predecessor.sequence - 1, previous_hash)
-    };
-
-    Ok(
-        super::chain::verify_chain_with_anchor(events, previous_sequence, previous_hash)
-            .err()
-            .map(|error| error.sequence),
-    )
+    acton_service_audit::storage::verify_stored_chain(events, from_sequence).map_err(Into::into)
 }
 
-/// Result of bounded verification against the locally stored predecessor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AuditVerification {
-    /// All requested events and their predecessor are locally consistent.
-    Consistent,
-    /// The first event whose content, sequence, or link is broken.
-    Broken { sequence: u64 },
-    /// A requested endpoint or predecessor is unavailable.
-    Incomplete,
-}
-
-/// Stable audit sequence ordering, independent of clock adjustments.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum AuditOrder {
-    /// Highest sequence first.
-    #[default]
-    NewestFirst,
-    /// Lowest sequence first.
-    OldestFirst,
-}
+pub use acton_service_audit::storage::{AuditOrder, AuditVerification};
 
 /// Bounded investigation filters. All specified filters must match.
 #[derive(Debug, Clone)]
@@ -287,6 +186,11 @@ impl AuditQuery {
 ///
 /// Implementations MUST enforce append-only semantics at the database level
 /// (not just at the application level) to prevent tampering.
+
+/// Trait for audit event persistence backends
+///
+/// Implementations MUST enforce append-only semantics at the database level
+/// (not just at the application level) to prevent tampering.
 #[async_trait]
 pub trait AuditStorage: Send + Sync {
     /// Append a sealed event to storage
@@ -416,56 +320,27 @@ pub trait AuditStorage: Send + Sync {
     }
 }
 
-#[cfg(all(
-    test,
-    any(
-        feature = "database",
-        feature = "turso",
-        feature = "surrealdb",
-        feature = "clickhouse"
-    )
-))]
-mod helper_tests {
-    use super::{looks_like_framework_kind, parse_custom_kind};
-
-    #[test]
-    fn framework_prefixes_detected() {
-        assert!(looks_like_framework_kind("auth.token.invalid"));
-        assert!(looks_like_framework_kind("http.request.denied"));
-        assert!(looks_like_framework_kind("account.created"));
-        assert!(looks_like_framework_kind("config.drift_detected"));
-    }
-
-    #[test]
-    fn non_framework_prefixes_ignored() {
-        assert!(!looks_like_framework_kind("custom.user.exported"));
-        assert!(!looks_like_framework_kind("user.signed_up"));
-        assert!(!looks_like_framework_kind("billing.invoice.paid"));
-        assert!(!looks_like_framework_kind(""));
-    }
-
-    #[test]
-    fn parse_custom_strips_custom_prefix() {
-        assert_eq!(parse_custom_kind("custom.user.exported"), "user.exported");
-    }
-
-    #[test]
-    fn parse_custom_preserves_unprefixed_user_strings() {
-        assert_eq!(
-            parse_custom_kind("billing.invoice.paid"),
-            "billing.invoice.paid"
-        );
-    }
-
-    #[test]
-    fn parse_custom_passes_through_framework_strings_for_visibility() {
-        // The warn fires (verified manually / via tracing subscribers in
-        // integration tests); we assert the returned string preserves the
-        // original so operators can grep for it in their event store.
-        assert_eq!(
-            parse_custom_kind("auth.token.invalid"),
-            "auth.token.invalid"
-        );
+impl From<&AuditQuery> for acton_service_audit::storage::AuditQuery {
+    fn from(query: &AuditQuery) -> Self {
+        Self {
+            from: query.from,
+            to: query.to,
+            kind: query.kind.clone(),
+            severity: query.severity,
+            subject: query.subject.clone(),
+            actor: query.actor.clone(),
+            request_id: query.request_id.clone(),
+            service_name: query.service_name.clone(),
+            metadata_kinds: query.metadata_kinds.clone(),
+            schema: query.schema.clone(),
+            entity_id: query.entity_id.clone(),
+            tenant_id: query.tenant_id.clone(),
+            status_code: query.status_code,
+            cursor: query.cursor,
+            through_sequence: query.through_sequence,
+            order: query.order,
+            limit: query.limit,
+        }
     }
 }
 

@@ -13,7 +13,7 @@
 //! ## Running
 //!
 //! ```bash
-//! cargo run --example cedar-grpc --features "grpc,cedar-authz,auth"
+//! cargo run -p acton-service-integration-tests --example cedar-grpc --features "grpc,cedar-authz"
 //! ```
 //!
 //! The example creates its policy and key files in

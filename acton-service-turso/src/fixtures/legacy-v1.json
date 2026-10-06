@@ -1,0 +1,21 @@
+{
+  "id": "dca93650-9d2c-4ca8-a00f-79a63467c187",
+  "timestamp": "2023-11-14T22:13:20.123+00:00",
+  "kind": "HttpRequest",
+  "severity": "Informational",
+  "source": {
+    "ip": null,
+    "user_agent": null,
+    "subject": null,
+    "request_id": null
+  },
+  "method": null,
+  "path": null,
+  "status_code": null,
+  "duration_ms": null,
+  "service_name": "legacy-fixture",
+  "metadata": null,
+  "previous_hash": null,
+  "sequence": 1,
+  "hash": "15d8892f51bc9167d2bf55bfe446f916400464ef2c344c1d74ce2f858d56f24b"
+}

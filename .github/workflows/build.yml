@@ -4,480 +4,84 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   workflow_dispatch:
 
-env:
-  CARGO_TERM_COLOR: always
+permissions:
+  contents: read
+
+# New commits supersede PR feedback. Main and release runs retain unique groups.
+concurrency:
+  group: development-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Changes that cannot affect compilation or test behaviour do not need the
-  # Rust matrix. Note that skipping a job makes its check disappear entirely
-  # rather than report success, and a required check that never reports blocks
-  # a PR forever -- so the single required check is `ci-gate` below, which
-  # always runs, and never these jobs directly.
   changes:
-    name: detect code changes
-    permissions:
-      contents: read
-    # A repository setting can select an existing self-hosted Linux runner.
-    # Fork PRs always use GitHub-hosted runners.
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
+    name: select validation profiles
+    runs-on: ubuntu-latest
     outputs:
-      code: ${{ steps.detect.outputs.code }}
-      docs: ${{ steps.detect.outputs.docs }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      code: ${{ steps.plan.outputs.code }}
+      docs: ${{ steps.plan.outputs.docs }}
+      security: ${{ steps.plan.outputs.security }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Detect whether any code changed
-        id: detect
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test selection and release gates
+        run: python -m unittest discover -s scripts/ci/tests -v
+      - name: Select affected configurations
+        id: plan
         env:
           EVENT: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          # Author-controlled text. Kept in the environment and never
-          # interpolated into the script, so a title like `"; rm -rf / #` is
-          # inert data rather than a command.
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PUSH_FORCED: ${{ github.event.forced }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          GH_TOKEN: ${{ github.token }}
-          PUSH_BEFORE: ${{ github.event.before }}
-          PUSH_AFTER: ${{ github.event.after }}
-          PUSH_FORCED: ${{ github.event.forced }}
-        run: |
-          set -euo pipefail
+        run: python scripts/ci/plan.py
 
-          # Emits both outputs together. Every exit path must set both, because an
-          # unset output reads as an empty string and silently skips the job that
-          # depends on it.
-          emit() {
-            echo "code=$1" >> "$GITHUB_OUTPUT"
-            echo "docs=$2" >> "$GITHUB_OUTPUT"
-            echo "Decision: code=$1 docs=$2"
-            exit 0
-          }
-
-          # Work out which files changed, or bail out to running everything when there
-          # is no reliable range to diff.
-          case "$EVENT" in
-            pull_request)
-              files=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
-              ;;
-            push)
-              # Branch protection does not require pull requests to be up to date with
-              # main before merging, so this push build is the safety net that catches
-              # two independently-green pull requests conflicting once combined. It
-              # still only needs to run for the parts that actually changed.
-              if [ "$PUSH_FORCED" = "true" ] || [ "$PUSH_BEFORE" = "0000000000000000000000000000000000000000" ]; then
-                echo "Push has no reliable base to diff against; running everything."
-                emit true true
-              fi
-              files=$(git diff --name-only "$PUSH_BEFORE" "$PUSH_AFTER")
-              ;;
-            *)
-              # Manual dispatch is an explicit request to test everything.
-              echo "Event '$EVENT' is not a pull request or push; running everything."
-              emit true true
-              ;;
-          esac
-
-          echo "Changed files:"
-          while IFS= read -r file; do
-            printf '  %s\n' "$file"
-          done <<< "$files"
-
-          # The documentation site is built whenever its sources change, so that broken
-          # Markdoc fails the pull request instead of reaching the deploy job on main.
-          if echo "$files" | grep -qE '^(acton-docs/|Cargo\.toml$)'; then
-            docs=true
-          else
-            docs=false
-          fi
-
-          # The override markers live in the pull request title and body, so they only
-          # apply to pull requests. They govern the Rust matrix; the documentation build
-          # is cheap and always follows its own sources.
-          if [ "$EVENT" = "pull_request" ]; then
-            marker=$(printf '%s\n%s' "$PR_TITLE" "$PR_BODY")
-
-            # `[full-ci]` is checked first so that forcing the matrix ON always beats
-            # forcing it off. The safe override wins ties.
-            if printf '%s' "$marker" | grep -qF '[full-ci]'; then
-              echo "Found [full-ci]; running the full matrix regardless of paths."
-              emit true "$docs"
-            fi
-
-            if printf '%s' "$marker" | grep -qF '[skip-matrix]'; then
-              # Skipping is a CI bypass, so it is limited to people who already have
-              # write access. For anyone else the marker is ignored rather than
-              # honoured, and the normal path rules decide.
-              # Association describes contribution history, not repository access.
-              # Ask GitHub for the author's effective permission; API errors deny
-              # the override and keep the normal matrix decision.
-              permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$PR_AUTHOR/permission" \
-                --jq '.permission' 2>/dev/null || true)
-              case "$permission" in
-                admin|write)
-                  echo "Found [skip-matrix] from an author with $permission access; skipping the Rust matrix."
-                  emit false "$docs"
-                  ;;
-                *)
-                  echo "::warning::Ignoring [skip-matrix] -- verified write access is required to skip CI."
-                  ;;
-              esac
-            fi
-          fi
-
-          # Anything not matched here counts as code and runs the matrix, so a new
-          # top-level directory fails safe by being tested. build.yml is deliberately
-          # absent from this list: a change to the build matrix should be exercised by
-          # the build matrix. Markdown is skipped only at the repository root, leaving a
-          # future doc-include under src/ to be caught by the compiler.
-          remaining=$(echo "$files" | grep -vE \
-            -e '^acton-docs/' \
-            -e '^[^/]*\.md$' \
-            -e '^\.remember/' \
-            -e '^LICENSE' \
-            -e '^\.gitignore$' \
-            -e '^\.github/(ISSUE_TEMPLATE/|PULL_REQUEST_TEMPLATE|dependabot\.yml|workflows/(claude|claude-code-review|deploy-docs|docs-sync-on-merge)\.yml)' \
-            || true)
-
-          if [ -z "$remaining" ]; then
-            echo "No code changed; skipping the Rust matrix."
-            emit false "$docs"
-          else
-            echo "Code changed; running the Rust matrix."
-            emit true "$docs"
-          fi
-
-  aws-lc-rs:
-    name: crypto-aws-lc-rs (default)
+  rust:
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    # A repository setting can select an existing self-hosted Linux runner.
-    # Fork PRs always use GitHub-hosted runners.
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
-    steps:
-      - uses: actions/checkout@v4
-      # Installed from the Ubuntu archive rather than downloaded from GitHub
-      # releases: keeps a GitHub outage from failing the build before anything
-      # is compiled. Ubuntu 24.04 ships protoc 3.21.12, which is sufficient --
-      # every .proto here is plain proto3 with no editions or proto3 optional.
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - name: Reuse local compiler artifacts
-        if: runner.environment == 'self-hosted'
-        shell: bash
-        run: echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/../.cargo-target" >> "$GITHUB_ENV"
-      - uses: Swatinem/rust-cache@v2
-        if: runner.environment != 'self-hosted'
-      - uses: taiki-e/install-action@nextest
-      - name: Clippy
-        run: cargo clippy -p acton-service --all-targets --features full -- -D warnings
-      - name: Nextest
-        run: cargo nextest run -p acton-service --features full
-      # nextest does not run doctests, so without this step the examples in the
-      # rustdoc -- including the crate-level block that becomes the docs.rs
-      # front page -- are never compiled by CI. Run once here on the default
-      # crypto provider rather than on every leg: the examples do not vary by
-      # backend, and they add roughly twenty seconds.
-      - name: Doctests
-        run: cargo test --doc -p acton-service --features full
+    uses: ./.github/workflows/rust-validation.yml
+    with:
+      sha: ${{ github.sha }}
+      matrix: ${{ needs.changes.outputs.matrix }}
+      linux-runner: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
 
-  ring:
-    name: crypto-ring (opt-in)
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
-    # A repository setting can select an existing self-hosted Linux runner.
-    # Fork PRs always use GitHub-hosted runners.
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
-    steps:
-      - uses: actions/checkout@v4
-      # Installed from the Ubuntu archive rather than downloaded from GitHub
-      # releases: keeps a GitHub outage from failing the build before anything
-      # is compiled. Ubuntu 24.04 ships protoc 3.21.12, which is sufficient --
-      # every .proto here is plain proto3 with no editions or proto3 optional.
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - name: Reuse local compiler artifacts
-        if: runner.environment == 'self-hosted'
-        shell: bash
-        run: echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/../.cargo-target" >> "$GITHUB_ENV"
-      - uses: Swatinem/rust-cache@v2
-        if: runner.environment != 'self-hosted'
-      - uses: taiki-e/install-action@nextest
-      - name: Clippy
-        run: cargo clippy -p acton-service --all-targets --no-default-features --features "full,crypto-ring" -- -D warnings
-      - name: Nextest
-        run: cargo nextest run -p acton-service --no-default-features --features "full,crypto-ring"
-
-  windows:
-    name: Windows native
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - name: Reuse local compiler artifacts
-        if: runner.environment == 'self-hosted'
-        shell: bash
-        run: echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/../.cargo-target" >> "$GITHUB_ENV"
-      - uses: Swatinem/rust-cache@v2
-        if: runner.environment != 'self-hosted'
-        with:
-          key: windows
-      - name: Clippy default features
-        run: cargo clippy -p acton-service --all-targets -- -D warnings
-      - name: Test default features
-        run: cargo test -p acton-service
-      - name: Check full feature set
-        run: cargo check -p acton-service --all-targets --features full
-      - name: Check Microsoft SQL Server feature set
-        run: cargo check -p acton-service --all-targets --no-default-features --features "mssql,http,grpc,auth,accounts,audit,observability,crypto-aws-lc-rs"
-      - name: Check trusted-proxy Windows authentication
-        run: cargo check -p acton-service --all-targets --no-default-features --features "http,tls,windows-auth,crypto-aws-lc-rs"
-
-  # The `full` legs above cover audit with the PostgreSQL storage backend
-  # (`database` is in `full`). The optional backends are mutually exclusive
-  # with `database`, so each parser/unit path gets its own leg. All storage
-  # tests here are pure unit tests — no live services required.
-  audit-storage:
-    name: audit storage (${{ matrix.backend }})
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
-    # A repository setting can select an existing self-hosted Linux runner.
-    # Fork PRs always use GitHub-hosted runners.
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - backend: turso
-            features: --no-default-features --features "audit,turso,http,observability,crypto-aws-lc-rs"
-          - backend: surrealdb
-            features: --no-default-features --features "audit,surrealdb,auth,jwt,http,observability,crypto-aws-lc-rs"
-          - backend: clickhouse
-            features: --features "audit,clickhouse"
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - name: Reuse local compiler artifacts
-        if: runner.environment == 'self-hosted'
-        shell: bash
-        run: echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/../.cargo-target" >> "$GITHUB_ENV"
-      - uses: Swatinem/rust-cache@v2
-        if: runner.environment != 'self-hosted'
-        with:
-          key: audit-${{ matrix.backend }}
-      - uses: taiki-e/install-action@nextest
-      - name: Clippy
-        run: cargo clippy -p acton-service --all-targets ${{ matrix.features }} -- -D warnings
-      - name: Nextest
-        run: cargo nextest run -p acton-service ${{ matrix.features }}
-
-  mssql:
-    name: Microsoft SQL Server parity
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
-    # A repository setting can select an existing self-hosted Linux runner.
-    # Fork PRs always use GitHub-hosted runners.
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libkrb5-dev
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - name: Reuse local compiler artifacts
-        if: runner.environment == 'self-hosted'
-        shell: bash
-        run: echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/../.cargo-target" >> "$GITHUB_ENV"
-      - uses: Swatinem/rust-cache@v2
-        if: runner.environment != 'self-hosted'
-        with:
-          key: mssql
-      - uses: taiki-e/install-action@nextest
-      - name: Clippy
-        run: cargo clippy -p acton-service --all-targets --no-default-features --features "mssql,http,grpc,auth,accounts,audit,observability,crypto-aws-lc-rs" -- -D warnings
-      - name: Integration tests
-        run: cargo nextest run -p acton-service --no-default-features --features "mssql,http,grpc,auth,accounts,audit,observability,crypto-aws-lc-rs" --test mssql_integration
-
-  # Lint-only legs for feature combinations no test job compiles. `--all-features`
-  # cannot stand in for these: the crate's mutual-exclusion `compile_error!`
-  # guards (database/turso/surrealdb, crypto-aws-lc-rs/crypto-ring) reject it by
-  # design, so narrow combinations are the only way to reach cfg-gated code.
-  #
-  # These run clippy only, unless a leg sets `test: true`. The `full` legs
-  # above already own test coverage; what is usually missing is a compiler that
-  # ever *looks* at code behind a narrower gate. A leg opts into nextest when
-  # the narrower feature set changes runtime behaviour and not just what
-  # compiles, which the `full` legs would then never exercise. Adding legs here
-  # is cheap -- extend the list whenever a new feature introduces its own
-  # cfg-gated paths.
-  feature-combos:
-    name: lint ${{ matrix.combo }}
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
-    # A repository setting can select an existing self-hosted Linux runner.
-    # Fork PRs always use GitHub-hosted runners.
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # The floor: no optional subsystem at all. This leg runs the tests
-          # too, because #129 gave the floor its own runtime behaviour: with
-          # `prometheus-metrics` absent, a configured
-          # `[middleware.metrics.exporter]` must be *refused at startup* rather
-          # than ignored. That refusal only exists in this cfg, so the `full`
-          # legs can never reach it and clippy alone would not notice if it
-          # stopped firing.
-          - combo: minimal
-            features: "http,crypto-aws-lc-rs"
-            test: true
-          # TLS without gRPC. This combination is what let two dead-code
-          # warnings survive in client_tls.rs until #76, and it is the only one
-          # that can catch #120: with gRPC compiled in, tonic pulls
-          # hyper-util/http2 and the HTTP listener serves h2 whether or not the
-          # workspace asked for it. So this leg runs the tests too.
-          - combo: tls-no-grpc
-            features: "http,tls,crypto-aws-lc-rs"
-            test: true
-          # Windows identities asserted by an mTLS-authenticated proxy.
-          - combo: windows-auth
-            features: "http,tls,windows-auth,crypto-aws-lc-rs"
-            test: true
-          # SAML SP standalone, without cache or the rest of auth-full. Runs
-          # the in-process IdP round trip and the negative cases (#138).
-          - combo: saml
-            features: "http,saml,crypto-aws-lc-rs"
-            test: true
-          # The mirror image: gRPC transport with no TLS material.
-          - combo: grpc-no-tls
-            features: "http,grpc,crypto-aws-lc-rs"
-          # OAuth's memory state and config registry must work without Redis.
-          - combo: oauth-no-cache
-            features: "http,oauth,crypto-aws-lc-rs"
-            test: true
-          # Readerless metrics initialization must remain retryable without a
-          # Prometheus reader forcing an immediate first initialization.
-          - combo: otel-only
-            features: "http,otel-metrics,crypto-aws-lc-rs"
-            test: true
-          # Token validation and issuance without cache-backed revocation.
-          - combo: tokens
-            features: "http,jwt,auth,crypto-aws-lc-rs"
-          # Server-rendered stack.
-          - combo: frontend
-            features: "http,htmx,askama,sse,session-memory,crypto-aws-lc-rs"
-          # GraphQL transport plus its Cedar resolver hooks.
-          - combo: graphql
-            features: "http,graphql,graphql-cedar,cedar-authz,crypto-aws-lc-rs"
-          # Audit with no storage backend compiled in.
-          - combo: audit-nodb
-            features: "http,audit,crypto-aws-lc-rs"
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - name: Reuse local compiler artifacts
-        if: runner.environment == 'self-hosted'
-        shell: bash
-        run: echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/../.cargo-target" >> "$GITHUB_ENV"
-      - uses: Swatinem/rust-cache@v2
-        if: runner.environment != 'self-hosted'
-        with:
-          key: combo-${{ matrix.combo }}
-      - uses: taiki-e/install-action@nextest
-        if: matrix.test
-      - name: Clippy
-        run: |
-          cargo clippy -p acton-service --all-targets \
-            --no-default-features --features "${{ matrix.features }}" -- -D warnings
-      # Only for legs that opt in with `test: true`. A combination earns this
-      # when its behaviour differs from the `full` legs rather than merely
-      # compiling differently -- otherwise clippy is enough and cheaper.
-      - name: Nextest
-        if: matrix.test
-        run: |
-          cargo nextest run -p acton-service \
-            --no-default-features --features "${{ matrix.features }}"
-
-  # Builds the documentation site so that broken Markdoc fails the pull request
-  # rather than reaching the deploy job after the merge has already landed on
-  # main. This matters most for the automated documentation pull requests: they
-  # skip the Rust matrix and auto-merge, so without this nothing would compile
-  # their output before it went live.
   docs-build:
-    name: docs build
     needs: changes
     if: needs.changes.outputs.docs == 'true'
-    # A repository setting can select an existing self-hosted Linux runner.
-    # Fork PRs always use GitHub-hosted runners.
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
-    defaults:
-      run:
-        working-directory: ./acton-docs
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'pnpm'
-          cache-dependency-path: acton-docs/pnpm-lock.yaml
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Build with Next.js
-        run: pnpm run build
-        env:
-          GITHUB_ACTIONS: true
+    uses: ./.github/workflows/docs-validation.yml
+    with:
+      sha: ${{ github.sha }}
 
-  # The single required status check. This always runs, so it always reports a
-  # conclusion -- including on documentation-only pull requests where every
-  # matrix job is skipped. Requiring the matrix jobs directly would deadlock
-  # those PRs, because a skipped job reports nothing at all.
+  security:
+    needs: changes
+    if: needs.changes.outputs.security == 'true'
+    uses: ./.github/workflows/security-audit.yml
+    with:
+      sha: ${{ github.sha }}
+
+  # Keep this name: main branch protection already requires ci-gate.
   ci-gate:
     name: ci-gate
-    needs: [changes, aws-lc-rs, ring, windows, audit-storage, mssql, feature-combos, docs-build]
+    needs: [changes, rust, docs-build, security]
     if: always()
-    # A repository setting can select an existing self-hosted Linux runner.
-    # Fork PRs always use GitHub-hosted runners.
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
-      - name: Verify no required job failed
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Require every selected job to succeed
         env:
           RESULTS: ${{ toJSON(needs) }}
-        run: |
-          set -euo pipefail
-          echo "$RESULTS"
-          # 'skipped' is a pass: it means this PR touched no code. Only real
-          # failures and cancellations block the merge.
-          if echo "$RESULTS" | grep -qE '"result": "(failure|cancelled)"'; then
-            echo "::error::A required build job failed or was cancelled."
-            exit 1
-          fi
-          echo "All required build jobs passed or were legitimately skipped."
+        run: python scripts/ci/gate.py development

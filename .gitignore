@@ -1,5 +1,6 @@
 # Rust
 /target/
+/target-validation/
 **/*.rs.bk
 *.pdb
 
@@ -26,6 +27,7 @@ release/
 !SECURITY.md
 !TUTORIAL.md
 !CHANGELOG.md
+!docs/*.md
 !acton-docs/
 !acton-docs/**/*.md
 # Add more exceptions here as needed, for example:
@@ -49,6 +51,7 @@ config.toml
 
 # Generated SBOM artifacts
 **/bom.json
+**/__pycache__/
 
 # Logs
 *.log

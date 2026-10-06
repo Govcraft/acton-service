@@ -1,0 +1,131 @@
+name: Rust validation
+
+on:
+  workflow_call:
+    inputs:
+      sha:
+        required: true
+        type: string
+      matrix:
+        required: true
+        type: string
+      exhaustive:
+        default: false
+        type: boolean
+      linux-runner:
+        default: ubuntu-latest
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  EXPECTED_SHA: ${{ inputs.sha }}
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify revision and selected profiles
+        env:
+          PROFILE_MATRIX: ${{ inputs.matrix }}
+          EXHAUSTIVE: ${{ inputs.exhaustive }}
+        run: |
+          if [ "$EXHAUSTIVE" = true ]; then
+            python scripts/ci/run_profile.py --check-matrix --exhaustive
+          else
+            python scripts/ci/run_profile.py --check-matrix
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Validate workflows
+        uses: docker://rhysd/actionlint:1.7.12
+      - uses: astral-sh/ruff-action@v4.1.0
+        with:
+          version: '0.16.10'
+          src: scripts/ci
+      - name: Formatting and workflow validation
+        run: |
+          cargo fmt --all --check
+          ruff format --check scripts/ci
+          python -m unittest discover -s scripts/ci/tests -v
+
+  profiles:
+    needs: format
+    name: ${{ matrix.profile }}
+    runs-on: ${{ matrix.runner == 'windows' && 'windows-latest' || inputs.linux-runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(inputs.matrix) }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify exact revision
+        run: python -c 'import sys; sys.path.insert(0, "scripts/ci"); import os; from run_profile import verify_revision; verify_revision(os.environ["EXPECTED_SHA"])'
+      - name: Install Linux native prerequisites
+        if: runner.os == 'Linux' && (matrix.protoc || matrix.kerberos)
+        env:
+          NEED_PROTOC: ${{ matrix.protoc }}
+          NEED_KERBEROS: ${{ matrix.kerberos }}
+        run: |
+          packages=()
+          if [ "$NEED_PROTOC" = true ]; then packages+=(protobuf-compiler); fi
+          if [ "$NEED_KERBEROS" = true ]; then packages+=(libkrb5-dev); fi
+          sudo apt-get update
+          sudo apt-get install -y "${packages[@]}"
+      - uses: arduino/setup-protoc@v3
+        if: runner.os == 'Windows' && matrix.protoc
+        with:
+          repo-token: ${{ github.token }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Isolate persistent compiler artifacts by profile
+        if: runner.environment == 'self-hosted'
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/../.cargo-target-$PROFILE" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
+        if: runner.environment != 'self-hosted'
+        with:
+          key: validation-${{ matrix.profile }}
+      - uses: taiki-e/install-action@nextest
+      - name: Clippy, tests, and profile checks
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: python scripts/ci/run_profile.py "$PROFILE"
+
+  validation-gate:
+    needs: [format, profiles]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Require complete Rust validation
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: python scripts/ci/gate.py rust

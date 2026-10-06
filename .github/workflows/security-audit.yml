@@ -1,59 +1,47 @@
 name: Security Audit
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "**/Cargo.toml"
-      - "**/Cargo.lock"
-      - "deny.toml"
-  pull_request:
-    paths:
-      - "**/Cargo.toml"
-      - "**/Cargo.lock"
-      - "deny.toml"
+  workflow_call:
+    inputs:
+      sha:
+        required: true
+        type: string
   schedule:
-    # Monday at 6am UTC
-    - cron: "0 6 * * 1"
+    - cron: '0 6 * * 1'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  cargo-audit:
-    name: cargo audit
+  security:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
-      - name: Run cargo audit
-        run: cargo audit
-
-  cargo-deny:
-    name: cargo deny (${{ matrix.check }})
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        check: [advisories, licenses, bans, sources]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2
         with:
-          command: check ${{ matrix.check }}
-
-  sbom:
-    name: SBOM generation
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+          ref: ${{ inputs.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify exact revision
+        env:
+          EXPECTED_SHA: ${{ inputs.sha || github.sha }}
+        run: python -c 'import sys; sys.path.insert(0, "scripts/ci"); import os; from run_profile import verify_revision; verify_revision(os.environ["EXPECTED_SHA"])'
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install cargo-cyclonedx
-        run: cargo install cargo-cyclonedx --locked
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny,cargo-cyclonedx
+          fallback: none
+      - name: Check dependency advisories and policy
+        run: |
+          cargo audit
+          cargo deny --all-features check advisories licenses bans sources
       - name: Generate SBOM
         run: cargo cyclonedx --manifest-path Cargo.toml --format json --all
-      - name: Upload SBOM artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: sbom
-          path: "**/bom.json"
-          retention-days: 90
+          name: sbom-${{ inputs.sha || github.sha }}
+          path: '**/bom.json'
+          if-no-files-found: error
