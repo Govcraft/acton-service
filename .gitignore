@@ -51,6 +51,7 @@ config.toml
 
 # Generated SBOM artifacts
 **/bom.json
+**/*.cdx.json
 **/__pycache__/
 
 # Logs

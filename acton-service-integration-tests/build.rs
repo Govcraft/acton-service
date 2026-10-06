@@ -11,7 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("cargo:rerun-if-changed={path}");
             tonic_prost_build::configure()
                 .file_descriptor_set_path(format!("{out}/{descriptor}.bin"))
-                .compile_protos(&[path], &["proto"])?;
+                .compile_protos(&[path.as_str()], &["proto"])?;
         }
     }
     Ok(())

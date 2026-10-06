@@ -59,7 +59,15 @@ class SelectionTests(unittest.TestCase):
     def test_grpc_change_checks_tls_absent_present_and_examples(self):
         self.assertEqual(
             selected("acton-service/src/grpc/server.rs"),
-            {"default", "minimal", "grpc-no-tls", "grpc-tls", "grpc-examples"},
+            {
+                "default",
+                "minimal",
+                "grpc-no-tls",
+                "grpc-tls",
+                "grpc-examples",
+                "grpc-integration",
+                "grpc-integration-ring",
+            },
         )
 
     def test_every_backend_gets_its_unit_tests_and_facade_integration(self):
@@ -137,7 +145,14 @@ class SelectionTests(unittest.TestCase):
     def test_private_harness_proto_changes_validate_examples_and_container_tests(self):
         self.assertEqual(
             selected("acton-service-integration-tests/proto/hello.proto"),
-            {"default", "minimal", "grpc-examples", "mssql-integration"},
+            {
+                "default",
+                "minimal",
+                "grpc-examples",
+                "grpc-integration",
+                "grpc-integration-ring",
+                "mssql-integration",
+            },
         )
 
     def test_cli_changes_are_checked(self):

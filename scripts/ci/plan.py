@@ -10,6 +10,7 @@ from pathlib import Path
 from profiles import PROFILES, matrix
 
 BACKENDS = {"postgres", "mssql", "turso", "surrealdb", "clickhouse"}
+GRPC_INTEGRATION = {"grpc-integration", "grpc-integration-ring"}
 BACKEND_PROFILES = {
     "postgres": {"postgres", "full"},
     "mssql": {"mssql-adapter", "mssql", "mssql-integration", "windows"},
@@ -36,7 +37,7 @@ FEATURE_PATHS = (
         },
     ),
     ("audit/", {"audit-nodb", "audit-otel", "full"}),
-    ("grpc/", {"grpc-no-tls", "grpc-tls", "grpc-examples"}),
+    ("grpc/", {"grpc-no-tls", "grpc-tls", "grpc-examples", *GRPC_INTEGRATION}),
     ("graphql/", {"graphql", "full"}),
     ("session/", {"frontend", "full"}),
     ("htmx/", {"frontend"}),
@@ -47,9 +48,15 @@ FEATURE_PATHS = (
     ("handlers/", {"full"}),
     ("middleware/metrics.rs", {"otel-only", "metrics", "full"}),
     ("middleware/", {"full", "tokens", "tls-no-grpc", "graphql"}),
-    ("tls.rs", {"tls-no-grpc", "grpc-tls", "ring", "windows"}),
-    ("client_tls.rs", {"tls-no-grpc", "grpc-tls", "ring", "windows"}),
-    ("caller_auth.rs", {"tls-no-grpc", "grpc-tls", "ring", "windows"}),
+    ("tls.rs", {"tls-no-grpc", "grpc-tls", *GRPC_INTEGRATION, "ring", "windows"}),
+    (
+        "client_tls.rs",
+        {"tls-no-grpc", "grpc-tls", *GRPC_INTEGRATION, "ring", "windows"},
+    ),
+    (
+        "caller_auth.rs",
+        {"tls-no-grpc", "grpc-tls", *GRPC_INTEGRATION, "ring", "windows"},
+    ),
     ("windows_auth.rs", {"windows-auth", "windows"}),
     ("metrics_exporter.rs", {"otel-only", "metrics", "full"}),
     ("observability.rs", {"otel-only", "metrics", "audit-otel", "full"}),
@@ -141,7 +148,9 @@ def select(paths: list[str], full: bool = False) -> dict[str, object]:
                 reasons.append(f"Shared contracts affect every adapter: {path}")
                 continue
             if path.startswith("acton-service-integration-tests/"):
-                selected.update({"grpc-examples", "mssql-integration"})
+                selected.update(
+                    {"grpc-examples", *GRPC_INTEGRATION, "mssql-integration"}
+                )
                 reasons.append(f"Integration harness: {path}")
                 continue
             if path.startswith("acton-service/src/"):
@@ -165,9 +174,9 @@ def select(paths: list[str], full: bool = False) -> dict[str, object]:
                     ("oauth", {"oauth-no-cache", "oauth-with-cache"}),
                     ("saml", {"saml", "windows"}),
                     ("graphql", {"graphql"}),
-                    ("grpc", {"grpc-no-tls", "grpc-tls"}),
+                    ("grpc", {"grpc-no-tls", "grpc-tls", *GRPC_INTEGRATION}),
                     ("metrics", {"minimal", "otel-only", "metrics", "full"}),
-                    ("tls", {"tls-no-grpc", "grpc-tls", "ring"}),
+                    ("tls", {"tls-no-grpc", "grpc-tls", *GRPC_INTEGRATION, "ring"}),
                     ("mssql", BACKEND_PROFILES["mssql"]),
                     ("audit", {"audit-nodb", "audit-otel", "full"}),
                     ("governor", {"full"}),

@@ -87,6 +87,17 @@ PROFILES = {
         tests=False,
         protoc=True,
     ),
+    "grpc-integration": Profile(
+        package="acton-service-integration-tests",
+        features="grpc,tls",
+        protoc=True,
+    ),
+    "grpc-integration-ring": Profile(
+        package="acton-service-integration-tests",
+        features="grpc,tls,crypto-ring",
+        defaults=False,
+        protoc=True,
+    ),
 }
 
 

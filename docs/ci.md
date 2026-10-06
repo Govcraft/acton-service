@@ -16,7 +16,7 @@ Examples:
 | Change | Profiles beyond default/minimal |
 | --- | --- |
 | OAuth state/provider implementation | OAuth with and without cache |
-| gRPC implementation | gRPC with and without TLS, example harness |
+| gRPC implementation | gRPC with and without TLS, examples, live TLS harness tests |
 | Turso adapter | Standalone Turso, facade audit with Turso |
 | SQL Server adapter | Standalone SQL Server, facade integration, live container test, Windows |
 | Core/audit contracts, shared config/builder/state, dependency manifests | All profiles |
@@ -66,6 +66,11 @@ will see those additional `AuditEventKind` variants through the facade as well.
 Enable the corresponding facade features when mixing these packages, and update
 exhaustive enum matches if adopting this new combination.
 
+Moved implementations emit tracing events under their component module targets.
+The broad `acton_service` filter also covers these names. Filters targeting a
+specific old module should include its new target, for example
+`acton_service_postgres::database` for PostgreSQL connection construction.
+
 Database-specific actor orchestration and authentication/account integration
 remain in the facade. Cross-subsystem integration checks therefore remain
 necessary even when an adapter's own unit tests pass.
@@ -77,6 +82,8 @@ SQL Server container dependency are kept out of ordinary facade compilation.
 ```sh
 cargo nextest run -p acton-service-turso --locked
 cargo nextest run -p acton-service-integration-tests --features mssql --locked
+cargo nextest run -p acton-service-integration-tests --features grpc,tls --locked
+cargo nextest run -p acton-service-integration-tests --no-default-features --features grpc,tls,crypto-ring --locked
 cargo run -p acton-service-integration-tests --example ping-pong --features grpc
 ```
 

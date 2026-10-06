@@ -30,6 +30,16 @@ def commands(name: str) -> list[list[str]]:
             result.append(
                 ["cargo", "check", *PROFILES[other].cargo_options(), "--all-targets"]
             )
+        result.append(
+            [
+                "cargo",
+                "check",
+                *PROFILES["grpc-integration"].cargo_options(),
+                "--features",
+                "cedar-authz",
+                "--all-targets",
+            ]
+        )
     return result
 
 

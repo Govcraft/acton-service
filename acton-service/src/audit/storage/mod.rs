@@ -186,11 +186,6 @@ impl AuditQuery {
 ///
 /// Implementations MUST enforce append-only semantics at the database level
 /// (not just at the application level) to prevent tampering.
-
-/// Trait for audit event persistence backends
-///
-/// Implementations MUST enforce append-only semantics at the database level
-/// (not just at the application level) to prevent tampering.
 #[async_trait]
 pub trait AuditStorage: Send + Sync {
     /// Append a sealed event to storage

@@ -6,28 +6,31 @@ license.workspace = true
 publish = false
 
 [dependencies]
-acton-service = { version = "0.47.0", path = "../acton-service" }
+acton-service = { version = "0.47.0", path = "../acton-service", default-features = false }
+axum = { workspace = true, optional = true }
 chrono.workspace = true
 prost = { workspace = true, optional = true }
+serde.workspace = true
 serde_json.workspace = true
+testcontainers-modules = { version = "0.15.0", features = ["mssql_server"], optional = true }
 tokio.workspace = true
+tokio-rustls = { workspace = true, optional = true }
 tonic = { workspace = true, optional = true }
 tonic-prost = { workspace = true, optional = true }
 tracing.workspace = true
 uuid.workspace = true
-
-[dev-dependencies]
-testcontainers-modules = { version = "0.15.0", features = ["mssql_server"] }
 
 [build-dependencies]
 tonic-prost-build = { workspace = true, optional = true }
 
 
 [features]
-default = []
+default = ["acton-service/default"]
+crypto-ring = ["acton-service/crypto-ring"]
 grpc = ["acton-service/grpc", "dep:tonic", "dep:prost", "dep:tonic-prost", "dep:tonic-prost-build"]
+tls = ["acton-service/tls", "dep:axum", "dep:tokio-rustls"]
 cedar-authz = ["acton-service/cedar-authz", "acton-service/auth"]
-mssql = ["acton-service/mssql", "acton-service/accounts", "acton-service/auth", "acton-service/audit"]
+mssql = ["acton-service/mssql", "acton-service/accounts", "acton-service/auth", "acton-service/audit", "dep:testcontainers-modules"]
 
 [[example]]
 name = "ping-pong"
@@ -48,3 +51,7 @@ required-features = ["grpc", "cedar-authz"]
 name = "event-driven"
 path = "examples/events/event-driven.rs"
 required-features = ["grpc"]
+
+[dev-dependencies]
+rcgen = "0.14.8"
+tempfile = "3.24.0"

@@ -36,12 +36,12 @@ jobs:
             echo 'Expected an acton-service-vMAJOR.MINOR.PATCH release tag.' >&2
             exit 1
           fi
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Resolve and validate the tagged commit
@@ -62,11 +62,11 @@ jobs:
     env:
       EXPECTED_SHA: ${{ needs.resolve.outputs.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve.outputs.sha }}
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - uses: dtolnay/rust-toolchain@stable
@@ -96,11 +96,11 @@ jobs:
     env:
       EXPECTED_SHA: ${{ needs.resolve.outputs.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve.outputs.sha }}
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - uses: dtolnay/rust-toolchain@stable
