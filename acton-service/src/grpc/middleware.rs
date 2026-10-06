@@ -418,7 +418,7 @@ pub(crate) fn is_grpc_infra_path(path: &str) -> bool {
 ///
 /// let services = GrpcServicesBuilder::new()
 ///     .add_service(auth_layer.layer(MyServiceServer::new(svc)))
-///     .build(None);
+///     .build::<()>(None);
 /// ```
 ///
 /// When token auth is configured through [`Config`](crate::config::Config),

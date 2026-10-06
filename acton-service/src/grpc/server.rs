@@ -3,6 +3,7 @@
 use crate::config::GrpcConfig;
 use crate::error::Result;
 use crate::state::AppState;
+use serde::{de::DeserializeOwned, Serialize};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tonic::server::NamedService;
 use tonic::transport::Server;
@@ -87,7 +88,7 @@ impl GrpcServicesBuilder {
     ///     .with_reflection()
     ///     .add_file_descriptor_set(FILE_DESCRIPTOR_SET)
     ///     .add_service(MyServiceServer::new(my_service))
-    ///     .build();
+    ///     .build::<()>(None);
     /// ```
     pub fn with_reflection(mut self) -> Self {
         self.reflection_enabled = true;
@@ -125,7 +126,7 @@ impl GrpcServicesBuilder {
     /// ```ignore
     /// let services = GrpcServicesBuilder::new()
     ///     .add_service(UserServiceServer::new(user_service))
-    ///     .build();
+    ///     .build::<()>(None);
     /// ```
     pub fn add_service<S>(mut self, service: S) -> Self
     where
@@ -149,11 +150,33 @@ impl GrpcServicesBuilder {
     /// If health or reflection are enabled, they will be added automatically.
     ///
     /// # Arguments
-    /// * `state` - Optional AppState, required if health checks are enabled
-    pub fn build(mut self, state: Option<AppState>) -> tonic::service::Routes {
+    /// * `state` - Optional AppState, required if health checks are enabled.
+    ///   The custom configuration type is inferred from the supplied state.
+    ///   When no state is supplied, use `build::<()>(None)`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use acton_service::{config::Config, state::AppState};
+    /// use acton_service::grpc::server::GrpcServicesBuilder;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Clone, Default, Serialize, Deserialize)]
+    /// struct CustomConfig {
+    ///     region: String,
+    /// }
+    ///
+    /// let config = Config::<CustomConfig>::default();
+    /// let state = AppState::new(config);
+    /// let routes = GrpcServicesBuilder::new().with_health().build(Some(state));
+    /// ```
+    pub fn build<T>(mut self, state: Option<AppState<T>>) -> tonic::service::Routes
+    where
+        T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+    {
         // Add health service if enabled
         if self.health_enabled {
-            if let Some(app_state) = state.clone() {
+            if let Some(app_state) = state {
                 let health_service = crate::grpc::HealthService::new(app_state);
                 let health_server =
                     tonic_health::pb::health_server::HealthServer::new(health_service);

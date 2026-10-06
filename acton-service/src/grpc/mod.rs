@@ -45,7 +45,7 @@
 //!
 //! let grpc_routes = GrpcServicesBuilder::new()
 //!     .add_service(service)
-//!     .build(None);
+//!     .build::<()>(None);
 //! # Ok(())
 //! # }
 //! ```

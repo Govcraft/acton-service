@@ -113,6 +113,8 @@ impl AuditAgent {
         // Save retention config before moving config into agent model
         let retention_days = config.retention_days;
         let cleanup_interval_hours = config.cleanup_interval_hours;
+        #[cfg(feature = "observability")]
+        let otlp_logs_enabled = config.otlp_logs_enabled;
 
         // Set up failure tracker if alert hooks are configured
         let failure_tracker = if let Some(ref alert_config) = config.alerts {
@@ -148,6 +150,8 @@ impl AuditAgent {
             agent.model.storage.clone(),
             agent.model.syslog.clone(),
             agent.model.failure_tracker.clone(),
+            #[cfg(feature = "observability")]
+            otlp_logs_enabled,
         ));
 
         // Clone values needed for after_start closure
@@ -395,6 +399,7 @@ fn spawn_writer_task(
     storage: Option<Arc<dyn AuditStorage>>,
     syslog: Option<SyslogSender>,
     tracker: Option<Arc<FailureTracker>>,
+    #[cfg(feature = "observability")] otlp_logs_enabled: bool,
 ) -> tokio::sync::mpsc::UnboundedSender<AuditEvent> {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AuditEvent>();
 
@@ -426,7 +431,7 @@ fn spawn_writer_task(
 
             // OTLP export (when observability feature is active)
             #[cfg(feature = "observability")]
-            {
+            if otlp_logs_enabled {
                 super::otlp::emit_audit_log(&sealed_event);
             }
         }

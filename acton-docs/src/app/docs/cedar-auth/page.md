@@ -590,7 +590,7 @@ let services = GrpcServicesBuilder::new()
             CedarAuthzLayer::new(cedar).layer(MyServiceServer::new(svc)),
         ),
     )
-    .build(None);
+    .build::<()>(None);
 ```
 
 See the runnable `cedar-grpc` example for an end-to-end demonstration with

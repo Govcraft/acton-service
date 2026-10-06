@@ -129,7 +129,7 @@ async fn main() -> Result<()> {
     // section must be *assigned*, not mutated in place — mutating through an
     // `if let Some(..)` would never run its body and the build would be
     // refused for registering gRPC services that no listener can expose.
-    let mut config = Config::default();
+    let mut config = Config::<()>::default();
     config.service.port = 8080;
     config.grpc = Some(GrpcConfig {
         enabled: true,

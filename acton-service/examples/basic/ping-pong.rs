@@ -153,7 +153,7 @@ async fn main() -> Result<()> {
             .with_reflection()
             .add_file_descriptor_set(ping::FILE_DESCRIPTOR_SET)
             .add_service(PingServiceServer::new(ping_service))
-            .build(None);
+            .build::<()>(None);
 
         // Convert routes to axum router and serve
         let grpc_app = routes.into_axum_router();

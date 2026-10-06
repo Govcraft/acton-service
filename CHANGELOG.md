@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.46.0] - 2026-10-06
+
+This release lets gRPC health checks share application state with custom
+configuration and makes audit log export honor its configuration switch.
+
+### Breaking
+
+- `GrpcServicesBuilder::build<T>` accepts `Option<AppState<T>>`. Calls that pass
+  state infer the custom type. Change calls without state from `build(None)` to
+  `build::<()>(None)` (#173).
+- `HealthService<T = ()>` carries the application's custom configuration type.
+  The default remains `()`, and `HealthService::new(state)` infers the type (#173).
+
+### Changed
+
+- Audit log records are emitted only when `audit.otlp_logs_enabled = true` and
+  the `observability` feature is enabled. The default remains `false`. Services
+  that relied on the previous unconditional log copy must enable this setting.
+  Storage persistence and syslog export retain their existing configuration (#172).
+
+### Fixed
+
+- gRPC health checks use the existing `AppState<T>` and its connection pools,
+  so applications need only one `Config<T>` load for their custom sections and
+  dependency health checks (#173).
+- The audit writer honors `otlp_logs_enabled`, preventing client IPs, subjects,
+  and other audit fields from entering ordinary logs when export is disabled (#172).
+
 ## [acton-service-v0.45.0] - 2026-10-05
 
 This release adds listener binding, supervised serving and shutdown, watched-file

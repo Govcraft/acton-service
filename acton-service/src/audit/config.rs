@@ -50,6 +50,11 @@ pub struct AuditConfig {
     pub syslog: SyslogConfig,
 
     /// Enable OTLP log export (default: false, requires observability feature)
+    ///
+    /// Controls emission of structured `audit.event` tracing records, including
+    /// source IP and subject. When enabled, all configured tracing subscribers
+    /// can receive these records, including console and OTLP exporters.
+    /// Storage persistence and syslog export are independent of this setting.
     #[serde(default)]
     pub otlp_logs_enabled: bool,
 

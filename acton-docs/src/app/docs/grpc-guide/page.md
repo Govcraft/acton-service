@@ -143,7 +143,7 @@ async fn main() -> Result<()> {
     // Collect gRPC services into tonic routes
     let grpc_routes = GrpcServicesBuilder::new()
         .add_service(MyServiceServer::new(MyServiceImpl::default()))
-        .build(None);
+        .build::<()>(None);
 
     // Serve on single port (HTTP + gRPC multiplexed)
     ServiceBuilder::new()
@@ -675,7 +675,7 @@ use tower::Layer;
 
 let grpc_routes = GrpcServicesBuilder::new()
     .add_service(GrpcTracingLayer.layer(LoggingLayer.layer(my_service)))
-    .build(None);
+    .build::<()>(None);
 ```
 
 ### Rate Limiting
@@ -698,7 +698,7 @@ let rate_limit = LocalRateLimitConfig {
 
 let grpc_routes = GrpcServicesBuilder::new()
     .add_service(GrpcRateLimitLayer::new(rate_limit).layer(my_service))
-    .build(None);
+    .build::<()>(None);
 ```
 
 Requires the `governor` feature.
@@ -736,7 +736,7 @@ acton-service implements the `grpc.health.v1.Health` protocol. Enable it with `.
 ```rust
 use acton_service::grpc::server::GrpcServicesBuilder;
 
-let state = AppState::default();
+let state = AppState::<()>::default();
 
 let grpc_routes = GrpcServicesBuilder::new()
     .with_health()                        // Standard gRPC health
@@ -751,7 +751,9 @@ ServiceBuilder::new()
     .await?;
 ```
 
-The health service reports on the dependencies configured in `AppState` (database, Redis, NATS). If you enable `.with_health()` but pass `None` to `build()`, the builder logs a warning and skips the health service.
+The health service reports on the dependencies configured in `AppState<T>` (database, Redis, NATS), using the same custom configuration and connection pools as the application. Load `Config<MyConfig>` once, create `AppState::new(config)`, and pass a clone of that state to `.build(Some(state.clone()))`.
+
+Starting in 0.46.0, calls without state must specify the type: `.build::<()>(None)`. If you enable `.with_health()` without supplying state, the builder logs a warning and skips the health service.
 
 Check health with grpcurl:
 
@@ -785,7 +787,7 @@ let grpc_routes = GrpcServicesBuilder::new()
     .with_reflection()
     .add_file_descriptor_set(myservice::FILE_DESCRIPTOR_SET)
     .add_service(my_service)
-    .build(None);
+    .build::<()>(None);
 
 ServiceBuilder::new()
     .with_grpc_services(grpc_routes)
@@ -824,7 +826,7 @@ Default mode - automatic protocol detection:
 ```rust
 let grpc_routes = GrpcServicesBuilder::new()
     .add_service(grpc_service)
-    .build(None);
+    .build::<()>(None);
 
 ServiceBuilder::new()
     .with_routes(http_routes)          // HTTP routes
@@ -858,7 +860,7 @@ port = 9090
 ```rust
 let grpc_routes = GrpcServicesBuilder::new()
     .add_service(grpc_service)
-    .build(None);
+    .build::<()>(None);
 
 ServiceBuilder::new()
     .with_routes(http_routes)          // Port 8080
@@ -875,7 +877,7 @@ Skip HTTP entirely:
 ```rust
 let grpc_routes = GrpcServicesBuilder::new()
     .add_service(grpc_service)
-    .build(None);
+    .build::<()>(None);
 
 ServiceBuilder::new()
     .with_grpc_services(grpc_routes)
@@ -1018,7 +1020,7 @@ async fn main() -> Result<()> {
     );
 
     // Build state so the health service can inspect dependencies
-    let state = AppState::default();
+    let state = AppState::<()>::default();
 
     // Collect services, health, and reflection into tonic routes
     let grpc_routes = GrpcServicesBuilder::new()

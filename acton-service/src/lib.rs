@@ -10,10 +10,10 @@
 //! - **Authorization**: Cedar policy engine across HTTP, gRPC, and GraphQL
 //! - **Resilience**: Circuit breaker, retry with backoff, bulkhead (concurrency limiting)
 //! - **Observability**: OpenTelemetry tracing, HTTP metrics, request ID propagation
-//! - **Audit logging**: BLAKE3 hash-chained trails over PostgreSQL, Turso, SurrealDB, or ClickHouse
+//! - **Audit logging**: BLAKE3 hash-chained trails over PostgreSQL, Turso, SurrealDB, or ClickHouse; structured log export opts in with `audit.otlp_logs_enabled`
 //! - **TLS**: rustls listener with mutual TLS, SAN-allowlist caller authorization, and restart-free credential rotation
 //! - **Connection pooling**: PostgreSQL, Redis, NATS JetStream
-//! - **Health checks**: Liveness and readiness probes
+//! - **Health checks**: Liveness and readiness probes; gRPC health reuses `AppState<T>` with custom configuration
 //! - **Graceful shutdown**: Proper signal handling (SIGTERM, SIGINT)
 //!
 //! ## Example

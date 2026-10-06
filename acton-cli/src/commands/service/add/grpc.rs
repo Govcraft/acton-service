@@ -341,7 +341,7 @@ fn show_server_setup(service_name: &str, package_name: &str, health: bool, refle
     println!();
     println!("   let service = {}ServiceImpl::default();", service_name);
     println!();
-    println!("   let mut builder = GrpcServicesBuilder::new()");
+    println!("   let builder = GrpcServicesBuilder::new()");
 
     if health {
         println!("       .with_health()");
@@ -359,10 +359,13 @@ fn show_server_setup(service_name: &str, package_name: &str, health: bool, refle
         service_name
     );
     println!();
-    println!("   let router = builder.build(None).unwrap();");
+    println!("   let router = builder.build::<()>(None);");
     println!();
     println!("   // Serve");
-    println!("   router.serve(grpc_addr).await?;");
+    println!("   tonic::transport::Server::builder()");
+    println!("       .add_routes(router)");
+    println!("       .serve(grpc_addr)");
+    println!("       .await?;");
 }
 
 fn show_client_setup(service_name: &str, package_name: &str) {

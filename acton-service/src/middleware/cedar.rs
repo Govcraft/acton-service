@@ -749,7 +749,7 @@ use tower::{Layer, Service};
 ///
 /// let services = GrpcServicesBuilder::new()
 ///     .add_service(auth_layer.layer(cedar_layer.layer(MyServiceServer::new(svc))))
-///     .build(None);
+///     .build::<()>(None);
 /// ```
 ///
 /// When Cedar and token auth are configured through [`Config`], the framework
@@ -1235,7 +1235,7 @@ mod tests {
             let authz = test_authz("permit(principal, action, resource);", true).await;
             let _routes = crate::grpc::server::GrpcServicesBuilder::new()
                 .add_service(CedarAuthzLayer::new(authz).layer(TonicSvc))
-                .build(None);
+                .build::<()>(None);
         }
     }
 }

@@ -388,7 +388,7 @@ async fn main() -> Result<()> {
             .with_reflection()
             .add_file_descriptor_set(orders::FILE_DESCRIPTOR_SET)
             .add_service(OrderServiceServer::new(order_service))
-            .build(None);
+            .build::<()>(None);
 
         // Convert routes to axum router and serve
         tracing::info!("✓ gRPC service listening on {}", grpc_addr);

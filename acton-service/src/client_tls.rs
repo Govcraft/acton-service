@@ -2382,7 +2382,7 @@ mod tests {
             .add_service(ping_proto::ping_service_server::PingServiceServer::new(
                 PingImpl,
             ))
-            .build(None);
+            .build::<()>(None);
         let app = routes.into_axum_router();
 
         let handle = tokio::spawn(async move {
