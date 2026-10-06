@@ -32,9 +32,12 @@ async fn check_routes(routes: tonic::service::Routes, expected: Option<ServingSt
             .await
     });
 
-    let mut client = HealthClient::connect(format!("http://{addr}"))
+    let channel = tonic::transport::Channel::from_shared(format!("http://{addr}"))
+        .expect("valid endpoint")
+        .connect()
         .await
         .expect("connect to bound listener");
+    let mut client = HealthClient::new(channel);
     let response = tokio::time::timeout(
         DEADLINE,
         client.check(HealthCheckRequest {
@@ -102,8 +105,13 @@ async fn health_routes_use_a_single_loaded_custom_config() {
 #[cfg(feature = "database")]
 #[tokio::test]
 async fn custom_state_preserves_required_dependency_health() {
-    let mut config = Config::<CustomConfig>::default();
-    config.database = Some(acton_service::config::DatabaseConfig::default());
+    let config = Config {
+        database: Some(
+            serde_json::from_value(serde_json::json!({ "url": "postgres://unused" }))
+                .expect("required database configuration"),
+        ),
+        ..Config::<CustomConfig>::default()
+    };
     // No database pool is installed: the required dependency must fail health.
     let state = AppState::new(config);
     let routes = GrpcServicesBuilder::new().with_health().build(Some(state));

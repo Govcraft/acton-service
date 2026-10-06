@@ -8,9 +8,12 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use acton_reactive::prelude::ActonApp;
+use acton_reactive::prelude::{ActonApp, ActorHandleInterface};
 use acton_service::{
-    audit::{AuditAgent, AuditConfig, AuditEvent, AuditEventKind, AuditSeverity, AuditStorage},
+    audit::{
+        AuditAgent, AuditConfig, AuditEvent, AuditEventKind, AuditSeverity, AuditStorage,
+        SyslogConfig,
+    },
     error::Error,
 };
 use async_trait::async_trait;
@@ -65,17 +68,22 @@ async fn otlp_flag_controls_audit_tracing_without_disabling_persistence() {
     )
     .expect("install capture subscriber in isolated integration test executable");
 
+    assert!(
+        !AuditConfig::default().otlp_logs_enabled,
+        "export remains disabled by default"
+    );
     let mut runtime = ActonApp::launch_async().await;
     for (enabled, expected_records) in [(false, 0), (true, 1)] {
         let storage = Arc::new(CapturingStorage(tokio::sync::watch::Sender::new(None)));
         let mut persisted = storage.0.subscribe();
-        let mut config = AuditConfig::default();
-        assert!(
-            !config.otlp_logs_enabled,
-            "export remains disabled by default"
-        );
-        config.otlp_logs_enabled = enabled;
-        config.syslog.transport = "none".to_string();
+        let config = AuditConfig {
+            otlp_logs_enabled: enabled,
+            syslog: SyslogConfig {
+                transport: "none".to_string(),
+                ..SyslogConfig::default()
+            },
+            ..AuditConfig::default()
+        };
         let handle = AuditAgent::spawn(
             &mut runtime,
             config,
