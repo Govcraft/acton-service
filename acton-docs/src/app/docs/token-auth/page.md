@@ -441,7 +441,7 @@ use tower::Layer;
 
 let services = GrpcServicesBuilder::new()
     .add_service(GrpcTokenAuthLayer::new(paseto_auth).layer(MyServiceServer::new(svc)))
-    .build(None);
+    .build::<()>(None);
 ```
 
 Tonic interceptors remain available for custom `with_interceptor` stacks

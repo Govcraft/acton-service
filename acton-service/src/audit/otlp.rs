@@ -1,7 +1,9 @@
 //! OpenTelemetry log export for audit events
 //!
 //! When both `audit` and `observability` features are enabled, audit events
-//! are emitted as OpenTelemetry log records via the tracing infrastructure.
+//! can be emitted as OpenTelemetry log records via the tracing infrastructure
+//! when [`AuditConfig::otlp_logs_enabled`](super::config::AuditConfig::otlp_logs_enabled)
+//! is enabled.
 //!
 //! This module uses `tracing::info!` with structured fields that map to
 //! OpenTelemetry semantic conventions, so they are automatically exported
@@ -12,6 +14,8 @@ use super::event::AuditEvent;
 /// Emit an audit event as an OpenTelemetry log record
 ///
 /// Uses tracing's structured logging which is already wired to the OTLP exporter.
+/// The audit agent calls this only when OTLP audit logging is enabled. Calling
+/// it directly emits a record to all configured tracing subscribers.
 pub fn emit_audit_log(event: &AuditEvent) {
     tracing::info!(
         audit.event.id = %event.id,

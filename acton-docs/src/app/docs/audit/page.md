@@ -97,7 +97,7 @@ ACTON_AUDIT__SYSLOG__ADDRESS=syslog.example.com:514
 - **enabled**: Enable or disable audit logging globally (default: `true`)
 - **audit_all_requests**: Log every HTTP request as an audit event (default: `false`)
 - **audit_auth_events**: Automatically emit events for auth actions (default: `true`)
-- **otlp_logs_enabled**: Export audit events via OpenTelemetry Logs (default: `false`, requires `observability` feature)
+- **otlp_logs_enabled**: Emit audit events as structured tracing log records for the configured logging/export pipeline (default: `false`, requires `observability` feature). Starting in 0.46.0, the writer honors this switch. Set it to `true` if you relied on the previous unconditional audit log records. Storage and syslog export are configured independently.
 - **audited_routes**: Glob patterns for routes to audit (e.g., `"/api/v1/admin/*"`)
 - **excluded_routes**: Routes to never audit, even when `audit_all_requests` is true (default: `["/health", "/ready"]`)
 

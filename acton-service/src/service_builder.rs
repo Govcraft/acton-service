@@ -552,8 +552,7 @@ where
     ///
     /// let grpc_services = GrpcServicesBuilder::new()
     ///     .add_service(UserServiceServer::new(user_service))
-    ///     .build()
-    ///     .expect("At least one gRPC service must be added");
+    ///     .build::<()>(None);
     ///
     /// let service = ServiceBuilder::new()
     ///     .with_routes(http_routes)

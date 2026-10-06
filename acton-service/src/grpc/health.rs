@@ -3,6 +3,7 @@
 //! Implements the standard gRPC health checking protocol.
 //! See: <https://github.com/grpc/grpc/blob/master/doc/health-checking.md>
 
+use serde::{de::DeserializeOwned, Serialize};
 use tonic::{Request, Response, Status};
 use tonic_health::pb::health_check_response::ServingStatus;
 use tonic_health::pb::{HealthCheckRequest, HealthCheckResponse};
@@ -12,16 +13,24 @@ use crate::state::AppState;
 /// Health check service implementation
 ///
 /// Provides health status for the service and its dependencies.
-/// This implements the standard gRPC health checking protocol.
+/// This implements the standard gRPC health checking protocol. The custom
+/// configuration type matches [`AppState<T>`], so health checks reuse the
+/// application's configuration and connection pools.
 #[derive(Clone)]
-pub struct HealthService {
+pub struct HealthService<T = ()>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
     #[allow(dead_code)]
-    state: AppState,
+    state: AppState<T>,
 }
 
-impl HealthService {
+impl<T> HealthService<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
     /// Create a new health service with the given state
-    pub fn new(state: AppState) -> Self {
+    pub fn new(state: AppState<T>) -> Self {
         Self { state }
     }
 
@@ -220,7 +229,10 @@ impl HealthService {
 }
 
 #[tonic::async_trait]
-impl tonic_health::pb::health_server::Health for HealthService {
+impl<T> tonic_health::pb::health_server::Health for HealthService<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
+{
     type WatchStream = std::pin::Pin<
         Box<dyn futures::Stream<Item = Result<HealthCheckResponse, Status>> + Send + 'static>,
     >;
@@ -304,7 +316,7 @@ mod tests {
         // Full integration tests would require a complete AppState setup
         use crate::config::Config;
 
-        let config = Config::default();
+        let config = Config::<()>::default();
         let state = AppState::new(config);
         let _health_service = HealthService::new(state);
     }

@@ -172,7 +172,7 @@ impl my_service::MyService for MyGrpcService {
 // Collect gRPC services into tonic routes
 let grpc_routes = GrpcServicesBuilder::new()
     .add_service(my_service::MyServiceServer::new(MyGrpcService))
-    .build(None);
+    .build::<()>(None);
 
 // Serve both protocols on the same port (automatic protocol detection)
 ServiceBuilder::new()
@@ -217,7 +217,7 @@ let grpc_routes = GrpcServicesBuilder::new()
     .with_reflection()
     .add_file_descriptor_set(my_service::FILE_DESCRIPTOR_SET)
     .add_service(my_service::MyServiceServer::new(MyGrpcService))
-    .build(None);
+    .build::<()>(None);
 
 ServiceBuilder::new()
     .with_grpc_services(grpc_routes)

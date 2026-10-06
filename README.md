@@ -99,7 +99,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-acton-service = "0.37"
+acton-service = "0.46"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -283,7 +283,7 @@ Enable `auth-full` to get the entire stack in one flag.
 
 ### Security, Audit & Compliance
 
-- **Audit logging** (`audit`) - BLAKE3 hash-chained, tamper-evident audit trails for auth, account, and request events, with storage backends for PostgreSQL, Turso, SurrealDB, and ClickHouse ([guide](https://govcraft.github.io/acton-service/docs/audit))
+- **Audit logging** (`audit`) - BLAKE3 hash-chained, tamper-evident audit trails for auth, account, and request events, with storage backends for PostgreSQL, Turso, SurrealDB, and ClickHouse. Structured log export requires `audit.otlp_logs_enabled = true` ([guide](https://govcraft.github.io/acton-service/docs/audit))
 - **TLS termination** (`tls`) - rustls-based HTTPS with automatic crypto-provider installation, mutual TLS, SAN-allowlist caller authorization, and credential rotation without a restart (poll-based, SIGHUP, or a custom hook) ([guide](https://govcraft.github.io/acton-service/docs/tls))
 - **FIPS 140-3 path** - `aws-lc-rs` is the default crypto provider; see [Choosing a Crypto Provider](#choosing-a-crypto-provider)
 - **systemd journald** (`journald`) - Native journal integration for structured logs on Linux hosts
@@ -303,16 +303,21 @@ let http_routes = VersionedApiBuilder::new()
     })
     .build_routes();
 
+// Load once and share state with gRPC health checks
+let config = Config::<()>::load()?;
+let state = AppState::builder().config(config).build().await?;
+
 // gRPC services with health checks and reflection
 let grpc_routes = GrpcServicesBuilder::new()
     .with_health()
     .with_reflection()
     .add_file_descriptor_set(hello::FILE_DESCRIPTOR_SET)
     .add_service(HelloServiceServer::new(HelloService::default()))
-    .build(None);
+    .build(Some(state.clone()));
 
 // Serve both protocols on the same port (automatic protocol detection)
 ServiceBuilder::new()
+    .with_state(state)
     .with_routes(http_routes)
     .with_grpc_services(grpc_routes)
     .build()
@@ -437,7 +442,7 @@ password in the connection string:
 
 ```toml
 [dependencies]
-acton-service = { version = "0.44", features = ["mssql"] }
+acton-service = { version = "0.46", features = ["mssql"] }
 ```
 
 Then select integrated authentication in the service configuration:
@@ -457,7 +462,7 @@ proxy and forward identity only over an allowlisted mTLS connection:
 
 ```toml
 [dependencies]
-acton-service = { version = "0.44", features = ["windows-auth"] }
+acton-service = { version = "0.46", features = ["windows-auth"] }
 ```
 
 Configure the trusted proxy and its exact group-to-role mappings in the service
@@ -604,7 +609,7 @@ Defaults: `http`, `observability`, `crypto-aws-lc-rs`. Enable only what you need
 
 ```toml
 [dependencies]
-acton-service = { version = "0.44", features = ["grpc", "database", "cache"] }
+acton-service = { version = "0.46", features = ["grpc", "database", "cache"] }
 ```
 
 **Transports & protocols**
@@ -681,7 +686,7 @@ Or use `full` to enable everything (with PostgreSQL as the database backend):
 
 ```toml
 [dependencies]
-acton-service = { version = "0.44", features = ["full"] }
+acton-service = { version = "0.46", features = ["full"] }
 ```
 
 See the [Feature Flags guide](https://govcraft.github.io/acton-service/docs/feature-flags) for a decision tree.
@@ -698,7 +703,7 @@ that `aws-lc-rs` requires at build time:
 
 ```toml
 [dependencies]
-acton-service = { version = "0.44", default-features = false, features = [
+acton-service = { version = "0.46", default-features = false, features = [
     "http",
     "observability",
     "crypto-ring",

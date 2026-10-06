@@ -160,7 +160,7 @@ async fn main() -> Result<()> {
         .with_reflection()
         .add_file_descriptor_set(hello::FILE_DESCRIPTOR_SET)
         .add_service(HelloServiceServer::new(HelloServiceImpl))
-        .build(None);
+        .build::<()>(None);
 
     let mut config = Config::default();
     config.service.port = 8080;
