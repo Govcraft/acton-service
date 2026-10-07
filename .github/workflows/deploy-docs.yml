@@ -20,6 +20,8 @@ concurrency:
 
 jobs:
   deploy:
+    # The caller checks ci-gate success and overrides intentional ancestor skips.
+    # Download its validated artifact even when identical-tree reuse skipped builds.
     if: github.ref == 'refs/heads/main'
     environment:
       name: github-pages
