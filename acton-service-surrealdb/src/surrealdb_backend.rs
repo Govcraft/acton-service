@@ -236,31 +236,4 @@ mod tests {
             result.err()
         );
     }
-
-    // SurrealDB 3.0 made the embedded `mem://` engine strict: it no longer accepts
-    // signin against an undefined root user. Real-server deployments (ws/http) work
-    // unchanged because users are provisioned out of band; there is no SDK-level way
-    // to bootstrap a root user on the embedded engine through `any::connect`.
-    #[tokio::test]
-    #[ignore = "embedded mem:// engine has no default root user in surrealdb 3.0"]
-    async fn test_mem_connection_with_auth() {
-        let config = SurrealDbConfig {
-            url: "mem://".to_string(),
-            namespace: "test".to_string(),
-            database: "test".to_string(),
-            username: Some("root".to_string()),
-            password: Some("root".to_string()),
-            max_retries: 0,
-            retry_delay_secs: 1,
-            optional: false,
-            lazy_init: false,
-        };
-
-        let result = create_client(&config).await;
-        assert!(
-            result.is_ok(),
-            "Failed to connect to in-memory SurrealDB with auth: {:?}",
-            result.err()
-        );
-    }
 }

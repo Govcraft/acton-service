@@ -7,20 +7,26 @@ import re
 import subprocess
 from pathlib import Path
 
-from profiles import PROFILES, matrix
+from profiles import PROFILES, QUALIFICATION, matrix
 
 BACKENDS = {"postgres", "mssql", "turso", "surrealdb", "clickhouse"}
 GRPC_INTEGRATION = {"grpc-integration", "grpc-integration-ring"}
 BACKEND_PROFILES = {
-    "postgres": {"postgres", "full"},
-    "mssql": {"mssql-adapter", "mssql", "mssql-integration", "windows"},
-    "turso": {"turso-adapter", "audit-turso"},
-    "surrealdb": {"surrealdb-adapter", "audit-surrealdb"},
-    "clickhouse": {"clickhouse-adapter", "audit-clickhouse"},
+    "postgres": {
+        "postgres",
+        "postgres-ring",
+        "postgres-integration",
+        "postgres-integration-ring",
+        "full",
+    },
+    "mssql": {"mssql", "mssql-integration", "windows-mssql"},
+    "turso": {"audit-turso"},
+    "surrealdb": {"audit-surrealdb", "surrealdb-integration"},
+    "clickhouse": {"audit-clickhouse", "clickhouse-integration"},
 }
 FEATURE_PATHS = (
     ("auth/oauth/", {"oauth-no-cache", "oauth-with-cache"}),
-    ("auth/saml/", {"saml", "full", "windows"}),
+    ("auth/saml/", {"saml", "full", "windows-saml", "windows-full"}),
     ("auth/tokens/", {"tokens", "full"}),
     ("auth/", {"tokens", "oauth-no-cache", "saml", "full"}),
     ("accounts/", {"full", "mssql", "audit-turso", "audit-surrealdb"}),
@@ -37,7 +43,24 @@ FEATURE_PATHS = (
         },
     ),
     ("audit/", {"audit-nodb", "audit-otel", "full"}),
-    ("grpc/", {"grpc-no-tls", "grpc-tls", "grpc-examples", *GRPC_INTEGRATION}),
+    (
+        "grpc/",
+        {"grpc-no-tls", "grpc-tls", "grpc-examples", "windows-grpc", *GRPC_INTEGRATION},
+    ),
+    ("build_utils.rs", {"grpc-integration", "grpc-integration-ring"}),
+    (
+        "crypto.rs",
+        {
+            "default",
+            "minimal",
+            "full",
+            "ring",
+            "tls-ring",
+            *GRPC_INTEGRATION,
+            "postgres-integration",
+            "postgres-integration-ring",
+        },
+    ),
     ("graphql/", {"graphql", "full"}),
     ("session/", {"frontend", "full"}),
     ("htmx/", {"frontend"}),
@@ -48,16 +71,46 @@ FEATURE_PATHS = (
     ("handlers/", {"full"}),
     ("middleware/metrics.rs", {"otel-only", "metrics", "full"}),
     ("middleware/", {"full", "tokens", "tls-no-grpc", "graphql"}),
-    ("tls.rs", {"tls-no-grpc", "grpc-tls", *GRPC_INTEGRATION, "ring", "windows"}),
+    (
+        "tls.rs",
+        {
+            "tls-no-grpc",
+            "grpc-tls",
+            *GRPC_INTEGRATION,
+            "ring",
+            "tls-ring",
+            "windows",
+            "windows-auth-native",
+            "windows-grpc",
+        },
+    ),
     (
         "client_tls.rs",
-        {"tls-no-grpc", "grpc-tls", *GRPC_INTEGRATION, "ring", "windows"},
+        {
+            "tls-no-grpc",
+            "grpc-tls",
+            *GRPC_INTEGRATION,
+            "ring",
+            "tls-ring",
+            "windows",
+            "windows-auth-native",
+            "windows-grpc",
+        },
     ),
     (
         "caller_auth.rs",
-        {"tls-no-grpc", "grpc-tls", *GRPC_INTEGRATION, "ring", "windows"},
+        {
+            "tls-no-grpc",
+            "grpc-tls",
+            *GRPC_INTEGRATION,
+            "ring",
+            "tls-ring",
+            "windows",
+            "windows-auth-native",
+            "windows-grpc",
+        },
     ),
-    ("windows_auth.rs", {"windows-auth", "windows"}),
+    ("windows_auth.rs", {"windows-auth", "windows-auth-native"}),
     ("metrics_exporter.rs", {"otel-only", "metrics", "full"}),
     ("observability.rs", {"otel-only", "metrics", "audit-otel", "full"}),
     ("database.rs", BACKEND_PROFILES["postgres"]),
@@ -77,13 +130,39 @@ FEATURE_PATHS = (
 )
 
 
+HARNESS_TESTS = {
+    "mssql_integration": {"mssql-integration"},
+    "postgres_integration": {"postgres-integration", "postgres-integration-ring"},
+    "surrealdb_integration": {"surrealdb-integration"},
+    "clickhouse_integration": {"clickhouse-integration"},
+}
+EXAMPLE_PROFILES = {
+    "examples/basic/simple-api.rs": {"default", "minimal"},
+    "examples/basic/users-api.rs": {"default", "minimal"},
+    "examples/authorization/cedar-authz.rs": {"full"},
+    "examples/observability/test-metrics.rs": {"otel-only", "metrics"},
+    "examples/observability/test-observability.rs": {"default"},
+    "examples/observability/test-prometheus-metrics.rs": {"metrics"},
+    "examples/database/database-api.rs": {"full"},
+    "examples/websocket/chat-server.rs": {"full"},
+    "examples/htmx/task-manager.rs": {"frontend"},
+    "examples/graphql/graphql-basic.rs": {"graphql"},
+}
+
+
 def docs_only(path: str) -> bool:
     return (
         path.startswith(
             ("acton-docs/", "docs/", ".remember/", ".github/ISSUE_TEMPLATE/")
         )
         or re.fullmatch(r"[^/]+\.md", path) is not None
-        or path in {f"{profile.package}/README.md" for profile in PROFILES.values()}
+        or path
+        in {
+            f"{name}/README.md"
+            for profile in PROFILES.values()
+            for name in (profile.package, profile.companion)
+            if name
+        }
         or path.startswith("acton-service/examples/")
         and path.endswith("/README.md")
         or path.startswith("LICENSE")
@@ -109,15 +188,18 @@ def select(paths: list[str], full: bool = False) -> dict[str, object]:
         or p in {"deny.toml", ".cargo/audit.toml"}
         for p in paths
     )
+    tooling = any(p.startswith((".github/workflows/", "scripts/ci/")) for p in paths)
+    docs = docs or ".github/workflows/deploy-docs.yml" in paths
     selected: set[str] = set()
     reasons: list[str] = []
     if full:
-        selected.update(PROFILES)
+        selected.update(QUALIFICATION)
         return {
             "matrix": matrix(selected),
             "code": True,
             "docs": True,
             "security": True,
+            "tooling": True,
             "reasons": ["Exhaustive validation requested"],
         }
 
@@ -148,9 +230,28 @@ def select(paths: list[str], full: bool = False) -> dict[str, object]:
                 reasons.append(f"Shared contracts affect every adapter: {path}")
                 continue
             if path.startswith("acton-service-integration-tests/"):
-                selected.update(
-                    {"grpc-examples", *GRPC_INTEGRATION, "mssql-integration"}
-                )
+                relative = path.removeprefix("acton-service-integration-tests/")
+                if relative.startswith(("proto/", "examples/")) or relative in {
+                    "build.rs",
+                    "tests/grpc_tls_integration.rs",
+                    "tests/protobuf_helper.rs",
+                }:
+                    selected.update(
+                        {"grpc-examples", *GRPC_INTEGRATION, "windows-grpc"}
+                    )
+                elif (
+                    relative.startswith("tests/")
+                    and Path(relative).stem in HARNESS_TESTS
+                ):
+                    selected.update(HARNESS_TESTS[Path(relative).stem])
+                else:
+                    selected.update(
+                        {
+                            name
+                            for name, profile in PROFILES.items()
+                            if profile.package == "acton-service-integration-tests"
+                        }
+                    )
                 reasons.append(f"Integration harness: {path}")
                 continue
             if path.startswith("acton-service/src/"):
@@ -168,15 +269,29 @@ def select(paths: list[str], full: bool = False) -> dict[str, object]:
                     selected.update(PROFILES)
                     reasons.append(f"Shared or unclassified source: {path}")
                 continue
+            if path.startswith("acton-service/examples/"):
+                relative = path.removeprefix("acton-service/")
+                selected.update(EXAMPLE_PROFILES.get(relative, PROFILES.keys()))
+                reasons.append(f"Example target and conditional features: {path}")
+                continue
             if path.startswith("acton-service/tests/"):
                 test = Path(path).name
                 test_profiles = (
                     ("oauth", {"oauth-no-cache", "oauth-with-cache"}),
-                    ("saml", {"saml", "windows"}),
+                    ("saml", {"saml", "windows-saml"}),
                     ("graphql", {"graphql"}),
                     ("grpc", {"grpc-no-tls", "grpc-tls", *GRPC_INTEGRATION}),
                     ("metrics", {"minimal", "otel-only", "metrics", "full"}),
-                    ("tls", {"tls-no-grpc", "grpc-tls", *GRPC_INTEGRATION, "ring"}),
+                    (
+                        "tls",
+                        {
+                            "tls-no-grpc",
+                            "grpc-tls",
+                            *GRPC_INTEGRATION,
+                            "ring",
+                            "tls-ring",
+                        },
+                    ),
                     ("mssql", BACKEND_PROFILES["mssql"]),
                     ("audit", {"audit-nodb", "audit-otel", "full"}),
                     ("governor", {"full"}),
@@ -195,13 +310,12 @@ def select(paths: list[str], full: bool = False) -> dict[str, object]:
             selected.update(PROFILES)
             reasons.append(f"Unclassified path, validating everything: {path}")
 
-    if selected:
-        selected.update({"default", "minimal"})
     return {
         "matrix": matrix(selected),
         "code": bool(selected),
         "docs": docs,
         "security": security,
+        "tooling": tooling,
         "reasons": reasons,
     }
 
@@ -249,11 +363,12 @@ def main() -> None:
             print(f"Incremental selection unavailable ({error}); selecting everything.")
             paths, full = [], True
     plan = select(paths, full)
+    Path("ci-plan.json").write_text(json.dumps(plan, indent=2) + "\n")
     print(json.dumps(plan, indent=2))
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
         with open(output, "a", encoding="utf-8") as stream:
-            for name in ("matrix", "code", "docs", "security"):
+            for name in ("matrix", "code", "docs", "security", "tooling"):
                 stream.write(
                     f"{name}={json.dumps(plan[name], separators=(',', ':'))}\n"
                 )

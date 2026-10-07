@@ -12,6 +12,12 @@ on:
       exhaustive:
         default: false
         type: boolean
+      tooling:
+        default: true
+        type: boolean
+      helpers-tested:
+        default: false
+        type: boolean
       linux-runner:
         default: ubuntu-latest
         type: string
@@ -22,6 +28,9 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   EXPECTED_SHA: ${{ inputs.sha }}
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
 
 jobs:
   format:
@@ -44,20 +53,37 @@ jobs:
           else
             python scripts/ci/run_profile.py --check-matrix
           fi
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: '1.99.0'
           components: rustfmt
       - name: Validate workflows
+        if: inputs.tooling
         uses: docker://rhysd/actionlint:1.7.12
       - uses: astral-sh/ruff-action@v4.1.0
+        if: inputs.tooling
         with:
           version: '0.16.10'
           src: scripts/ci
-      - name: Formatting and workflow validation
-        run: |
-          cargo fmt --all --check
-          ruff format --check scripts/ci
-          python -m unittest discover -s scripts/ci/tests -v
+      - name: Formatting
+        run: cargo fmt --all --check
+      - name: CI helper formatting
+        if: inputs.tooling
+        run: ruff format --check scripts/ci
+      - name: Independent reusable-workflow regression checks
+        if: '!inputs.helpers-tested'
+        run: python -m unittest discover -s scripts/ci/tests -v
+      # This is the single registry writer. Matrix jobs only restore this entry.
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git/db
+          enableCrossOsArchive: true
+          key: ci-v2-registry--${{ hashFiles('Cargo.lock') }}
+          restore-keys: ci-v2-registry--
+      - name: Populate shared registry
+        run: cargo fetch --locked
 
   profiles:
     needs: format
@@ -95,24 +121,46 @@ jobs:
         if: runner.os == 'Windows' && matrix.protoc
         with:
           repo-token: ${{ github.token }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: '1.99.0'
           components: clippy
       - name: Isolate persistent compiler artifacts by profile
         if: runner.environment == 'self-hosted'
         env:
           PROFILE: ${{ matrix.profile }}
         run: echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/../.cargo-target-$PROFILE" >> "$GITHUB_ENV"
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache/restore@v5
         if: runner.environment != 'self-hosted'
         with:
-          key: validation-${{ matrix.profile }}
-          cache-on-failure: true
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git/db
+          enableCrossOsArchive: true
+          key: ci-v2-registry--${{ hashFiles('Cargo.lock') }}
+          restore-keys: ci-v2-registry--
+      - uses: actions/cache/restore@v5
+        id: compiler
+        if: runner.environment != 'self-hosted'
+        with:
+          path: target
+          key: ci-v2-${{ matrix.cache }}--${{ runner.os }}-1.99.0-debug0--${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml') }}
+          restore-keys: ci-v2-${{ matrix.cache }}--${{ runner.os }}-1.99.0-debug0--
       - uses: taiki-e/install-action@nextest
+        if: matrix.tests
       - name: Clippy, tests, and profile checks
         env:
           PROFILE: ${{ matrix.profile }}
         run: python scripts/ci/run_profile.py "$PROFILE"
+      - name: Bound reusable compiler artifacts
+        id: cache
+        if: success() && matrix.cache_writer && runner.environment != 'self-hosted' && steps.compiler.outputs.cache-hit != 'true'
+        run: python scripts/ci/cache.py prepare
+      - uses: actions/cache/save@v5
+        if: success() && steps.cache.outputs.save == 'true'
+        with:
+          path: target
+          key: ${{ steps.compiler.outputs.cache-primary-key }}
 
   validation-gate:
     needs: [format, profiles]

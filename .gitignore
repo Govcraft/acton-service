@@ -61,3 +61,7 @@ config.toml
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+
+# Local CI plan and successful-tree evidence are workflow artifacts.
+/ci-plan.json
+/evidence.json

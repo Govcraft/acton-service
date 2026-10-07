@@ -6,7 +6,7 @@ import os
 import re
 import subprocess
 
-from profiles import PROFILES
+from profiles import PROFILES, QUALIFICATION, matrix_entry
 
 
 def verify_revision(expected: str) -> None:
@@ -20,26 +20,41 @@ def verify_revision(expected: str) -> None:
 def commands(name: str) -> list[list[str]]:
     profile = PROFILES[name]
     options = profile.cargo_options()
-    result = [["cargo", "clippy", *options, "--all-targets", "--", "-D", "warnings"]]
+    if profile.compile_only:
+        return [["cargo", "check", *options, "--all-targets"]]
+    result = []
+    if profile.companion:
+        standalone = ["--locked", "-p", profile.companion]
+        result.append(
+            ["cargo", "clippy", *standalone, "--all-targets", "--", "-D", "warnings"]
+        )
+        # Qualify features by package when selecting multiple workspace members.
+        for i in range(len(options)):
+            if i and options[i - 1] == "--features":
+                options[i] = ",".join(
+                    f"{profile.package}/{feature}"
+                    for feature in profile.features.split(",")
+                )
+        options.extend(["-p", profile.companion])
+    result.append(
+        ["cargo", "clippy", *options, "--all-targets", "--", "-D", "warnings"]
+    )
     if profile.tests:
-        result.append(["cargo", "nextest", "run", "--no-fail-fast", *options])
+        test_options = ["--no-fail-fast"]
+        if name == "windows-saml":
+            test_options.extend(["-E", "test(signed) | test(signature)"])
+        if name == "tls-ring":
+            test_options.extend(
+                [
+                    "-E",
+                    "test(tls) | test(crypto) | binary(tls) | binary(metrics_exporter)",
+                ]
+            )
+        result.append(["cargo", "nextest", "run", *test_options, *options])
     if profile.doctests:
         result.append(["cargo", "test", "--doc", *options])
-    if name == "windows":
-        for other in ("full", "mssql", "windows-auth"):
-            result.append(
-                ["cargo", "check", *PROFILES[other].cargo_options(), "--all-targets"]
-            )
-        result.append(
-            [
-                "cargo",
-                "check",
-                *PROFILES["grpc-integration"].cargo_options(),
-                "--features",
-                "cedar-authz",
-                "--all-targets",
-            ]
-        )
+    elif profile.companion:
+        result.append(["cargo", "test", "--doc", "--locked", "-p", profile.companion])
     return result
 
 
@@ -52,15 +67,12 @@ def validate_matrix(value: dict, exhaustive: bool) -> None:
         raise ValueError("Validation matrix contains duplicate profiles")
     for entry in entries:
         profile = PROFILES.get(entry.get("profile"))
-        if profile is None or entry != {
-            "profile": entry["profile"],
-            "runner": profile.runner,
-            "protoc": profile.protoc,
-            "kerberos": profile.kerberos,
-        }:
+        if profile is None or entry != matrix_entry(entry["profile"]):
             raise ValueError(f"Unexpected validation matrix entry: {entry}")
-    if exhaustive and set(names) != PROFILES.keys():
-        raise ValueError("Release qualification must run every supported profile")
+    if exhaustive and set(names) != QUALIFICATION:
+        raise ValueError(
+            "Release qualification must run every supported service profile"
+        )
 
 
 def main() -> None:

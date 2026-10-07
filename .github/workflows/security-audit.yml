@@ -6,8 +6,6 @@ on:
       sha:
         required: true
         type: string
-  schedule:
-    - cron: '0 6 * * 1'
   workflow_dispatch:
 
 permissions:
@@ -29,7 +27,9 @@ jobs:
         env:
           EXPECTED_SHA: ${{ inputs.sha || github.sha }}
         run: python -c 'import sys; sys.path.insert(0, "scripts/ci"); import os; from run_profile import verify_revision; verify_revision(os.environ["EXPECTED_SHA"])'
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.99.0'
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-audit,cargo-deny,cargo-cyclonedx

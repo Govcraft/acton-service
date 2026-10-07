@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 # Qualification and publication must finish even when development moves on.
 concurrency:
@@ -85,11 +86,18 @@ jobs:
       - name: Install native prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y protobuf-compiler libkrb5-dev
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+          sudo apt-get install -y libkrb5-dev
+      - uses: dtolnay/rust-toolchain@master
         with:
-          key: package
+          toolchain: '1.99.0'
+      - uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git/db
+          enableCrossOsArchive: true
+          key: ci-v2-registry--${{ hashFiles('Cargo.lock') }}
+          restore-keys: ci-v2-registry--
       - name: Verify publication graph and packaged crates
         env:
           EXPECTED_SHA: ${{ needs.plan.outputs.sha }}
@@ -111,3 +119,23 @@ jobs:
         env:
           RESULTS: ${{ toJSON(needs) }}
         run: python scripts/ci/gate.py qualification
+
+  retain-caches:
+    needs: qualification-gate
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Retain bounded compiler caches after qualification
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/ci/cache.py retain

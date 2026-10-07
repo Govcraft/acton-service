@@ -13,8 +13,14 @@ tasks:
     cmds:
       - cargo build --manifest-path {{.CLI_PATH}}/Cargo.toml --release
     sources:
-      - '{{.CLI_PATH}}/src/**/*.rs'
-      - '{{.CLI_PATH}}/Cargo.toml'
+      - 'acton-*/src/**/*.rs'
+      - 'acton-*/Cargo.toml'
+      - 'acton-*/build.rs'
+      - '{{.CLI_PATH}}/templates/**/*'
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - '.cargo/config.toml'
     generates:
       - '{{.TARGET_DIR}}/{{.CLI_NAME}}'
 
@@ -81,17 +87,17 @@ tasks:
 
       Usage:
         task deny                          # Run all checks
-        task deny -- check advisories      # Run specific check
+        task deny -- advisories      # Run specific check
 
       Requires:
       - cargo-deny installed (cargo install cargo-deny)
     cmds:
-      - cargo deny check {{.CLI_ARGS | default "all"}}
+      - cargo deny --all-features check {{.CLI_ARGS | default "all"}}
 
   sbom:
     desc: Generate CycloneDX SBOM in JSON format
     cmds:
-      - cargo cyclonedx --manifest-path Cargo.toml --format json --all
+      - cargo cyclonedx --manifest-path Cargo.toml --format json --all --all-features --target all
 
   security:
     desc: Run all security checks (audit, deny, sbom)
@@ -99,39 +105,6 @@ tasks:
       - task: audit
       - task: deny
       - task: sbom
-
-  release-cli:
-    desc: Bump CLI version, update changelog, sign, and push to remote (no publish)
-    summary: |
-      Release a new version of the CLI using cargo-release.
-
-      Usage:
-        task release-cli -- patch   # Bump patch version (0.2.1 -> 0.2.2)
-        task release-cli -- minor   # Bump minor version (0.2.1 -> 0.3.0)
-        task release-cli -- major   # Bump major version (0.2.1 -> 1.0.0)
-
-      This will:
-      - Bump the version in Cargo.toml
-      - Update CHANGELOG.md with git-cliff
-      - Create a signed git commit
-      - Create a signed git tag
-      - Push changes and tags to remote
-      - NOT publish to crates.io (--no-publish)
-
-      Requires:
-      - cargo-release installed (cargo install cargo-release)
-      - git-cliff installed (cargo install git-cliff)
-      - GPG signing configured
-    cmds:
-      - |
-        if [ -z "{{.CLI_ARGS}}" ]; then
-          echo "Error: Version level required (patch, minor, or major)"
-          echo "Usage: task release-cli -- patch"
-          exit 1
-        fi
-      - git-cliff -o CHANGELOG.md
-      - git add CHANGELOG.md
-      - cargo release --manifest-path {{.CLI_PATH}}/Cargo.toml --sign --no-publish -x {{.CLI_ARGS}}
 
   release-service:
     desc: Prepare a signed workspace release and dispatch gated publishing
@@ -173,7 +146,14 @@ tasks:
         release_tag=$(python3 -c 'import tomllib; print("acton-service-v" + tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
         gh workflow run release.yml --repo Govcraft/acton-service --ref main -f "tag=$release_tag"
 
-  default:
-    desc: Build and install the CLI
+  check:
+    desc: Check the normal service configuration without building the deprecated CLI
     cmds:
-      - task: install
+      - cargo fmt --all --check
+      - cargo clippy --locked -p acton-service --all-targets -- -D warnings
+      - cargo nextest run --locked -p acton-service
+
+  default:
+    desc: Run fast service development checks
+    cmds:
+      - task: check
