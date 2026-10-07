@@ -464,19 +464,19 @@ class CacheTests(unittest.TestCase):
             "ref": ref,
         }
 
-    def test_only_six_distinct_families_have_writers(self):
-        self.assertEqual(len(CACHE_WRITERS), 6)
-        self.assertEqual(len({cache_family(name) for name in CACHE_WRITERS}), 6)
+    def test_only_eight_distinct_families_have_writers(self):
+        self.assertEqual(len(CACHE_WRITERS), 8)
+        self.assertEqual(len({cache_family(name) for name in CACHE_WRITERS}), 8)
 
     def test_retention_removes_superseded_cache_and_enforces_budget(self):
         entries = [
             self.entry(1, "ci-v2-full--new", 60, "2026-01-03"),
             self.entry(2, "ci-v2-full--old", 60, "2026-01-02"),
             self.entry(3, "ci-v2-default--new", 60),
-            self.entry(4, "pnpm-unrelated", 1000),
+            self.entry(4, "pnpm-unrelated", 10),
             self.entry(5, "v0-rust-profile", 1000),
         ]
-        self.assertEqual(set(obsolete(entries, budget=100)), {2, 3, 5})
+        self.assertEqual(set(obsolete(entries, budget=110)), {2, 3, 5})
 
     def test_trim_keeps_library_fingerprints_but_removes_test_executables(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -73,8 +73,8 @@ jobs:
       - name: Independent reusable-workflow regression checks
         if: '!inputs.helpers-tested'
         run: python -m unittest discover -s scripts/ci/tests -v
-      # This is the single registry writer. Matrix jobs only restore this entry.
-      - uses: actions/cache@v5
+      # Main's independent maintenance workflow owns shared cache writes.
+      - uses: actions/cache/restore@v5
         with:
           path: |
             ~/.cargo/registry
@@ -82,7 +82,7 @@ jobs:
           enableCrossOsArchive: true
           key: ci-v2-registry--${{ hashFiles('Cargo.lock') }}
           restore-keys: ci-v2-registry--
-      - name: Populate shared registry
+      - name: Fetch any missing locked dependencies
         run: cargo fetch --locked
 
   profiles:
@@ -139,13 +139,11 @@ jobs:
           enableCrossOsArchive: true
           key: ci-v2-registry--${{ hashFiles('Cargo.lock') }}
           restore-keys: ci-v2-registry--
-      - uses: actions/cache/restore@v5
+      - uses: ./.github/actions/compiler-cache
         id: compiler
         if: runner.environment != 'self-hosted'
         with:
-          path: target
-          key: ci-v2-${{ matrix.cache }}--${{ runner.os }}-1.99.0-debug0--${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml') }}
-          restore-keys: ci-v2-${{ matrix.cache }}--${{ runner.os }}-1.99.0-debug0--
+          family: ${{ matrix.cache }}
       - uses: taiki-e/install-action@v2
         if: matrix.tests
         with:
@@ -155,15 +153,6 @@ jobs:
         env:
           PROFILE: ${{ matrix.profile }}
         run: python scripts/ci/run_profile.py "$PROFILE"
-      - name: Bound reusable compiler artifacts
-        id: cache
-        if: success() && matrix.cache_writer && runner.environment != 'self-hosted' && steps.compiler.outputs.cache-hit != 'true'
-        run: python scripts/ci/cache.py prepare
-      - uses: actions/cache/save@v5
-        if: success() && steps.cache.outputs.save == 'true'
-        with:
-          path: target
-          key: ${{ steps.compiler.outputs.cache-primary-key }}
 
   validation-gate:
     needs: [format, profiles]

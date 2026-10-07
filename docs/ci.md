@@ -82,21 +82,51 @@ and review the new compiler in qualification. CI disables incremental compilatio
 and debug info for development/test profiles, reducing upload size and codegen work.
 Local builds retain their usual debugging configuration.
 
-One preflight job populates a shared lockfile-keyed registry cache. Six deliberate
-compiler writers populate default, full, ring, remote SurrealDB, frontend, and Windows
-families; other jobs restore compatible artifacts without racing to save partial
-snapshots. Dependencies and unchanged workspace libraries are retained, including
-the SurrealDB remote adapter. Test executables, docs, and incremental output are
-excluded. A writer skips oversized uploads above 4 GiB uncompressed; the measured
-full-profile footprint is 2.3 GiB before compression. Retention
-keeps the newest entry per family/ref within an 8 GiB total CI budget and removes
-obsolete v0-rust caches; unrelated caches are untouched. This leaves room within
-the observed repository storage for documentation/dependency tooling. Cache misses
-always compile normally and never weaken validation. Live SQL Server, SurrealDB, and ClickHouse scenarios run in their composite backend
+Validation restores caches without writing PR or tag snapshots. GitHub isolates
+PR merge-ref caches from other PRs and main, so repeat runs of one PR do not prove
+shared-cache performance. Only `cache-maintenance.yml` writes the shared main
+registry and compiler caches. It runs after main pushes, on a daily repair schedule,
+or on a manual main dispatch, independently of the required validation gate.
+This also populates caches when same-tree evidence skips repeated merge validation.
+
+Maintenance first looks up exact main keys through the cache API. If they all exist,
+it schedules no dependency build jobs. Missing graphs restore compatible older
+artifacts before compiling. Eight representative families cover default, full,
+Ring, remote SurrealDB, frontend, Windows, SQL Server, and Turso. SQL Server and
+Turso have separate families because `full` excludes those native drivers. Recipes derive
+their packages, features, and targets from the validation catalog, preserving
+separate standalone adapter and combined facade/harness graphs. Linux uses the
+pinned, checksummed cargo-chef 0.1.78 release binary; Windows uses native Cargo
+check/build commands. Warming runs no tests, services, or qualification commands.
+
+Compiler keys include OS, architecture, pinned compiler, workspace manifests,
+lockfile, compiler configuration, and recipe/workflow definitions. Source edits
+retain dependency caches; feature changes invalidate immutable keys. Cooking is
+restricted to disposable GitHub-hosted main checkouts because it replaces source
+files with stubs. All workspace artifacts are cleaned before upload; test
+executables, docs, and incremental output are excluded. Maintenance cannot create
+validation evidence. Local and persistent self-hosted checkouts are never cooked.
+
+Uploads above 4 GiB uncompressed are skipped. Retention keeps the newest main
+entry per family within an 8 GiB repository budget after reserving space for
+unrelated workflows and open PRs. Closed-PR cleanup confirms live PR state before
+deleting cache IDs; it preserves main, tags, branches, and open PR caches. Legacy
+main `v0-rust` entries are retired. No paid storage settings are changed.
+
+Cache misses always compile normally and never weaken validation. Live SQL Server,
+SurrealDB, and ClickHouse scenarios run in their composite backend
 jobs during qualification; their fixture-only profiles remain available for narrow
 fixture edits. The ring cache writer uses narrow TLS runtime artifacts, while the
 broad ring compile profile restores them. Qualification cannot fill
-storage with 38 independent registry/compiler copies.
+storage with 38 independent registry/compiler copies. Include maintenance runner
+work when comparing aggregate cost; warming moves a missing dependency build out
+of PR feedback, rather than eliminating its initial cost.
+
+Inspect a warming recipe without changing local source:
+
+```sh
+python3 scripts/ci/warm_caches.py print --profile mssql
+```
 
 `task` now runs normal service formatting, lint, and runtime checks. Legacy CLI
 build/install remains opt-in, its freshness includes shared source and embedded

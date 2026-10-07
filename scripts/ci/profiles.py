@@ -152,7 +152,7 @@ QUALIFICATION = PROFILES.keys() - {
     "surrealdb-integration",
     "clickhouse-integration",
 }
-# One deliberate writer per family; rare profiles restore without competing saves.
+# Representative graphs for main's dependency-only cache maintenance.
 CACHE_WRITERS = {
     "default",
     "full",
@@ -160,6 +160,8 @@ CACHE_WRITERS = {
     "audit-surrealdb",
     "windows",
     "frontend",
+    "mssql",
+    "audit-turso",
 }
 
 
@@ -180,6 +182,10 @@ def cache_family(name: str) -> str:
         return "default"
     if name == "frontend":
         return "frontend"
+    if name in {"mssql", "mssql-integration"}:
+        return "mssql"
+    if name == "audit-turso":
+        return "turso"
     return "full"
 
 

@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pull requests select Rust profiles from affected subsystems, cancel superseded
   runs, and retain the required `ci-gate`. Shared contracts, dependency changes,
   and unknown paths receive the complete matrix.
+- Shared dependency caches are populated on main independently of validation,
+  including a dedicated SQL Server graph. Pull requests restore these caches;
+  unchanged cache keys skip maintenance builds, and confirmed closed-PR caches
+  are removed within the bounded storage policy.
 - gRPC examples and SQL Server container tests live in a private integration
   package, removing their build dependencies from ordinary facade compilation.
 - Workspace version advances to 0.47.0 for the component architecture. Cargo

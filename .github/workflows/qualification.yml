@@ -119,23 +119,3 @@ jobs:
         env:
           RESULTS: ${{ toJSON(needs) }}
         run: python scripts/ci/gate.py qualification
-
-  retain-caches:
-    needs: qualification-gate
-    if: always()
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: write
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.sha || github.sha }}
-          persist-credentials: false
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-      - name: Retain bounded compiler caches after qualification
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python scripts/ci/cache.py retain

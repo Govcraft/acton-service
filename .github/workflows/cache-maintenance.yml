@@ -1,0 +1,207 @@
+name: Shared dependency cache maintenance
+
+on:
+  push:
+    branches: [main]
+  pull_request_target:
+    types: [closed]
+  schedule:
+    - cron: '47 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+concurrency:
+  group: shared-caches-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+      pull-requests: read
+    steps:
+      # Close events execute trusted main code, never the PR's checkout.
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Remove caches of confirmed closed PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLOSED_PR: ${{ github.event.pull_request.number }}
+        run: |
+          args=()
+          if [ -n "$CLOSED_PR" ]; then args+=(--pr "$CLOSED_PR"); fi
+          python scripts/ci/cache.py closed-prs "${args[@]}"
+
+  plan:
+    needs: cleanup
+    if: github.event_name != 'pull_request_target' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      missing: ${{ steps.plan.outputs.missing }}
+      registry-key: ${{ steps.plan.outputs.registry-key }}
+      registry-missing: ${{ steps.plan.outputs.registry-missing }}
+      sha: ${{ steps.revision.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - id: revision
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Select only absent main cache keys
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REGISTRY_KEY: ci-v2-registry--${{ hashFiles('Cargo.lock') }}
+        run: python scripts/ci/warm_caches.py plan
+
+  registry:
+    needs: plan
+    if: needs.plan.outputs.registry-missing == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.99.0'
+      - uses: actions/cache/restore@v5
+        id: registry
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git/db
+          enableCrossOsArchive: true
+          key: ${{ needs.plan.outputs.registry-key }}
+          restore-keys: ci-v2-registry--
+      - name: Fetch locked dependencies
+        if: steps.registry.outputs.cache-hit != 'true'
+        run: cargo fetch --locked
+      - uses: actions/cache/save@v5
+        if: steps.registry.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git/db
+          enableCrossOsArchive: true
+          key: ${{ needs.plan.outputs.registry-key }}
+
+  warm:
+    needs: [plan, registry]
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.missing == 'true' && (needs.registry.result == 'success' || needs.registry.result == 'skipped')
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: true
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/compiler-cache
+        id: compiler
+        with:
+          family: ${{ matrix.family }}
+      - name: Verify the planned cache identity
+        env:
+          PLANNED_KEY: ${{ matrix.key }}
+          ACTUAL_KEY: ${{ steps.compiler.outputs.key }}
+        run: test "$PLANNED_KEY" = "$ACTUAL_KEY"
+      - uses: dtolnay/rust-toolchain@master
+        if: steps.compiler.outputs.cache-hit != 'true'
+        with:
+          toolchain: '1.99.0'
+      - uses: actions/cache/restore@v5
+        if: steps.compiler.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git/db
+          enableCrossOsArchive: true
+          key: ${{ needs.plan.outputs.registry-key }}
+          restore-keys: ci-v2-registry--
+      - name: Install Linux prerequisites
+        if: steps.compiler.outputs.cache-hit != 'true' && runner.os == 'Linux' && (matrix.protoc || matrix.kerberos)
+        env:
+          NEED_PROTOC: ${{ matrix.protoc }}
+          NEED_KERBEROS: ${{ matrix.kerberos }}
+        run: |
+          packages=()
+          if [ "$NEED_PROTOC" = true ]; then packages+=(protobuf-compiler); fi
+          if [ "$NEED_KERBEROS" = true ]; then packages+=(libkrb5-dev); fi
+          sudo apt-get update
+          sudo apt-get install -y "${packages[@]}"
+      - name: Install checksummed cargo-chef release binary
+        if: steps.compiler.outputs.cache-hit != 'true' && runner.os == 'Linux'
+        run: |
+          asset=cargo-chef-x86_64-unknown-linux-gnu.tar.xz
+          url=https://github.com/LukeMathWalker/cargo-chef/releases/download/v0.1.78
+          curl --fail --location --retry 3 "$url/$asset" --output "$RUNNER_TEMP/$asset"
+          echo "70ef940ef90d04d122f0176fdb8d6c39069191b484a1eaa29b327370c2e1c3c0  $RUNNER_TEMP/$asset" | sha256sum --check
+          tar -xJf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP"
+          mkdir -p "$HOME/.cargo/bin"
+          install "$RUNNER_TEMP/cargo-chef-x86_64-unknown-linux-gnu/cargo-chef" "$HOME/.cargo/bin/cargo-chef"
+      - name: Compile dependency artifacts without running tests
+        if: steps.compiler.outputs.cache-hit != 'true'
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: python scripts/ci/warm_caches.py warm --profile "$PROFILE"
+      - name: Bound reusable artifacts
+        id: bounded
+        if: steps.compiler.outputs.cache-hit != 'true'
+        run: python scripts/ci/cache.py prepare
+      - uses: actions/cache/save@v5
+        if: steps.bounded.outputs.save == 'true'
+        with:
+          path: target
+          key: ${{ steps.compiler.outputs.key }}
+
+  retain:
+    needs: [plan, registry, warm]
+    if: always() && github.event_name != 'pull_request_target' && github.ref == 'refs/heads/main' && needs.plan.result == 'success' && (needs.warm.result != 'skipped' || needs.registry.result == 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/ci/cache.py retain

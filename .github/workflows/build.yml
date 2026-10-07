@@ -152,22 +152,3 @@ jobs:
     uses: ./.github/workflows/deploy-docs.yml
     with:
       run-id: ${{ needs.changes.outputs.evidence_run || format('{0}', github.run_id) }}
-
-  retain-caches:
-    needs: ci-gate
-    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: write
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-      - name: Retain the bounded cache working set
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python scripts/ci/cache.py retain
