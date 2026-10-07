@@ -1,0 +1,27 @@
+name: Restore compiler dependencies
+description: Use the same manifest, recipe, platform and compiler identity everywhere
+inputs:
+  family:
+    description: Dependency graph family
+    required: true
+outputs:
+  cache-hit:
+    value: ${{ steps.restore.outputs.cache-hit }}
+    description: Whether the exact cache exists
+  key:
+    value: ${{ steps.identity.outputs.key }}
+    description: Shared cache identity
+runs:
+  using: composite
+  steps:
+    - id: identity
+      shell: bash
+      env:
+        CACHE_FAMILY: ${{ inputs.family }}
+      run: python scripts/ci/cache.py identity --family "$CACHE_FAMILY"
+    - id: restore
+      uses: actions/cache/restore@v5
+      with:
+        path: target
+        key: ${{ steps.identity.outputs.key }}
+        restore-keys: ${{ steps.identity.outputs.restore-keys }}

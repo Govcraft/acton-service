@@ -5,7 +5,10 @@ use acton_service::{
         storage::{mssql::MssqlAccountStorage, AccountStorage},
         types::{Account, AccountId, AccountStatus},
     },
-    audit::storage::mssql::MssqlAuditStorage,
+    audit::{
+        storage::{mssql::MssqlAuditStorage, AuditOrder, AuditQuery, AuditStorage},
+        AuditChain, AuditEvent, AuditEventKind, AuditSeverity,
+    },
     auth::{
         ApiKey, ApiKeyStorage, KeyRotationStorage, MssqlApiKeyStorage, MssqlKeyRotationStorage,
         MssqlRefreshStorage, RefreshTokenMetadata, RefreshTokenStorage,
@@ -18,6 +21,13 @@ use testcontainers_modules::{mssql_server::MssqlServer, testcontainers::runners:
 
 #[tokio::test]
 async fn mssql_backends_initialize_and_accounts_round_trip() {
+    // Include a cold download and extraction of the pinned SQL Server image.
+    tokio::time::timeout(std::time::Duration::from_secs(300), mssql_fixture())
+        .await
+        .expect("SQL Server integration completes within five minutes");
+}
+
+async fn mssql_fixture() {
     let container = MssqlServer::default()
         .with_accept_eula()
         .start()
@@ -44,10 +54,9 @@ async fn mssql_backends_initialize_and_accounts_round_trip() {
         .initialize()
         .await
         .expect("key rotation schema");
-    MssqlAuditStorage::new(pool.clone())
-        .initialize()
-        .await
-        .expect("audit schema");
+    let audit = MssqlAuditStorage::new(pool.clone());
+    audit.initialize().await.expect("audit schema");
+    audit_round_trip_and_corruption(&pool, &audit).await;
     let now = Utc::now();
     let account:Account=serde_json::from_value(serde_json::json!({"id":AccountId::new().to_string(),"email":format!("{}@example.test",uuid::Uuid::new_v4()),"username":null,"password_hash":null,"status":AccountStatus::Active,"roles":["user"],"email_verified":true,"email_verified_at":now,"last_login_at":null,"locked_at":null,"locked_reason":null,"disabled_at":null,"disabled_reason":null,"expires_at":null,"password_changed_at":null,"failed_login_count":0,"metadata":{"backend":"mssql"},"created_at":now,"updated_at":now})).expect("account fixture");
     accounts.create(&account).await.expect("create account");
@@ -106,4 +115,129 @@ async fn mssql_backends_initialize_and_accounts_round_trip() {
         .delete(account.id.as_str())
         .await
         .expect("delete account"));
+}
+
+async fn audit_round_trip_and_corruption(pool: &mssql::MssqlPool, storage: &MssqlAuditStorage) {
+    let mut chain = AuditChain::new("mssql-verification-test".into());
+    let mut events = Vec::new();
+    for offset in 0..5 {
+        let mut event = AuditEvent::new(
+            AuditEventKind::AuthTokenValidated,
+            AuditSeverity::Notice,
+            "mssql-verification-test".into(),
+        );
+        event.timestamp =
+            chrono::DateTime::from_timestamp(1_700_000_000 + offset, 0).expect("fixed timestamp");
+        event.metadata =
+            Some(serde_json::json!({"actor":"actor_a","schema":"case","entity_id":"case_a"}));
+        event.source.request_id = Some("req_a".into());
+        event.status_code = Some(403);
+        let event = chain.seal(event);
+        storage.append(&event).await.expect("persist audit event");
+        let loaded = storage
+            .latest()
+            .await
+            .expect("load event")
+            .expect("stored event");
+        assert_eq!(loaded.hash, event.hash);
+        assert_eq!(loaded.timestamp, event.timestamp);
+        events.push(event);
+    }
+    assert_eq!(storage.verify_chain(1).await.expect("complete chain"), None);
+    let mut query = AuditQuery {
+        limit: 2,
+        through_sequence: Some(4),
+        actor: Some("actor_a".into()),
+        schema: Some("case".into()),
+        entity_id: Some("case_a".into()),
+        request_id: Some("req_a".into()),
+        status_code: Some(403),
+        metadata_kinds: Some(vec!["auth.token.validated".into()]),
+        ..Default::default()
+    };
+    assert_eq!(
+        storage
+            .query_filtered(&query)
+            .await
+            .expect("filtered events")
+            .iter()
+            .map(|e| e.sequence)
+            .collect::<Vec<_>>(),
+        vec![4, 3]
+    );
+    query.cursor = Some(3);
+    assert_eq!(
+        storage
+            .query_filtered(&query)
+            .await
+            .expect("cursor events")
+            .iter()
+            .map(|e| e.sequence)
+            .collect::<Vec<_>>(),
+        vec![2, 1]
+    );
+    query.order = AuditOrder::OldestFirst;
+    assert_eq!(
+        storage
+            .query_filtered(&query)
+            .await
+            .expect("ascending events")
+            .iter()
+            .map(|e| e.sequence)
+            .collect::<Vec<_>>(),
+        vec![4]
+    );
+    query.actor = Some("ACTOR_A".into());
+    assert!(storage
+        .query_filtered(&query)
+        .await
+        .expect("case sensitive actor")
+        .is_empty());
+    assert!(acton_service_mssql::mssql::execute(
+        pool,
+        "UPDATE audit_events SET path = '/blocked' WHERE sequence = 4",
+        &[]
+    )
+    .await
+    .is_err());
+    assert!(acton_service_mssql::mssql::execute(
+        pool,
+        "DELETE FROM audit_events WHERE sequence = 5",
+        &[]
+    )
+    .await
+    .is_err());
+    assert_eq!(
+        storage
+            .purge_before(events[2].timestamp)
+            .await
+            .expect("retention purge"),
+        2
+    );
+    assert!(
+        storage.verify_chain(3).await.is_err(),
+        "missing predecessor cannot prove integrity"
+    );
+    assert_eq!(
+        storage.verify_chain(4).await.expect("retained suffix"),
+        None
+    );
+    acton_service_mssql::mssql::execute(
+        pool,
+        "DISABLE TRIGGER audit_no_update ON audit_events",
+        &[],
+    )
+    .await
+    .expect("privileged mutation setup");
+    acton_service_mssql::mssql::execute(
+        pool,
+        "UPDATE audit_events SET path = '/tampered' WHERE sequence = 4",
+        &[],
+    )
+    .await
+    .expect("privileged tampering");
+    assert_eq!(
+        storage.verify_chain(4).await.expect("detect tampering"),
+        Some(4)
+    );
 }

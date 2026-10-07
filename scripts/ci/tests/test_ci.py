@@ -4,19 +4,25 @@ import hashlib
 import io
 import json
 import os
+import re
 import sys
 import tarfile
+import tempfile
+import tomllib
 import unittest
 import urllib.error
+import zipfile
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from cache import obsolete, trim_target
+from evidence import compatible, find_evidence
 from gate import development_expectations, verify_results
-from plan import BACKEND_PROFILES, changed_paths, select
-from profiles import PROFILES, matrix
+from plan import BACKEND_PROFILES, EXAMPLE_PROFILES, changed_paths, select
+from profiles import CACHE_WRITERS, PROFILES, QUALIFICATION, cache_family, matrix
 from release import main as release_main
 from release import (
     publication_order,
@@ -53,15 +59,14 @@ class SelectionTests(unittest.TestCase):
     def test_oauth_change_exercises_both_state_backends_without_other_databases(self):
         self.assertEqual(
             selected("acton-service/src/auth/oauth/state.rs"),
-            {"default", "minimal", "oauth-no-cache", "oauth-with-cache"},
+            {"oauth-no-cache", "oauth-with-cache"},
         )
 
     def test_grpc_change_checks_tls_absent_present_and_examples(self):
         self.assertEqual(
             selected("acton-service/src/grpc/server.rs"),
             {
-                "default",
-                "minimal",
+                "windows-grpc",
                 "grpc-no-tls",
                 "grpc-tls",
                 "grpc-examples",
@@ -75,7 +80,7 @@ class SelectionTests(unittest.TestCase):
             with self.subTest(backend=backend):
                 self.assertEqual(
                     selected(f"acton-service-{backend}/src/storage.rs"),
-                    profiles | {"default", "minimal"},
+                    profiles,
                 )
 
     def test_unrelated_adapters_are_not_selected_for_turso(self):
@@ -84,6 +89,12 @@ class SelectionTests(unittest.TestCase):
         self.assertNotIn("ring", names)
         self.assertNotIn("windows", names)
 
+    def test_surreal_archive_fixture_retains_remote_regression_coverage(self):
+        self.assertEqual(
+            selected("acton-service-surrealdb/src/fixtures/legacy-v1.json"),
+            {"audit-surrealdb"},
+        )
+
     def test_multiple_changes_combine_required_profiles(self):
         self.assertEqual(
             selected(
@@ -91,11 +102,8 @@ class SelectionTests(unittest.TestCase):
                 "acton-service-turso/src/lib.rs",
             ),
             {
-                "default",
-                "minimal",
                 "oauth-no-cache",
                 "oauth-with-cache",
-                "turso-adapter",
                 "audit-turso",
             },
         )
@@ -113,7 +121,8 @@ class SelectionTests(unittest.TestCase):
                 plan = select([path])
                 self.assertTrue(plan["security"])
                 self.assertEqual(
-                    {p["profile"] for p in plan["matrix"]["include"]}, PROFILES.keys()
+                    {p["profile"] for p in plan["matrix"]["include"]},
+                    QUALIFICATION | {"cli"},
                 )
 
     def test_shared_source_and_contracts_require_all_profiles(self):
@@ -126,7 +135,7 @@ class SelectionTests(unittest.TestCase):
             "acton-service-audit/src/storage.rs",
         ):
             with self.subTest(path=path):
-                self.assertEqual(selected(path), PROFILES.keys())
+                self.assertEqual(selected(path), QUALIFICATION | {"cli"})
 
     def test_unknown_paths_fail_safe(self):
         for path in (
@@ -136,34 +145,35 @@ class SelectionTests(unittest.TestCase):
             "acton-service/proto/hello.proto",
         ):
             with self.subTest(path=path):
-                self.assertEqual(selected(path), PROFILES.keys())
+                self.assertEqual(selected(path), QUALIFICATION | {"cli"})
 
     def test_build_workflow_changes_test_the_build_workflow(self):
-        self.assertEqual(selected(".github/workflows/build.yml"), PROFILES.keys())
-        self.assertEqual(selected("scripts/ci/plan.py"), PROFILES.keys())
+        self.assertEqual(
+            selected(".github/workflows/build.yml"), QUALIFICATION | {"cli"}
+        )
+        self.assertEqual(selected("scripts/ci/plan.py"), QUALIFICATION | {"cli"})
 
-    def test_private_harness_proto_changes_validate_examples_and_container_tests(self):
+    def test_private_harness_proto_changes_validate_transport_without_databases(self):
         self.assertEqual(
             selected("acton-service-integration-tests/proto/hello.proto"),
             {
-                "default",
-                "minimal",
+                "windows-grpc",
                 "grpc-examples",
                 "grpc-integration",
                 "grpc-integration-ring",
-                "mssql-integration",
             },
         )
 
     def test_cli_changes_are_checked(self):
-        self.assertEqual(
-            selected("acton-cli/src/main.rs"), {"cli", "default", "minimal"}
-        )
+        self.assertEqual(selected("acton-cli/src/main.rs"), {"cli"})
 
     def test_manual_full_ci_cannot_skip_docs_or_security(self):
         plan = select([], full=True)
         self.assertTrue(all(plan[name] for name in ("code", "docs", "security")))
-        validate_matrix(plan["matrix"], exhaustive=True)
+        validate_matrix(plan["matrix"], exhaustive=False)
+        validate_matrix(
+            select([], qualification=True, full=True)["matrix"], exhaustive=True
+        )
 
     @patch("plan.subprocess.check_output")
     def test_pull_requests_diff_from_merge_base_and_keep_unusual_filenames(
@@ -193,6 +203,64 @@ class SelectionTests(unittest.TestCase):
                 self.assertRaises(ValueError),
             ):
                 changed_paths(event, base, head, forced)
+
+    def test_backend_fixture_changes_select_only_their_live_scenarios(self):
+        self.assertEqual(
+            selected("acton-service-integration-tests/tests/mssql_integration.rs"),
+            {"mssql-integration"},
+        )
+        self.assertEqual(
+            selected("acton-service-integration-tests/tests/postgres_integration.rs"),
+            {"postgres-integration", "postgres-integration-ring"},
+        )
+
+    def test_workflow_only_docs_change_still_validates_workflow_and_builds_site(self):
+        plan = select([".github/workflows/deploy-docs.yml"])
+        self.assertTrue(plan["tooling"])
+        self.assertTrue(plan["docs"])
+        self.assertFalse(plan["code"])
+
+    def test_qualification_excludes_deprecated_cli_but_development_checks_it(self):
+        names = {
+            entry["profile"]
+            for entry in select([], full=True, qualification=True)["matrix"]["include"]
+        }
+        self.assertEqual(names, QUALIFICATION)
+        self.assertNotIn("cli", names)
+        self.assertIn("cli", selected("acton-service/src/lib.rs"))
+        self.assertIn(
+            "cli",
+            {entry["profile"] for entry in select([], full=True)["matrix"]["include"]},
+        )
+
+    def test_every_declared_framework_example_has_executable_feature_coverage(self):
+        root = Path(__file__).resolve().parents[3]
+        manifest = tomllib.loads((root / "acton-service/Cargo.toml").read_text())
+
+        def features(profile):
+            enabled = set(profile.features.split(",")) - {""}
+            if profile.defaults:
+                enabled.add("default")
+            pending = list(enabled)
+            while pending:
+                for feature in manifest["features"].get(pending.pop(), []):
+                    if feature not in enabled:
+                        enabled.add(feature)
+                        pending.append(feature)
+            return enabled
+
+        for target in manifest["example"]:
+            with self.subTest(example=target["name"]):
+                self.assertIn(target["path"], EXAMPLE_PROFILES)
+                names = selected("acton-service/" + target["path"])
+                self.assertTrue(
+                    any(
+                        set(target.get("required-features", []))
+                        <= features(PROFILES[name])
+                        for name in names
+                    )
+                )
+                self.assertNotEqual(names, set(PROFILES))
 
 
 class GateTests(unittest.TestCase):
@@ -279,7 +347,7 @@ class ProfileTests(unittest.TestCase):
                 )
 
     def test_nextest_is_used_on_windows_and_linux(self):
-        for name in ("windows", "default", "minimal", "surrealdb-adapter"):
+        for name in ("windows", "default", "minimal", "audit-surrealdb"):
             with self.subTest(name=name):
                 self.assertTrue(
                     any(
@@ -296,12 +364,252 @@ class ProfileTests(unittest.TestCase):
             )
         )
 
+    def test_component_documentation_code_requires_explicit_doctest_coverage(self):
+        root = Path(__file__).resolve().parents[3]
+        components = {
+            package
+            for profile in PROFILES.values()
+            for package in (profile.package, profile.companion)
+            if package.startswith("acton-service-")
+            and package != "acton-service-integration-tests"
+        }
+        for package in components:
+            requires_docs = any(
+                re.search(
+                    r"```|~~~|^\s*/\*[*!]|\bdoc\s*=|^\s*//[!/] {4,}\S",
+                    file.read_text(),
+                    re.M,
+                )
+                for file in (root / package / "src").rglob("*.rs")
+            )
+            if requires_docs:
+                with self.subTest(package=package):
+                    self.assertTrue(
+                        any(
+                            profile.doctests
+                            and package in (profile.package, profile.companion)
+                            for name, profile in PROFILES.items()
+                            if name in QUALIFICATION
+                        ),
+                        "Documentation code requires a doctest-enabled "
+                        "qualification profile",
+                    )
+
+    def test_empty_adapter_doctests_do_not_rebuild_the_backend_graph(self):
+        for name in ("audit-surrealdb", "audit-clickhouse", "audit-turso", "mssql"):
+            with self.subTest(name=name):
+                self.assertFalse(
+                    any(
+                        command[:3] == ["cargo", "test", "--doc"]
+                        for command in commands(name)
+                    )
+                )
+
     @patch("run_profile.subprocess.check_output", return_value="a" * 40 + "\n")
     def test_revision_mismatch_and_symbolic_refs_are_rejected(self, _output):
         verify_revision("a" * 40)
         for revision in ("main", "b" * 40, "", "--help"):
             with self.subTest(revision=revision), self.assertRaises(ValueError):
                 verify_revision(revision)
+
+    def test_ring_runtime_uses_narrow_binaries_and_broad_compile_stays_isolated(self):
+        self.assertFalse(any("nextest" in command for command in commands("ring")))
+        self.assertTrue(any("nextest" in command for command in commands("tls-ring")))
+        self.assertIn("--no-default-features", commands("ring")[0])
+
+    def test_windows_does_not_serially_compile_unrelated_configurations(self):
+        self.assertEqual(len(commands("windows")), 2)
+        self.assertTrue(PROFILES["windows-saml"].tests)
+        self.assertIn("test(signed) | test(signature)", commands("windows-saml")[1])
+
+    def test_combined_adapter_job_retains_standalone_and_adapter_runtime_evidence(self):
+        checks = commands("audit-surrealdb")
+        self.assertIn("acton-service-surrealdb", checks[0])
+        runtime = next(command for command in checks if "nextest" in command)
+        self.assertIn("acton-service", runtime)
+        self.assertIn("acton-service-surrealdb", runtime)
+        self.assertIn("acton-service-integration-tests", runtime)
+        self.assertIn("acton-service-integration-tests/surrealdb", runtime)
+        self.assertIn(
+            "acton-service/surrealdb", runtime[runtime.index("--features") + 1]
+        )
+
+    def test_qualification_live_backend_coverage_is_combined_without_duplicates(self):
+        for feature, name in (
+            ("mssql", "mssql"),
+            ("surrealdb", "audit-surrealdb"),
+            ("clickhouse", "audit-clickhouse"),
+        ):
+            self.assertIn(name, QUALIFICATION)
+            self.assertEqual(PROFILES[name].harness, feature)
+            self.assertNotIn(feature + "-integration", QUALIFICATION)
+            self.assertTrue(
+                any(
+                    "nextest" in command
+                    and "acton-service-integration-tests/" + feature in command
+                    for command in commands(name)
+                )
+            )
+
+
+class CacheTests(unittest.TestCase):
+    def entry(
+        self, identifier, key, size, accessed="2026-01-01", ref="refs/heads/main"
+    ):
+        return {
+            "id": identifier,
+            "key": key,
+            "size_in_bytes": size,
+            "last_accessed_at": accessed,
+            "ref": ref,
+        }
+
+    def test_only_eight_distinct_families_have_writers(self):
+        self.assertEqual(len(CACHE_WRITERS), 8)
+        self.assertEqual(len({cache_family(name) for name in CACHE_WRITERS}), 8)
+
+    def test_retention_removes_superseded_cache_and_enforces_budget(self):
+        entries = [
+            self.entry(1, "ci-v2-full--new", 60, "2026-01-03"),
+            self.entry(2, "ci-v2-full--old", 60, "2026-01-02"),
+            self.entry(3, "ci-v2-default--new", 60),
+            self.entry(4, "pnpm-unrelated", 10),
+            self.entry(5, "v0-rust-profile", 1000),
+        ]
+        self.assertEqual(set(obsolete(entries, budget=110)), {2, 3, 5})
+
+    def test_trim_keeps_library_fingerprints_but_removes_test_executables(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative in (
+                "debug/deps/libservice.rlib",
+                "debug/deps/test-binary",
+                "debug/.fingerprint/contract",
+                "debug/incremental/unused",
+                "doc/index.html",
+            ):
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("artifact")
+            self.assertTrue(trim_target(root))
+            self.assertTrue((root / "debug/deps/libservice.rlib").exists())
+            self.assertTrue((root / "debug/.fingerprint/contract").exists())
+            self.assertFalse((root / "debug/deps/test-binary").exists())
+            self.assertFalse((root / "doc").exists())
+
+
+class EvidenceTests(unittest.TestCase):
+    def record(self):
+        return {
+            "version": 1,
+            "repository": "Govcraft/acton-service",
+            "tree": "a" * 40,
+            "sha": "b" * 40,
+            "profiles": ["oauth-no-cache", "oauth-with-cache"],
+            "docs": False,
+            "security": False,
+            "tooling": False,
+        }
+
+    def test_identical_tree_with_complete_coverage_can_be_reused(self):
+        self.assertTrue(
+            compatible(
+                self.record(),
+                select(["acton-service/src/auth/oauth/state.rs"]),
+                "a" * 40,
+                "Govcraft/acton-service",
+            )
+        )
+
+    def test_different_tree_missing_coverage_or_untrusted_record_cannot_be_reused(self):
+        plan = select(["acton-service/src/auth/oauth/state.rs"])
+        for change in (
+            {"tree": "c" * 40},
+            {"profiles": ["oauth-no-cache"]},
+            {"profiles": None},
+            {"version": 0},
+            {"repository": "fork/repo"},
+            {"sha": "main"},
+            {"sha": 123},
+        ):
+            with self.subTest(change=change):
+                self.assertFalse(
+                    compatible(
+                        {**self.record(), **change},
+                        plan,
+                        "a" * 40,
+                        "Govcraft/acton-service",
+                    )
+                )
+        for key in ("docs", "security", "tooling"):
+            self.assertFalse(
+                compatible(
+                    self.record(),
+                    {**plan, key: True},
+                    "a" * 40,
+                    "Govcraft/acton-service",
+                )
+            )
+
+    @patch.dict(os.environ, {"GITHUB_REPOSITORY": "Govcraft/acton-service"})
+    @patch("evidence.request")
+    def test_reuse_requires_completed_trusted_pr_and_api_tree_agreement(self, request):
+        run = {
+            "event": "pull_request",
+            "status": "completed",
+            "conclusion": "success",
+            "head_repository": {"full_name": "Govcraft/acton-service"},
+            "head_sha": "b" * 40,
+            "id": 123,
+        }
+        request.side_effect = [
+            {
+                "workflow_runs": [
+                    {**run, "event": "push"},
+                    {**run, "head_repository": {"full_name": "fork/repo"}},
+                    run,
+                ]
+            },
+            {"tree": {"sha": "c" * 40}},
+        ]
+        self.assertEqual(
+            find_evidence(select(["acton-service/src/auth/oauth/state.rs"]), "a" * 40),
+            (None, ""),
+        )
+        self.assertEqual(request.call_count, 2)
+
+    @patch.dict(os.environ, {"GITHUB_REPOSITORY": "Govcraft/acton-service"})
+    @patch("evidence.request")
+    def test_successful_same_tree_run_artifact_is_reused(self, request):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("evidence.json", json.dumps(self.record()))
+        request.side_effect = [
+            {
+                "workflow_runs": [
+                    {
+                        "event": "pull_request",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "head_repository": {"full_name": "Govcraft/acton-service"},
+                        "head_sha": "b" * 40,
+                        "id": 123,
+                    }
+                ]
+            },
+            {"tree": {"sha": "a" * 40}},
+            {
+                "artifacts": [
+                    {"name": "development-evidence", "expired": False, "id": 456}
+                ]
+            },
+            buffer.getvalue(),
+        ]
+        record, run_id = find_evidence(
+            select(["acton-service/src/auth/oauth/state.rs"]), "a" * 40
+        )
+        self.assertEqual(record, self.record())
+        self.assertEqual(run_id, "123")
 
 
 def metadata_for(packages: list[tuple[str, list[str], bool]]) -> dict:

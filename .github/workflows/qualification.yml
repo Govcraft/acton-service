@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 # Qualification and publication must finish even when development moves on.
 concurrency:
@@ -46,7 +47,7 @@ jobs:
           echo "sha=$EXPECTED_SHA" >> "$GITHUB_OUTPUT"
       - name: Select every supported profile
         id: plan
-        run: python scripts/ci/plan.py --full
+        run: python scripts/ci/plan.py --qualification
 
   rust:
     needs: plan
@@ -85,11 +86,11 @@ jobs:
       - name: Install native prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y protobuf-compiler libkrb5-dev
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+          sudo apt-get install -y libkrb5-dev
+      - uses: dtolnay/rust-toolchain@master
         with:
-          key: package
+          toolchain: '1.99.0'
+      - uses: ./.github/actions/registry-cache
       - name: Verify publication graph and packaged crates
         env:
           EXPECTED_SHA: ${{ needs.plan.outputs.sha }}

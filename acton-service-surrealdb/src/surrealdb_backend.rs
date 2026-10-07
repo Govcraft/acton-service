@@ -3,7 +3,6 @@
 //! Supports runtime protocol selection via URL scheme:
 //! - `ws://` / `wss://` - WebSocket connections
 //! - `http://` / `https://` - HTTP connections
-//! - `mem://` - In-memory database (for testing)
 
 use std::time::Duration;
 
@@ -17,6 +16,12 @@ pub type SurrealClient = surrealdb::Surreal<surrealdb::engine::any::Any>;
 /// This is an internal function used by the SurrealDbAgent.
 /// It will retry connection attempts based on the configuration.
 pub async fn create_client(config: &SurrealDbConfig) -> Result<SurrealClient> {
+    if config.url.starts_with("mem://") || config.url.starts_with("memory://") {
+        return Err(crate::error::Error::Internal(
+            "SurrealDB embedded memory connections are unsupported; use a ws/http server (ws://, wss://, http://, or https://)".into(),
+        ));
+    }
+
     create_client_with_retries(config, config.max_retries).await
 }
 
@@ -89,7 +94,7 @@ async fn try_create_client(config: &SurrealDbConfig) -> Result<SurrealClient> {
             crate::error::Error::Internal(format!(
                 "Failed to connect to SurrealDB at '{}': {}\n\n\
             Troubleshooting:\n\
-            1. Verify the database URL is correct (e.g., ws://localhost:8000, mem://)\n\
+            1. Verify the database URL is correct (e.g., ws://localhost:8000, http://localhost:8000)\n\
             2. Check that the SurrealDB server is running and accessible\n\
             3. Verify network connectivity\n\n\
             Original error: {}",
@@ -216,51 +221,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_mem_connection() {
+    async fn memory_backend_is_rejected_without_retries() {
         let config = SurrealDbConfig {
             url: "mem://".to_string(),
             namespace: "test".to_string(),
             database: "test".to_string(),
             username: None,
             password: None,
-            max_retries: 0,
-            retry_delay_secs: 1,
+            max_retries: 1,
+            retry_delay_secs: 30,
             optional: false,
             lazy_init: false,
         };
 
-        let result = create_client(&config).await;
+        let result = tokio::time::timeout(Duration::from_secs(1), create_client(&config))
+            .await
+            .expect("unsupported memory connections must fail without network retries");
         assert!(
-            result.is_ok(),
-            "Failed to connect to in-memory SurrealDB: {:?}",
-            result.err()
+            result.is_err(),
+            "memory connections must be rejected: {:?}",
+            result.as_ref().err()
         );
-    }
-
-    // SurrealDB 3.0 made the embedded `mem://` engine strict: it no longer accepts
-    // signin against an undefined root user. Real-server deployments (ws/http) work
-    // unchanged because users are provisioned out of band; there is no SDK-level way
-    // to bootstrap a root user on the embedded engine through `any::connect`.
-    #[tokio::test]
-    #[ignore = "embedded mem:// engine has no default root user in surrealdb 3.0"]
-    async fn test_mem_connection_with_auth() {
-        let config = SurrealDbConfig {
-            url: "mem://".to_string(),
-            namespace: "test".to_string(),
-            database: "test".to_string(),
-            username: Some("root".to_string()),
-            password: Some("root".to_string()),
-            max_retries: 0,
-            retry_delay_secs: 1,
-            optional: false,
-            lazy_init: false,
-        };
-
-        let result = create_client(&config).await;
-        assert!(
-            result.is_ok(),
-            "Failed to connect to in-memory SurrealDB with auth: {:?}",
-            result.err()
-        );
+        assert!(result
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("use a ws/http server"));
     }
 }

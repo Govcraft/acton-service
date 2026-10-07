@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Signed release tag, for example acton-service-v0.47.0'
+        description: 'Release tag prepared with signing, for example acton-service-v0.47.0'
         required: true
         type: string
       bootstrap-components:
@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
   group: publish-acton-service
@@ -69,7 +70,9 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.99.0'
       - name: Verify source and existing publications before bootstrap
         run: python scripts/ci/release.py preflight
       - name: Bootstrap qualified component packages
@@ -103,7 +106,9 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.99.0'
       - name: Verify qualified revision and publication graph
         run: python scripts/ci/release.py preflight
       - name: Authenticate after successful qualification

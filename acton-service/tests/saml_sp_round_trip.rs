@@ -9,7 +9,7 @@
 
 #![cfg(feature = "saml")]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -38,6 +38,10 @@ fn fixture(name: &str) -> PathBuf {
 
 fn pem(name: &str) -> String {
     std::fs::read_to_string(fixture(name)).expect("fixture exists")
+}
+
+fn toml_path(path: &Path) -> toml::Value {
+    toml::Value::String(path.to_string_lossy().into_owned())
 }
 
 /// An identity provider whose metadata has been written to disk for the SP.
@@ -141,8 +145,8 @@ fn decrypting_sp_config(idp: &TestIdp) -> SamlConfig {
         SP_ENTITY_ID,
         60,
         &format!(
-            "decryption_key_path = \"{}\"\nallow_software_rsa_decryption = true",
-            fixture("sp.key.pem").display()
+            "decryption_key_path = {}\nallow_software_rsa_decryption = true",
+            toml_path(&fixture("sp.key.pem"))
         ),
     )
 }
@@ -152,22 +156,35 @@ fn sp_config_with(idp: &TestIdp, entity_id: &str, clock_skew_secs: u64, extra: &
         r#"
         entity_id = "{entity_id}"
         acs_url = "{ACS_URL}"
-        signing_key_path = "{key}"
-        certificate_path = "{cert}"
+        signing_key_path = {key}
+        certificate_path = {cert}
         name_id_format = "email-address"
         clock_skew_secs = {clock_skew_secs}
         {extra}
         [idp]
         entity_id = "{IDP_ENTITY_ID}"
-        metadata_path = "{metadata}"
+        metadata_path = {metadata}
         [attributes]
         default_roles = ["employee"]
         "#,
-        key = fixture("sp.key.pem").display(),
-        cert = fixture("sp.cert.pem").display(),
-        metadata = idp.metadata_file.path().display(),
+        key = toml_path(&fixture("sp.key.pem")),
+        cert = toml_path(&fixture("sp.cert.pem")),
+        metadata = toml_path(idp.metadata_file.path()),
     ))
     .expect("config parses")
+}
+
+#[test]
+fn signed_config_paths_preserve_windows_backslashes_and_quotes() {
+    for path in [
+        r"D:\a\acton-service\tests\fixtures\saml\sp.key.pem",
+        r"C:\Users\Runner Admin\AppData\Local\Temp\.tmpMetadata",
+        "C:\\certs\\\"quoted name\"\\sp.cert.pem",
+    ] {
+        let document = format!("path = {}", toml_path(Path::new(path)));
+        let parsed: toml::Value = toml::from_str(&document).expect("path document parses");
+        assert_eq!(parsed["path"].as_str(), Some(path));
+    }
 }
 
 async fn redirect_url(sp: &SamlServiceProvider, relay_state: Option<&str>) -> String {

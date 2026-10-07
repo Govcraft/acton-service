@@ -17,9 +17,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- SurrealDB SDK 3.3 uses only WebSocket, HTTP, and Rustls for remote clients.
+  Embedded `mem://` connections are no longer supported. Use a SurrealDB
+  server with memory storage over `ws://` or `http://` for local development
+  and tests. Audit regressions retain paging, retention, integrity, and legacy
+  archive coverage against that server. The unused SDK parser is disabled.
 - Pull requests select Rust profiles from affected subsystems, cancel superseded
   runs, and retain the required `ci-gate`. Shared contracts, dependency changes,
   and unknown paths receive the complete matrix.
+- Shared dependency caches are populated on main independently of validation,
+  including a dedicated SQL Server graph. Pull requests restore these caches;
+  unchanged cache keys skip maintenance builds, and confirmed closed-PR caches
+  are removed within the bounded storage policy. Portable registry archives
+  hydrate each runner's Cargo home, and Windows warming covers separate default,
+  full, and SAML graphs.
 - gRPC examples and SQL Server container tests live in a private integration
   package, removing their build dependencies from ordinary facade compilation.
 - Workspace version advances to 0.47.0 for the component architecture. Cargo

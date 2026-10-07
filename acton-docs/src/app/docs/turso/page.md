@@ -400,7 +400,7 @@ of `database`, `turso`, or `surrealdb`.
 | Feature | Turso (`turso`) | PostgreSQL (`database`) | SurrealDB (`surrealdb`) |
 |---------|-----------------|-------------------------|-------------------------|
 | **Driver** | `libsql` | `sqlx` | `surrealdb` (`any` engine) |
-| **Deployment** | Edge, embedded, cloud | Server-based | Embedded (`mem://`), server (`ws://`, `http://`) |
+| **Deployment** | Edge, embedded, cloud | Server-based | Server (`ws://`, `http://`), with memory or persistent storage |
 | **Latency** | Sub-millisecond (local) | Network dependent | In-process or network dependent |
 | **Query language** | SQLite-compatible SQL | Full PostgreSQL SQL | SurrealQL |
 | **Accessor** | `state.turso().await` | `state.db().await` | `state.surrealdb().await` |
@@ -419,7 +419,7 @@ of `database`, `turso`, or `surrealdb`.
 
 **Use SurrealDB when:**
 - Your data is document- or graph-shaped rather than strictly relational
-- You want an embedded (`mem://`) store for tests and a server for production behind one URL scheme
+- You want a server with memory storage for tests and persistent storage for production
 - SurrealQL suits your access patterns better than SQL
 
 {% callout type="note" title="ClickHouse composes" %}

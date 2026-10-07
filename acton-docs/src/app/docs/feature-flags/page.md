@@ -264,6 +264,10 @@ SurrealDB multi-model database support (document, graph, and relational in one s
 
 **Note**: Mutually exclusive with `database` and `turso`.
 
+The SDK supports remote WebSocket and HTTP connections, including TLS.
+Starting in 0.47.0, embedded `mem://` connections are no longer supported.
+Use a server with memory storage for tests and local development.
+
 ### `cache`
 
 Redis connection pooling with support for token revocation and distributed rate limiting.

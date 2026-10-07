@@ -12,6 +12,12 @@ on:
       exhaustive:
         default: false
         type: boolean
+      tooling:
+        default: true
+        type: boolean
+      helpers-tested:
+        default: false
+        type: boolean
       linux-runner:
         default: ubuntu-latest
         type: string
@@ -22,6 +28,9 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   EXPECTED_SHA: ${{ inputs.sha }}
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
 
 jobs:
   format:
@@ -44,20 +53,30 @@ jobs:
           else
             python scripts/ci/run_profile.py --check-matrix
           fi
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: '1.99.0'
           components: rustfmt
       - name: Validate workflows
+        if: inputs.tooling
         uses: docker://rhysd/actionlint:1.7.12
       - uses: astral-sh/ruff-action@v4.1.0
+        if: inputs.tooling
         with:
           version: '0.16.10'
           src: scripts/ci
-      - name: Formatting and workflow validation
-        run: |
-          cargo fmt --all --check
-          ruff format --check scripts/ci
-          python -m unittest discover -s scripts/ci/tests -v
+      - name: Formatting
+        run: cargo fmt --all --check
+      - name: CI helper formatting
+        if: inputs.tooling
+        run: ruff format --check scripts/ci
+      - name: Independent reusable-workflow regression checks
+        if: '!inputs.helpers-tested'
+        run: python -m unittest discover -s scripts/ci/tests -v
+      # Main's independent maintenance workflow owns shared cache writes.
+      - uses: ./.github/actions/registry-cache
+      - name: Fetch any missing locked dependencies
+        run: cargo fetch --locked
 
   profiles:
     needs: format
@@ -65,7 +84,7 @@ jobs:
     runs-on: ${{ matrix.runner == 'windows' && 'windows-latest' || inputs.linux-runner }}
     timeout-minutes: 60
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix: ${{ fromJSON(inputs.matrix) }}
     defaults:
       run:
@@ -95,20 +114,27 @@ jobs:
         if: runner.os == 'Windows' && matrix.protoc
         with:
           repo-token: ${{ github.token }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: '1.99.0'
           components: clippy
       - name: Isolate persistent compiler artifacts by profile
         if: runner.environment == 'self-hosted'
         env:
           PROFILE: ${{ matrix.profile }}
         run: echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/../.cargo-target-$PROFILE" >> "$GITHUB_ENV"
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/registry-cache
+        if: runner.environment != 'self-hosted'
+      - uses: ./.github/actions/compiler-cache
+        id: compiler
         if: runner.environment != 'self-hosted'
         with:
-          key: validation-${{ matrix.profile }}
-          cache-on-failure: true
-      - uses: taiki-e/install-action@nextest
+          family: ${{ matrix.cache }}
+      - uses: taiki-e/install-action@v2
+        if: matrix.tests
+        with:
+          tool: cargo-nextest@0.9.146
+          fallback: none
       - name: Clippy, tests, and profile checks
         env:
           PROFILE: ${{ matrix.profile }}

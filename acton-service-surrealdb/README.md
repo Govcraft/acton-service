@@ -7,3 +7,8 @@ Independent SurrealDB client management and append-only audit storage for acton-
 The backend implements `acton_service_audit::storage::AuditStorage` and returns shared `StorageError` values. The `accounts` and `login-lockout` features enable their audit event parsers. In-memory backend tests run without the facade or other drivers.
 
 The `acton-service` facade's `surrealdb` feature preserves service integration, pool actors and compatible error-returning wrappers.
+
+Remote connections support WebSocket, HTTP, and TLS without compiling an
+embedded database engine. Starting in 0.47.0, `mem://` connections are no longer
+supported. For local development or tests, run a SurrealDB server with memory
+storage and connect over `ws://` or `http://`.

@@ -3,7 +3,7 @@ title: SurrealDB
 nextjs:
   metadata:
     title: SurrealDB
-    description: SurrealDB integration with runtime protocol selection, in-memory and server modes, retry logic, and health monitoring
+    description: Remote SurrealDB integration with WebSocket and HTTP, retry logic, and health monitoring
 ---
 
 {% callout type="note" title="New to acton-service?" %}
@@ -12,7 +12,7 @@ Start with the [homepage](/) to understand what acton-service is, then explore [
 
 ---
 
-Build services on SurrealDB, the multi-model database. One URL scheme selects the protocol at runtime - embed it in-process for tests, point at a server in production.
+Build services on SurrealDB, the multi-model database. The URL selects WebSocket or HTTP at runtime. A server can use memory storage for tests or persistent storage in production.
 
 ---
 
@@ -47,6 +47,11 @@ Or add it to an existing feature set:
 {% dep(["http", "surrealdb", "observability"]) %}
 ```
 
+`surrealdb` supports remote WebSocket and HTTP connections, including TLS.
+Starting in 0.47.0, embedded `mem://` connections are no longer supported.
+For tests and local development, run a SurrealDB server with memory storage
+and connect through its WebSocket or HTTP endpoint.
+
 {% callout type="warning" title="One primary backend at a time" %}
 The `database` (PostgreSQL), `turso` (libsql), and `surrealdb` features are **pairwise mutually exclusive** - enabling two of them is a compile error. Pick a single primary backend. The `clickhouse` feature is analytical and composes with any of them.
 {% /callout %}
@@ -59,14 +64,15 @@ The URL scheme determines the transport - there is no separate mode setting:
 
 | Scheme | Transport | Typical use |
 |--------|-----------|-------------|
-| `mem://` | In-process, in-memory | Tests, local development |
 | `ws://` / `wss://` | WebSocket | Production servers |
 | `http://` / `https://` | HTTP | Production servers, restricted networks |
 
 ```toml
-# In-memory, no server required
+# Local server using memory storage
 [surrealdb]
-url = "mem://"
+url = "ws://localhost:8000"
+username = "root"
+password = "root"
 ```
 
 ```toml
@@ -275,21 +281,31 @@ URLs are sanitized before logging, so credentials embedded in a connection URL a
 
 ---
 
-## Testing with `mem://`
+## Testing with a memory-backed server
 
-The in-memory engine needs no server, which makes it a good fit for integration tests:
+Run a disposable SurrealDB server using memory storage:
+
+```sh
+docker run --rm -p 8000:8000 surrealdb/surrealdb:v3.0.5 start --user root --pass root memory
+```
+
+Connect to its remote endpoint:
 
 ```toml
 # config.test.toml
 [surrealdb]
-url = "mem://"
+url = "ws://localhost:8000"
+username = "root"
+password = "root"
 namespace = "test"
 database = "test"
 lazy_init = false  # Connect during startup so tests fail fast
 ```
 
-{% callout type="note" title="No root user on mem://" %}
-The embedded `mem://` engine has no default root user - leave `username` and `password` unset when using it. Provision users out of band on real (`ws://`, `http://`) deployments.
+{% callout type="note" title="Migrating from mem://" %}
+Starting in 0.47.0, the SDK connects to remote servers only. Replace `mem://`
+with a WebSocket or HTTP URL. The example server creates a root user at startup;
+its data is discarded when the server exits.
 {% /callout %}
 
 ---

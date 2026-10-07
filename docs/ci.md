@@ -5,48 +5,141 @@ qualify every supported configuration at the exact commit being published.
 
 ## Development
 
-`Build & Test` selects profiles from the changed paths. Rust changes always run
-default and minimal Linux checks, then the relevant package and feature checks.
-Each selected profile runs Clippy with warnings denied and Nextest; designated
-profiles also run doctests. Documentation builds when its site sources change.
-Dependency changes also run security policy checks.
+`Build & Test` selects configurations from owned feature modules, backend packages,
+private harness files, and declared example targets. Resolved backend graphs are
+separate: SurrealDB profiles do not enable PostgreSQL, SQL Server, or ClickHouse,
+and each other backend profile selects its own optional driver. Before compilation,
+a resolved Cargo graph guard rejects mixed database drivers and requires exactly
+the selected SQLx TLS provider. The shared harness
+uses per-backend feature flags, including per-backend container modules. Isolated optional changes do
+not rebuild default/minimal consumers whose inputs have not changed. Shared
+contracts, manifests, and unknown files retain conservative complete selection.
+Stable workspace version-only edits use semantic manifest/lockfile comparison:
+only workspace versions and compatible local version requirements may change.
+External dependencies, checksums, feature flags, and all other configuration must
+match. This path requires `cargo metadata --locked` and rebuilds versioned docs;
+it skips compilation and repeated dependency-policy work. Malformed or ambiguous
+changes fall back to normal validation. Release qualification remains exhaustive.
+Each behavioral profile runs Clippy with denied warnings and Nextest. Compile-only
+profiles retain provider/platform coverage; designated profiles also run doctests.
+The seven component crates currently have no Rustdoc examples, so they skip empty
+doctest builds. Selection tests require an explicit doctest profile when a
+component adds documentation code, including indirect or block documentation.
+For composite jobs, doctests use the combined feature graph to avoid rebuilding
+the backend SDK under a standalone graph.
 
-Examples:
-
-| Change | Profiles beyond default/minimal |
+| Change | Selected work |
 | --- | --- |
-| OAuth state/provider implementation | OAuth with and without cache |
-| gRPC implementation | gRPC with and without TLS, examples, live TLS harness tests |
-| Turso adapter | Standalone Turso, facade audit with Turso |
-| SQL Server adapter | Standalone SQL Server, facade integration, live container test, Windows |
-| Core/audit contracts, shared config/builder/state, dependency manifests | All profiles |
-| Unknown file or unreliable diff | All profiles |
+| OAuth implementation | OAuth with and without cache |
+| gRPC implementation | Transport with/without TLS, examples, both provider RPCs, native Windows compilation |
+| Turso adapter | Isolated adapter lint, adapter tests and facade integration in one job |
+| SurrealDB adapter | Remote SDK, isolated adapter lint, authenticated server and facade integration |
+| SQL Server fixture | That live container test |
+| PostgreSQL adapter | Standalone adapter, both provider TLS/database scenarios and facade integration |
+| HTMX example | Frontend including the literal htmx-full feature |
+| Shared contracts/manifests or unknown source | Complete development catalog, including dependent legacy CLI |
 
-Use `[full-ci]` in a PR title or body to request all profiles. The old
-`[skip-matrix]` marker no longer bypasses Rust checks. Documentation-only changes
-still skip Rust checks intentionally.
+Use `[full-ci]` in a PR title/body before the next push, or dispatch `Build & Test`
+for immediate complete development validation, including the legacy CLI. Editing PR descriptions does not
+cancel an in-progress source validation. The old `[skip-matrix]` marker cannot
+bypass checks. Documentation-only changes skip Rust; workflow-only documentation
+changes still run Actionlint and CI helper lint/format checks.
 
-The required `ci-gate` check verifies that selection succeeded and every selected
-job passed. A missing output, failed/cancelled job, or unexpected skip fails the
-gate. The existing branch-protection check name is retained.
+The required `ci-gate` verifies successful selection and every selected job.
+Missing outputs, failures, cancellations, and unexpected skips fail the gate.
+New commits cancel earlier feedback for that PR; qualification retains its own run.
+The Rust matrix cancels sibling jobs at its first failure. Nextest 0.9.146 is
+downloaded as a checksummed prebuilt binary with fallback compilation disabled;
+compile-only profiles do not install it. Cargo still compiles the project test
+binaries that Nextest executes.
 
-Pull requests test GitHub's merged revision. Pushes to `main` check the combined
-code again, so independently green PRs cannot hide an integration failure.
-New commits cancel earlier runs for the same PR. Main and release qualification
-runs finish independently.
+Main reuses a successful same-repository PR run only when GitHub's commit-tree
+API and retained evidence agree with the actual merged Git tree, the recorded
+coverage contains every selected profile/check, and required docs artifacts still
+exist. Failed, incomplete, fork, expired, or insufficient runs are rejected.
+Unavailable evidence falls back to affected merge validation. Qualification does
+not reuse this development evidence: publication requires fresh exact-commit
+checks and packaged verification. Documentation is built once and Pages consumes
+that validated artifact only after ci-gate succeeds on main.
 
 Inspect selection and run a profile locally:
 
 ```sh
 python3 scripts/ci/plan.py --paths acton-service/src/auth/oauth/state.rs
 python3 scripts/ci/run_profile.py oauth-no-cache
-python3 scripts/ci/run_profile.py turso-adapter
+python3 scripts/ci/run_profile.py audit-turso
 python3 -m unittest discover -s scripts/ci/tests -v
 ```
 
 The profile catalog is `scripts/ci/profiles.py`. Add a profile and path mapping
 when introducing a subsystem, and include selection tests for the new boundary.
 Unknown source paths deliberately receive exhaustive validation.
+
+## Compiler cache policy
+
+CI pins Rust 1.99.0 in rust-toolchain.toml and workflow setup. Upgrade these together
+and review the new compiler in qualification. CI disables incremental compilation
+and debug info for development/test profiles, reducing upload size and codegen work.
+Local builds retain their usual debugging configuration.
+
+Validation restores caches without writing PR or tag snapshots. GitHub isolates
+PR merge-ref caches from other PRs and main, so repeat runs of one PR do not prove
+shared-cache performance. Only `cache-maintenance.yml` writes the shared main
+registry and compiler caches. It runs after main pushes, on a daily repair schedule,
+or on a manual main dispatch, independently of the required validation gate.
+This also populates caches when same-tree evidence skips repeated merge validation.
+
+The registry snapshot uses a relative workspace directory, containing only crate
+archives, indexes, and Git databases. Each runner hydrates its actual Cargo home;
+home paths and extracted source trees are not shared across operating systems.
+Lockfile line endings are normalized so Linux and Windows request the same key.
+The portable namespace excludes earlier archives containing absolute home paths.
+
+Maintenance first looks up exact main keys through the cache API. If they all exist,
+it schedules no dependency build jobs. Missing graphs restore compatible older
+artifacts before compiling. Eight representative families cover default, full,
+Ring, remote SurrealDB, frontend, Windows, SQL Server, and Turso. SQL Server and
+Turso have separate families because `full` excludes those native drivers. Recipes derive
+their packages, features, and targets from the validation catalog, preserving
+separate standalone adapter and combined facade/harness graphs. Linux uses the
+pinned, checksummed cargo-chef 0.1.78 release binary; Windows uses native Cargo
+check/build commands. The Windows family warms the separate default, full check,
+and SAML check/build graphs rather than combining their features. Warming runs no
+tests, services, or qualification commands.
+
+Compiler keys include OS, architecture, pinned compiler, workspace manifests,
+lockfile, compiler configuration, and recipe/workflow definitions. Source edits
+retain dependency caches; feature changes invalidate immutable keys. Cooking is
+restricted to disposable GitHub-hosted main checkouts because it replaces source
+files with stubs. All workspace artifacts are cleaned before upload; test
+executables, docs, and incremental output are excluded. Maintenance cannot create
+validation evidence. Local and persistent self-hosted checkouts are never cooked.
+
+Uploads above 4 GiB uncompressed are skipped. Retention keeps the newest main
+entry per family within an 8 GiB repository budget after reserving space for
+unrelated workflows and open PRs. Closed-PR cleanup confirms live PR state before
+deleting cache IDs; it preserves main, tags, branches, and open PR caches. Legacy
+main `v0-rust` entries are retired. No paid storage settings are changed.
+
+Cache misses always compile normally and never weaken validation. Live SQL Server,
+SurrealDB, and ClickHouse scenarios run in their composite backend
+jobs during qualification; their fixture-only profiles remain available for narrow
+fixture edits. The ring cache writer uses narrow TLS runtime artifacts, while the
+broad ring compile profile restores them. Qualification cannot fill
+storage with 38 independent registry/compiler copies. Include maintenance runner
+work when comparing aggregate cost; warming moves a missing dependency build out
+of PR feedback, rather than eliminating its initial cost.
+
+Inspect a warming recipe without changing local source:
+
+```sh
+python3 scripts/ci/warm_caches.py print --profile mssql
+```
+
+`task` now runs normal service formatting, lint, and runtime checks. Legacy CLI
+build/install remains opt-in, its freshness includes shared source and embedded
+templates, and release-cli was retired because its inherited workspace version
+could bump service packages. Local security tasks use CI's full dependency scope.
 
 ## Component packages
 
@@ -75,6 +168,15 @@ Database-specific actor orchestration and authentication/account integration
 remain in the facade. Cross-subsystem integration checks therefore remain
 necessary even when an adapter's own unit tests pass.
 
+SurrealDB SDK 3.3 separates remote clients from the embedded query engine.
+The `surrealdb` facade feature enables WebSocket, HTTP, and Rustls, with SDK
+defaults and its unused standalone parser disabled. Embedded `mem://` connections
+are no longer supported in 0.47.0. For tests and local development, use a server
+with memory storage over WebSocket or HTTP. Audit paging, retention, hash-chain,
+and legacy archive regressions reuse the authenticated server fixture. The graph
+guard rejects embedded engine/store crates in every development and qualification
+profile. No release job needs to compile the embedded SDK engine.
+
 The private `acton-service-integration-tests` package contains container tests
 and gRPC examples. It is never published. Protobuf example generation and the
 SQL Server container dependency are kept out of ordinary facade compilation.
@@ -87,13 +189,13 @@ cargo nextest run -p acton-service-integration-tests --no-default-features --fea
 cargo run -p acton-service-integration-tests --example ping-pong --features grpc
 ```
 
-The SQL Server integration profile requires Docker. gRPC examples require
+Live PostgreSQL, SQL Server, SurrealDB, and ClickHouse integration profiles require Docker. gRPC examples require
 `protoc`. Linux SQL Server checks require the Kerberos development libraries.
 
 ## Qualification and publishing
 
 `Release qualification` runs nightly at 05:00 UTC and can be dispatched manually
-with an exact commit SHA. It runs the complete Rust catalog, Windows checks,
+with an exact commit SHA. It runs the complete service catalog, split native Windows checks,
 doctests, documentation, dependency advisories/license/source policy, SBOM
 generation, and a workspace publication dry run.
 
@@ -123,7 +225,9 @@ gh workflow run release.yml --ref main -f tag=acton-service-v0.47.0
 
 `task release-service -- minor` prepares signed public-workspace release commits
 and tags with `cargo-release --no-publish`, pushes them, and dispatches the gated
-GitHub workflow. It does not publish directly from a developer machine.
+GitHub workflow. It does not publish directly from a developer machine. CI validates tag format,
+version, and ancestry; it does not verify a tag signature against a trusted key
+registry. Signing is currently enforced by local release preparation.
 
 For the first component release, crates.io requires an API token because trusted
 publishing can only be configured after a crate exists. Set the GitHub secret

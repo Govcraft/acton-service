@@ -69,6 +69,7 @@ impl ClickHouseAuditStorage {
 /// Row type for inserting audit events into ClickHouse
 #[derive(Row, Serialize)]
 struct AuditInsertRow {
+    #[serde(with = "clickhouse::serde::uuid")]
     id: uuid::Uuid,
     timestamp: i64,
     kind: String,
@@ -91,6 +92,7 @@ struct AuditInsertRow {
 /// Row type for reading audit events from ClickHouse
 #[derive(Row, Deserialize)]
 struct AuditQueryRow {
+    #[serde(with = "clickhouse::serde::uuid")]
     id: uuid::Uuid,
     timestamp: i64,
     kind: String,

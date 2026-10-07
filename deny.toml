@@ -99,6 +99,34 @@ allow = ["BUSL-1.1"]
 name = "surrealdb-protocol"
 allow = ["BUSL-1.1"]
 
+# SDK 3.3 splits the previously approved SurrealDB SDK into these crates.
+# Each ships the identical LICENSE as 3.0.5 (SHA-256 begins 98a94ac615f88370).
+# Keep this exception scoped to upstream components, not BUSL globally.
+
+[[licenses.exceptions]]
+name = "surrealdb-cnf"
+allow = ["BUSL-1.1"]
+
+[[licenses.exceptions]]
+name = "surrealdb-common"
+allow = ["BUSL-1.1"]
+
+[[licenses.exceptions]]
+name = "surrealdb-engine-api"
+allow = ["BUSL-1.1"]
+
+[[licenses.exceptions]]
+name = "surrealdb-iam"
+allow = ["BUSL-1.1"]
+
+[[licenses.exceptions]]
+name = "surrealdb-parse-common"
+allow = ["BUSL-1.1"]
+
+[[licenses.exceptions]]
+name = "surrealdb-rpc"
+allow = ["BUSL-1.1"]
+
 # Detect duplicate or banned dependencies
 [bans]
 multiple-versions = "warn"

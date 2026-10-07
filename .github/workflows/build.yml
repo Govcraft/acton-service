@@ -4,11 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
 
 # New commits supersede PR feedback. Main and release runs retain unique groups.
 concurrency:
@@ -20,10 +21,14 @@ jobs:
     name: select validation profiles
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.plan.outputs.matrix }}
-      code: ${{ steps.plan.outputs.code }}
-      docs: ${{ steps.plan.outputs.docs }}
-      security: ${{ steps.plan.outputs.security }}
+      matrix: ${{ steps.evidence.outputs.matrix }}
+      code: ${{ steps.evidence.outputs.code }}
+      docs: ${{ steps.evidence.outputs.docs }}
+      security: ${{ steps.evidence.outputs.security }}
+      tooling: ${{ steps.evidence.outputs.tooling }}
+      metadata: ${{ steps.evidence.outputs.metadata }}
+      deploy_docs: ${{ steps.evidence.outputs.deploy_docs }}
+      evidence_run: ${{ steps.evidence.outputs.evidence_run }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -44,6 +49,37 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: python scripts/ci/plan.py
+      - uses: dtolnay/rust-toolchain@master
+        if: steps.plan.outputs.metadata == 'true'
+        with:
+          toolchain: '1.99.0'
+      - uses: ./.github/actions/registry-cache
+        if: steps.plan.outputs.metadata == 'true'
+      - name: Validate version-only workspace metadata
+        if: steps.plan.outputs.metadata == 'true'
+        run: cargo metadata --locked --format-version 1 > /dev/null
+      - name: Reuse proven identical-tree evidence or validate
+        id: evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUSH_FORCED: ${{ github.event.forced }}
+        run: python scripts/ci/evidence.py select
+      - name: Validate workflows for changes without Rust jobs
+        if: steps.evidence.outputs.tooling == 'true' && steps.evidence.outputs.code != 'true'
+        uses: docker://rhysd/actionlint:1.7.12
+      - uses: astral-sh/ruff-action@v4.1.0
+        if: steps.evidence.outputs.tooling == 'true' && steps.evidence.outputs.code != 'true'
+        with:
+          version: '0.16.10'
+          src: scripts/ci
+      - name: Validate helper formatting without Rust jobs
+        if: steps.evidence.outputs.tooling == 'true' && steps.evidence.outputs.code != 'true'
+        run: ruff format --check scripts/ci
+      - uses: actions/upload-artifact@v7
+        with:
+          name: validation-plan
+          path: ci-plan.json
+          retention-days: 7
 
   rust:
     needs: changes
@@ -52,6 +88,8 @@ jobs:
     with:
       sha: ${{ github.sha }}
       matrix: ${{ needs.changes.outputs.matrix }}
+      tooling: ${{ needs.changes.outputs.tooling == 'true' }}
+      helpers-tested: true
       linux-runner: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.ACTON_LINUX_RUNNER || 'ubuntu-latest' }}
 
   docs-build:
@@ -81,7 +119,29 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+      - uses: actions/download-artifact@v8
+        with:
+          name: validation-plan
       - name: Require every selected job to succeed
         env:
           RESULTS: ${{ toJSON(needs) }}
         run: python scripts/ci/gate.py development
+      - name: Record successful source-tree coverage
+        run: python scripts/ci/evidence.py record
+      - uses: actions/upload-artifact@v7
+        with:
+          name: development-evidence
+          path: evidence.json
+          retention-days: 7
+
+  deploy-docs:
+    needs: [changes, ci-gate]
+    if: needs.ci-gate.result == 'success' && github.ref == 'refs/heads/main' && needs.changes.outputs.deploy_docs == 'true'
+    permissions:
+      contents: read
+      actions: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/deploy-docs.yml
+    with:
+      run-id: ${{ needs.changes.outputs.evidence_run || format('{0}', github.run_id) }}

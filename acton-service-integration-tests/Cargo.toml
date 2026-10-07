@@ -7,12 +7,17 @@ publish = false
 
 [dependencies]
 acton-service = { version = "0.47.0", path = "../acton-service", default-features = false }
+acton-service-clickhouse = { version = "0.47.0", path = "../acton-service-clickhouse", optional = true }
+acton-service-mssql = { version = "0.47.0", path = "../acton-service-mssql", optional = true }
+acton-service-postgres = { version = "0.47.0", path = "../acton-service-postgres", default-features = false, optional = true }
+acton-service-surrealdb = { version = "0.47.0", path = "../acton-service-surrealdb", optional = true, default-features = false }
 axum = { workspace = true, optional = true }
 chrono.workspace = true
 prost = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
-testcontainers-modules = { version = "0.15.0", features = ["mssql_server"], optional = true }
+sqlx = { workspace = true, optional = true }
+testcontainers-modules = { version = "0.15.0", optional = true }
 tokio.workspace = true
 tokio-rustls = { workspace = true, optional = true }
 tonic = { workspace = true, optional = true }
@@ -25,12 +30,16 @@ tonic-prost-build = { workspace = true, optional = true }
 
 
 [features]
-default = ["acton-service/default"]
-crypto-ring = ["acton-service/crypto-ring"]
+default = ["acton-service/default", "acton-service-postgres?/crypto-aws-lc-rs"]
+crypto-ring = ["acton-service/crypto-ring", "acton-service-postgres?/crypto-ring"]
 grpc = ["acton-service/grpc", "dep:tonic", "dep:prost", "dep:tonic-prost", "dep:tonic-prost-build"]
 tls = ["acton-service/tls", "dep:axum", "dep:tokio-rustls"]
 cedar-authz = ["acton-service/cedar-authz", "acton-service/auth"]
-mssql = ["acton-service/mssql", "acton-service/accounts", "acton-service/auth", "acton-service/audit", "dep:testcontainers-modules"]
+mssql = ["acton-service/mssql", "acton-service/accounts", "acton-service/auth", "acton-service/audit", "dep:acton-service-mssql", "dep:testcontainers-modules", "testcontainers-modules/mssql_server"]
+postgres = ["acton-service/database", "acton-service/audit", "dep:acton-service-postgres", "dep:sqlx", "dep:testcontainers-modules", "testcontainers-modules/postgres"]
+clickhouse = ["acton-service/clickhouse", "acton-service/audit", "dep:acton-service-clickhouse", "dep:testcontainers-modules", "testcontainers-modules/clickhouse"]
+surrealdb = ["acton-service/surrealdb", "acton-service/audit", "dep:acton-service-surrealdb", "dep:testcontainers-modules", "testcontainers-modules/surrealdb"]
+
 
 [[example]]
 name = "ping-pong"
