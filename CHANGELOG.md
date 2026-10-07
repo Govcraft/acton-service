@@ -7,8 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [acton-service-v0.47.0] - 2026-10-07
+
+This release adds persistent token revocation, removes password stretching from
+API-key verification, and separates development validation from release qualification.
+
+### Breaking
+
+- API-key generators require an explicit `ApiKeyPepper`, and `generate()` returns
+  `Result<(String, String), Error>`. Every API-key storage constructor accepts
+  the configured generator. Provision one persistent 32-byte pepper shared by
+  issuers, verifiers, replicas, and restarts (#176).
+- API-key verification accepts versioned keyed BLAKE3 digests. Legacy Argon2id
+  hashes are rejected immediately. Reissue existing keys, or explicitly rehash
+  securely held plaintext with the configured generator before upgrading.
+  Existing hashes cannot be converted without plaintext. Replacing the pepper
+  requires coordinated key reissuance or plaintext migration (#176).
+- `ApiKeyConfig` adds `pepper_path`; `Config<T>` adds `revocation`. Update complete
+  struct literals or use their defaults. API-key storage and middleware remain
+  application-managed; initialize their configured generator before serving.
+- SurrealDB connections support remote HTTP and WebSocket servers. Embedded
+  `mem://` connections are rejected. Use a server with memory storage for local
+  development and tests.
+- Combining standalone audit/storage packages with facade feature selections
+  can expose additional variants of the exhaustive `AuditEventKind` enum.
+  Align account/lockout features across those dependencies and update matches.
+- gRPC token-authentication service implementations require a `'static` validator
+  so storage-backed revocation can be checked asynchronously.
+
+### Fixed
+
+- Configured token revocation now reaches PASETO and JWT authentication on both
+  HTTP and builder-managed gRPC routes, including tokens without a token ID
+  when a subject cutoff exists. Missing issued-at claims fail closed when a
+  cutoff exists. Unavailable stores and missing schemas deny protected requests
+  (#175).
+- Configuration load errors now prevent startup instead of replacing malformed
+  authentication or revocation configuration with defaults (#175).
+- API-key generation returns entropy failures without panicking. SQL Server
+  verification propagates malformed or unsupported stored digest errors (#176).
+
 ### Added
 
+- Token-ID revocation and persistent, monotonic subject cutoffs for PostgreSQL,
+  SQL Server, Turso, SurrealDB, and Redis. Select `[revocation]` explicitly, or
+  inject a shared checker with `ServiceBuilder::with_token_revocation`. Initialize
+  database schemas before serving and persist revocation before reporting a
+  principal deactivation as complete (#175).
 - Independent core, audit, PostgreSQL, SQL Server, Turso, SurrealDB, and
   ClickHouse packages, retaining the existing `acton-service` facade APIs.
 - Exhaustive nightly and release qualification tied to the exact commit being
@@ -33,9 +78,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full, and SAML graphs.
 - gRPC examples and SQL Server container tests live in a private integration
   package, removing their build dependencies from ordinary facade compilation.
-- Workspace version advances to 0.47.0 for the component architecture. Cargo
-  feature unification exposes additional audit event variants when applications
-  combine the facade with standalone adapters enabling account/lockout events.
 
 ## [acton-service-v0.46.0] - 2026-10-06
 

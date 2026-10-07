@@ -1,63 +1,83 @@
-# Semver Analysis Report
+# Semver analysis for acton-service 0.47.0
 
-**Generated:** 2026-10-06T23:24:00Z
-**Project:** acton-service
-**Current Version:** 0.47.0 (uncommitted planned release)
-**Last Release Tag:** acton-service-v0.46.0
-**Commits Analyzed:** 0 after release; working tree compared to released commit 7fdacbac0b3781e08bc3737eb2ff32d38d3dbca7
+Reviewed on 2026-10-07 against published `acton-service-v0.46.0`
+(`7fdacbac0b3781e08bc3737eb2ff32d38d3dbca7`). The review covers the component
+architecture, CI changes, and authentication fixes for #175 and #176.
 
 ## Recommendation
 
-**Suggested Bump:** MINOR (project version-number convention; conservative pre-1.0 compatibility boundary)
-**Suggested New Version:** 0.47.0
+Publish **0.47.0**, using the established tag `acton-service-v0.47.0`.
+This is a compatibility boundary for a pre-1.0 crate. Cargo classifies several
+changes below as major compatibility changes; incrementing `0.y` supplies that
+boundary. One bump covers all changes in the release. The workspace is already
+at 0.47.0, so no additional minor increment is required.
 
-### Rationale
+## Confirmed breaking changes
 
-Keep the proposed 0.47.0 architectural release. Independent packages and additional Cargo features add functionality while compatibility wrappers retain existing facade signatures. Cargo treats a change from 0.46 to 0.47 as a compatibility boundary. If evaluated exclusively as compatible additions under Cargo's pre-1.0 guideline, 0.46.1 would be sufficient; 0.47.0 is conservative and already planned.
+| Change | Required migration |
+| --- | --- |
+| `Config<T>` adds the public `revocation` field | Update complete struct literals, or use defaults. Omitted serialized configuration remains disabled. |
+| `ApiKeyConfig` adds the public `pepper_path` field | Update complete literals and supply a persistent secret before initializing a generator. |
+| `ApiKeyGenerator::new` requires `ApiKeyPepper` | Pass an explicit secret shared by all issuers and verifiers. |
+| `ApiKeyGenerator::generate` returns `Result<(String, String), Error>` | Handle or propagate entropy errors before destructuring. |
+| All five API-key storage constructors accept a generator instead of a prefix | Pass a clone of the configured generator. SQL Server construction remains async and fallible. |
+| Legacy Argon2id API-key digests are rejected immediately | Reissue existing keys, or explicitly rehash securely held plaintext offline. A stored hash alone cannot be converted. |
+| `GrpcTokenAuthService` requires a `'static` validator for its `Service` implementation | Borrowing validator implementations may need owned state. The existing interceptor bound is unchanged. |
+| Embedded SurrealDB `mem://` and `memory://` connections are rejected | Connect to a remote HTTP or WebSocket server, including a server using memory storage during development. |
 
-## Detailed Analysis
+These classifications follow the official [Cargo SemVer guidelines](https://doc.rust-lang.org/cargo/reference/semver.html)
+for adding fields to public structs, changing function signatures, tightening
+bounds, and changing behavior.
 
-### Major Changes (Breaking)
+## Additions and compatibility qualifications
 
-- None confirmed in existing facade feature combinations after restoring unconditional availability of `acton_service::config::ClickHouseConfig`. The initial extraction added a `clickhouse` feature condition to that previously unconditional item; this was corrected during review. [Cargo guideline: removing public items, including adding conditional compilation](https://doc.rust-lang.org/cargo/reference/semver.html#item-remove).
-- `DatabaseConfig` remains facade-owned. Its conditional `mssql_auth` field is preserved, avoiding a breaking addition to a publicly constructible struct when non-MSSQL facade features are selected. [Cargo guideline: adding public fields when no private fields exist](https://doc.rust-lang.org/cargo/reference/semver.html#struct-add-public-field-when-no-private).
+Seven standalone core, audit, and database packages supply additional public
+entry points while the facade retains its storage wrappers. Explicit revocation
+configuration, backend providers, builder injection, and the state getter add
+persistent token-ID and subject-cutoff checks to HTTP and builder-managed gRPC.
 
-### Minor Changes (New Features)
+New methods on `TokenValidator` and `TokenRevocation` have default implementations;
+existing required methods retain their signatures. Cargo treats adding defaulted
+trait methods as potentially breaking, rather than adding required trait items.
+Existing jti-only implementations remain supported.
 
-- Seven independently consumable core, audit, and storage packages provide new public entry points.
-- Additional public configuration/error re-exports expand item availability. Existing imports remain valid.
-- New optional adapter Cargo features and error conversions are additive. [Cargo guidelines: adding public items](https://doc.rust-lang.org/cargo/reference/semver.html#item-new), [adding a Cargo feature](https://doc.rust-lang.org/cargo/reference/semver.html#cargo-feature-add), and [adding dependencies](https://doc.rust-lang.org/cargo/reference/semver.html#cargo-add-dep).
+`AuditEventKind` is exhaustive and shared by facade and component dependencies.
+Enabling account or lockout features through a component can add variants visible
+through the facade. Align features and update exhaustive matches. Redis reserves
+the token ID `subject-cutoffs` to protect its persistent subject-cutoff hash.
 
-### Possibly-Breaking Changes (Requires Judgment)
+CI selection, caching, same-tree merge reuse, validated artifact deployment, and
+private integration-harness organization do not independently require another
+compatibility bump. Release qualification still validates the exact tagged SHA.
 
-- `AuditEventKind` is exhaustive and is now defined in the shared audit package. Enabling `accounts` or `login-lockout` directly on a standalone adapter or audit dependency can expand the variants visible through the facade, even when its corresponding facade feature is disabled. Consumers combining the new packages with facade exhaustive matches should use a unified feature selection. Existing users depending only on the facade retain their previous feature combinations. Adding `non_exhaustive` to the facade enum would itself break existing exhaustive matches. [Cargo guidelines: adding enum variants](https://doc.rust-lang.org/cargo/reference/semver.html#enum-variant-new) and [adding non_exhaustive](https://doc.rust-lang.org/cargo/reference/semver.html#attr-non-exhaustive).
-- Public type re-exports change their defining package. Undocumented `type_name` output can change; no well-defined representation guarantees were found for moved types.
-- Example names moved to the unpublished integration harness, so old package-specific example commands need the documented replacements. This affects development tooling, rather than facade library signatures.
+## Authentication migration
 
-### Patch Changes (Bug Fixes, Internal)
+Provision exactly 32 raw bytes for the API-key pepper, outside API-key storage.
+Configure `auth.api_keys.pepper_path`, or construct `ApiKeyPepper` explicitly.
+Keep the same secret across issuers, verifiers, replicas, and restarts. Pass the
+configured generator into storage and handle `generate()?`.
 
-- Selective PR validation, exact-commit release qualification, nightly coverage, and concurrency changes alter CI behavior rather than Rust public API.
-- Example protocol compilation and container test dependencies move into an unpublished integration harness.
-- Storage behavior remains unchanged: comparisons of the extracted five storage implementations found no substantive implementation changes.
+API-key digest columns and lookup-prefix indexes need no schema change. Reissue
+legacy keys before upgrading, or call `generator.hash(&plaintext)` during a
+trusted offline migration when plaintext is already securely available. Pepper
+replacement invalidates existing digests and requires coordinated reissuance or
+plaintext migration. Verification has no legacy or old-pepper fallback.
 
-## Commits Reviewed
+Select `[revocation]` explicitly and initialize its schema before serving.
+Persist revocation successfully before reporting deactivation as complete.
+Subject cutoffs never decrease or expire; they deny tokens issued at or before
+the cutoff and tokens without an issued-at claim when a cutoff exists. Prevent
+new token issuance for deactivated principals as well.
 
-| Commit | Summary | Category |
-|--------|---------|----------|
-| Working tree | Selective CI and independent storage/audit/core extraction | Additive architectural change |
+Synchronous gRPC interceptors validate cryptography only. Use builder-managed
+authentication or `GrpcTokenAuthLayer` for asynchronous revocation checks.
+See the [API-key guide](../acton-docs/src/app/docs/api-keys/page.md) and
+[token-authentication guide](../acton-docs/src/app/docs/token-auth/page.md).
 
-## Files Changed
+## Review limits and release evidence
 
-- `acton-service/src/config.rs`: pool configuration re-exports and facade-to-core database conversion preserve facade struct fields and serde behavior.
-- `acton-service/src/error.rs`: database enums re-export from core; facade error and database error types remain facade-owned. Driver classification and messages are preserved by adapter-owned functions; conversion from shared storage errors retains facade categories and context.
-- `acton-service/src/audit/{config,event,id,chain}.rs`: extracted definitions are identical aside from internal module paths and helper visibility.
-- `acton-service/src/audit/storage/mod.rs`: facade `AuditQuery` fields, defaults, validation, matching, and the complete `AuditStorage` trait compare exactly equal to released source.
-- `acton-service/src/audit/storage/{pg,mssql,turso,surrealdb_impl,clickhouse_impl}.rs`: wrappers preserve constructors, `initialize(&self) -> Result<(), acton_service::Error>`, and trait methods. Their inner types remain private.
-- `acton-service/src/clickhouse_backend.rs`: existing `AnalyticsWriter` stays facade-owned with unchanged signatures and bounds.
-
-## Notes
-
-- Required local reference `/home/rodzilla/projects/references/rust_semver_guidelines/semver.md` was absent. Fresh official [Cargo SemVer guidelines](https://doc.rust-lang.org/cargo/reference/semver.html) were used as fallback.
-- The last tag resolves to HEAD, so there are no post-release commits to categorize. This review covers the actively edited working tree.
-- Review is source-based. No Cargo build, Clippy, Nextest, API-diff tool, or source modification was performed by this reviewer. Compilation and test validation belong to the implementation agent.
-- New package initial versions and their release ordering should follow the shared workspace version.
+The expected local semver reference was absent, so review used the official
+Cargo reference linked above. This report classifies source/API changes;
+Clippy, Nextest, hosted PR evidence, and exhaustive release qualification provide
+separate correctness evidence. Publication must use the qualified commit and
+validate the checksums and clean source revision of every published archive.
