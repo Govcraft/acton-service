@@ -74,14 +74,7 @@ jobs:
         if: '!inputs.helpers-tested'
         run: python -m unittest discover -s scripts/ci/tests -v
       # Main's independent maintenance workflow owns shared cache writes.
-      - uses: actions/cache/restore@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git/db
-          enableCrossOsArchive: true
-          key: ci-v2-registry--${{ hashFiles('Cargo.lock') }}
-          restore-keys: ci-v2-registry--
+      - uses: ./.github/actions/registry-cache
       - name: Fetch any missing locked dependencies
         run: cargo fetch --locked
 
@@ -130,15 +123,8 @@ jobs:
         env:
           PROFILE: ${{ matrix.profile }}
         run: echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/../.cargo-target-$PROFILE" >> "$GITHUB_ENV"
-      - uses: actions/cache/restore@v5
+      - uses: ./.github/actions/registry-cache
         if: runner.environment != 'self-hosted'
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git/db
-          enableCrossOsArchive: true
-          key: ci-v2-registry--${{ hashFiles('Cargo.lock') }}
-          restore-keys: ci-v2-registry--
       - uses: ./.github/actions/compiler-cache
         id: compiler
         if: runner.environment != 'self-hosted'

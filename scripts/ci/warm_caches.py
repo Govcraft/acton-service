@@ -10,6 +10,7 @@ from pathlib import Path
 
 from cache import ROOT, compiler_identity, inventory
 from profiles import CACHE_WRITERS, PROFILES, cache_family
+from registry_cache import identity as registry_identity
 from run_profile import commands as validation_commands
 
 
@@ -45,32 +46,36 @@ def commands(name: str, recipe: Path) -> list[list[str]]:
     result = (
         [] if windows else [["cargo", "chef", "prepare", "--recipe-path", str(recipe)]]
     )
-    for command in validation_commands(name):
-        if command[1] not in {"clippy", "check"}:
-            continue
-        options = command[2 : command.index("--")] if "--" in command else command[2:]
-        # The standalone adapter and unified facade graph keep separate features.
-        if windows:
-            result.append(["cargo", "check", *options])
-        else:
-            result.append(
-                [
-                    "cargo",
-                    "chef",
-                    "cook",
-                    "--check",
-                    "--recipe-path",
-                    str(recipe),
-                    *options,
-                ]
+    graphs = ("windows", "windows-full", "windows-saml") if windows else (name,)
+    for graph in graphs:
+        for command in validation_commands(graph):
+            if command[1] not in {"clippy", "check"}:
+                continue
+            options = (
+                command[2 : command.index("--")] if "--" in command else command[2:]
             )
-    if profile.tests:
-        # Build the unified lint graph for Nextest artifacts without executing tests.
-        result.append(
-            ["cargo", "build", *options]
-            if windows
-            else ["cargo", "chef", "cook", "--recipe-path", str(recipe), *options]
-        )
+            # Standalone, combined and Windows graphs retain their exact features.
+            if windows:
+                result.append(["cargo", "check", *options])
+            else:
+                result.append(
+                    [
+                        "cargo",
+                        "chef",
+                        "cook",
+                        "--check",
+                        "--recipe-path",
+                        str(recipe),
+                        *options,
+                    ]
+                )
+        if PROFILES[graph].tests:
+            # Build the lint graph for Nextest artifacts without executing tests.
+            result.append(
+                ["cargo", "build", *options]
+                if windows
+                else ["cargo", "chef", "cook", "--recipe-path", str(recipe), *options]
+            )
     return result
 
 
@@ -136,7 +141,7 @@ def main() -> None:
     if args.mode == "plan":
         entries = inventory()
         selected = missing_matrix(entries)
-        registry_key = os.environ["REGISTRY_KEY"]
+        registry_key = registry_identity()
         registry_missing = not any(
             entry["key"] == registry_key and entry["ref"] == "refs/heads/main"
             for entry in entries

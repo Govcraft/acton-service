@@ -1,0 +1,26 @@
+name: Restore portable Cargo downloads
+description: Restore relative archives and hydrate the runner's actual Cargo home
+outputs:
+  cache-hit:
+    description: Whether the exact portable cache exists
+    value: ${{ steps.restore.outputs.cache-hit }}
+  key:
+    description: Platform independent locked dependency identity
+    value: ${{ steps.identity.outputs.key }}
+runs:
+  using: composite
+  steps:
+    - id: identity
+      shell: bash
+      run: python scripts/ci/registry_cache.py identity
+    - id: restore
+      uses: actions/cache/restore@v5
+      with:
+        # Relative paths are necessary for a Linux archive to restore on Windows.
+        path: .ci-cargo-cache
+        enableCrossOsArchive: true
+        key: ${{ steps.identity.outputs.key }}
+        restore-keys: ${{ steps.identity.outputs.restore-prefix }}
+    - name: Hydrate Cargo's download directories
+      shell: bash
+      run: python scripts/ci/registry_cache.py hydrate

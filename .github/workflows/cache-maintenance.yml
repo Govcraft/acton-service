@@ -73,7 +73,6 @@ jobs:
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
-          REGISTRY_KEY: ci-v2-registry--${{ hashFiles('Cargo.lock') }}
         run: python scripts/ci/warm_caches.py plan
 
   registry:
@@ -89,24 +88,26 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: '1.99.0'
-      - uses: actions/cache/restore@v5
-        id: registry
+      - uses: actions/setup-python@v7
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git/db
-          enableCrossOsArchive: true
-          key: ${{ needs.plan.outputs.registry-key }}
-          restore-keys: ci-v2-registry--
+          python-version: '3.12'
+      - uses: ./.github/actions/registry-cache
+        id: registry
+      - name: Verify the planned registry identity
+        env:
+          PLANNED_KEY: ${{ needs.plan.outputs.registry-key }}
+          ACTUAL_KEY: ${{ steps.registry.outputs.key }}
+        run: test "$PLANNED_KEY" = "$ACTUAL_KEY"
       - name: Fetch locked dependencies
         if: steps.registry.outputs.cache-hit != 'true'
         run: cargo fetch --locked
+      - name: Stage portable Cargo downloads
+        if: steps.registry.outputs.cache-hit != 'true'
+        run: python scripts/ci/registry_cache.py stage
       - uses: actions/cache/save@v5
         if: steps.registry.outputs.cache-hit != 'true'
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git/db
+          path: .ci-cargo-cache
           enableCrossOsArchive: true
           key: ${{ needs.plan.outputs.registry-key }}
 
@@ -142,15 +143,8 @@ jobs:
         if: steps.compiler.outputs.cache-hit != 'true'
         with:
           toolchain: '1.99.0'
-      - uses: actions/cache/restore@v5
+      - uses: ./.github/actions/registry-cache
         if: steps.compiler.outputs.cache-hit != 'true'
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git/db
-          enableCrossOsArchive: true
-          key: ${{ needs.plan.outputs.registry-key }}
-          restore-keys: ci-v2-registry--
       - name: Install Linux prerequisites
         if: steps.compiler.outputs.cache-hit != 'true' && runner.os == 'Linux' && (matrix.protoc || matrix.kerberos)
         env:

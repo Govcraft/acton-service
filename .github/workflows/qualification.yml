@@ -90,14 +90,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: '1.99.0'
-      - uses: actions/cache/restore@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git/db
-          enableCrossOsArchive: true
-          key: ci-v2-registry--${{ hashFiles('Cargo.lock') }}
-          restore-keys: ci-v2-registry--
+      - uses: ./.github/actions/registry-cache
       - name: Verify publication graph and packaged crates
         env:
           EXPECTED_SHA: ${{ needs.plan.outputs.sha }}

@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cache import ROOT, closed_pr_caches, compiler_identity, inventory, obsolete
 from profiles import CACHE_WRITERS, cache_family
+from run_profile import commands as validation_commands
 from warm_caches import commands, missing_matrix, strip_target_editions, warm
 
 
@@ -128,6 +129,21 @@ class PlanningTests(unittest.TestCase):
 
 
 class WarmingTests(unittest.TestCase):
+    def test_windows_warms_exact_default_full_and_saml_graphs_without_feature_union(
+        self,
+    ):
+        expected = []
+        for name in ("windows", "windows-full", "windows-saml"):
+            lint = validation_commands(name)[0]
+            options = lint[2 : lint.index("--")] if "--" in lint else lint[2:]
+            expected.append(["cargo", "check", *options])
+            if name != "windows-full":
+                expected.append(["cargo", "build", *options])
+        self.assertEqual(commands("windows", Path("recipe.json")), expected)
+        self.assertEqual(
+            [c[1] for c in expected], ["check", "build", "check", "check", "build"]
+        )
+
     def test_cooks_match_standalone_and_combined_mssql_feature_graphs(self):
         cooks = commands("mssql", Path("recipe.json"))[1:]
         self.assertEqual(

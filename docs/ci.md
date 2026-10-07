@@ -89,6 +89,12 @@ registry and compiler caches. It runs after main pushes, on a daily repair sched
 or on a manual main dispatch, independently of the required validation gate.
 This also populates caches when same-tree evidence skips repeated merge validation.
 
+The registry snapshot uses a relative workspace directory, containing only crate
+archives, indexes, and Git databases. Each runner hydrates its actual Cargo home;
+home paths and extracted source trees are not shared across operating systems.
+Lockfile line endings are normalized so Linux and Windows request the same key.
+The portable namespace excludes earlier archives containing absolute home paths.
+
 Maintenance first looks up exact main keys through the cache API. If they all exist,
 it schedules no dependency build jobs. Missing graphs restore compatible older
 artifacts before compiling. Eight representative families cover default, full,
@@ -97,7 +103,9 @@ Turso have separate families because `full` excludes those native drivers. Recip
 their packages, features, and targets from the validation catalog, preserving
 separate standalone adapter and combined facade/harness graphs. Linux uses the
 pinned, checksummed cargo-chef 0.1.78 release binary; Windows uses native Cargo
-check/build commands. Warming runs no tests, services, or qualification commands.
+check/build commands. The Windows family warms the separate default, full check,
+and SAML check/build graphs rather than combining their features. Warming runs no
+tests, services, or qualification commands.
 
 Compiler keys include OS, architecture, pinned compiler, workspace manifests,
 lockfile, compiler configuration, and recipe/workflow definitions. Source edits

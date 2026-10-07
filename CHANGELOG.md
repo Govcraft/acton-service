@@ -28,7 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Shared dependency caches are populated on main independently of validation,
   including a dedicated SQL Server graph. Pull requests restore these caches;
   unchanged cache keys skip maintenance builds, and confirmed closed-PR caches
-  are removed within the bounded storage policy.
+  are removed within the bounded storage policy. Portable registry archives
+  hydrate each runner's Cargo home, and Windows warming covers separate default,
+  full, and SAML graphs.
 - gRPC examples and SQL Server container tests live in a private integration
   package, removing their build dependencies from ordinary facade compilation.
 - Workspace version advances to 0.47.0 for the component architecture. Cargo

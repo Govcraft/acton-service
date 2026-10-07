@@ -53,15 +53,8 @@ jobs:
         if: steps.plan.outputs.metadata == 'true'
         with:
           toolchain: '1.99.0'
-      - uses: actions/cache/restore@v5
+      - uses: ./.github/actions/registry-cache
         if: steps.plan.outputs.metadata == 'true'
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git/db
-          enableCrossOsArchive: true
-          key: ci-v2-registry--${{ hashFiles('Cargo.lock') }}
-          restore-keys: ci-v2-registry--
       - name: Validate version-only workspace metadata
         if: steps.plan.outputs.metadata == 'true'
         run: cargo metadata --locked --format-version 1 > /dev/null

@@ -42,8 +42,10 @@ def compiler_identity(family: str, platform: str, architecture: str, root=ROOT):
             "scripts/ci/profiles.py",
             "scripts/ci/run_profile.py",
             "scripts/ci/cache.py",
+            "scripts/ci/registry_cache.py",
             "scripts/ci/warm_caches.py",
             ".github/actions/compiler-cache/action.yml",
+            ".github/actions/registry-cache/action.yml",
             ".github/workflows/rust-validation.yml",
             ".github/workflows/cache-maintenance.yml",
         }
