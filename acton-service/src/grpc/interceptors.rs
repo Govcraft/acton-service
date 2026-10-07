@@ -1,7 +1,10 @@
 //! gRPC interceptors for cross-cutting concerns
 //!
 //! Interceptors provide similar functionality to HTTP middleware,
-//! allowing request/response inspection and modification.
+//! allowing request/response inspection and modification. Token interceptors
+//! validate cryptography synchronously and cannot await revocation storage.
+//! Use [`GrpcTokenAuthLayer`](super::middleware::GrpcTokenAuthLayer) or
+//! ServiceBuilder-managed authentication when revocation is required.
 
 use std::sync::Arc;
 use tonic::{Request, Response, Status};

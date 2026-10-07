@@ -6,8 +6,7 @@ pub mod token;
 // PASETO authentication (default)
 pub mod paseto;
 
-// Token revocation (requires cache feature)
-#[cfg(feature = "cache")]
+// Token revocation storage
 pub mod revocation;
 
 // JWT authentication (requires jwt feature)
@@ -37,7 +36,6 @@ pub mod cedar;
 // Token abstraction exports (always available)
 pub use token::{Claims, TokenValidator};
 
-#[cfg(feature = "cache")]
 pub use token::TokenRevocation;
 
 // PASETO exports (default)

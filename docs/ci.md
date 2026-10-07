@@ -32,7 +32,10 @@ the backend SDK under a standalone graph.
 | --- | --- |
 | OAuth implementation | OAuth with and without cache |
 | gRPC implementation | Transport with/without TLS, examples, both provider RPCs, native Windows compilation |
-| Turso adapter | Isolated adapter lint, adapter tests and facade integration in one job |
+| Turso adapter or revocation test | Isolated adapter lint, adapter tests, facade authentication and file-backed persistence in one job |
+| API-key storage implementation | Authentication profiles for each supported backend and Windows compilation |
+| Backend-specific revocation implementation | The affected backend profiles |
+| Redis fixture | Existing OAuth/cache profile, including a bounded live Redis revocation contract |
 | SurrealDB adapter | Remote SDK, isolated adapter lint, authenticated server and facade integration |
 | SQL Server fixture | That live container test |
 | PostgreSQL adapter | Standalone adapter, both provider TLS/database scenarios and facade integration |

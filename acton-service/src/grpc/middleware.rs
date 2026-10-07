@@ -425,9 +425,9 @@ pub(crate) fn is_grpc_infra_path(path: &str) -> bool {
 /// the framework applies this layer to all gRPC routes automatically; this
 /// type is for manual composition.
 ///
-/// Note: like the tonic interceptor helpers (and unlike the HTTP
-/// middleware), this layer validates the token itself but does not consult
-/// a token revocation list.
+/// This layer awaits storage-backed revocation after validating the token,
+/// using the same provider as HTTP when installed by ServiceBuilder. Tonic
+/// interceptor helpers are synchronous and only validate cryptography.
 #[derive(Clone)]
 pub struct GrpcTokenAuthLayer<V> {
     validator: V,
@@ -483,7 +483,7 @@ impl<S, V, ReqBody, ResBody> Service<http::Request<ReqBody>> for GrpcTokenAuthSe
 where
     S: Service<http::Request<ReqBody>, Response = http::Response<ResBody>> + Clone + Send + 'static,
     S::Future: Send + 'static,
-    V: TokenValidator,
+    V: TokenValidator + 'static,
     ReqBody: Send + 'static,
     ResBody: Default + Send + 'static,
 {
@@ -517,26 +517,22 @@ where
         #[cfg(feature = "tls")]
         let public = public || crate::caller_auth::bearer_waived(req.extensions());
 
-        if !public {
-            let validated = extract_token(req.headers())
-                .and_then(|token| self.validator.validate_token(&token));
-            match validated {
-                Ok(claims) => {
-                    tracing::debug!(
-                        sub = %claims.sub,
-                        roles = ?claims.roles,
-                        "gRPC request authenticated"
-                    );
-                    req.extensions_mut().insert(claims);
+        let validator = self.validator.clone();
+        Box::pin(async move {
+            if !public {
+                let validated =
+                    extract_token(req.headers()).and_then(|token| validator.validate_token(&token));
+                let claims = match validated {
+                    Ok(claims) => claims,
+                    Err(error) => return Ok(Status::unauthenticated(error.to_string()).into_http()),
+                };
+                if let Err(error) = validator.check_revocation(&claims).await {
+                    return Ok(Status::unauthenticated(error.to_string()).into_http());
                 }
-                Err(e) => {
-                    let status = Status::unauthenticated(e.to_string());
-                    return Box::pin(async move { Ok(status.into_http()) });
-                }
+                req.extensions_mut().insert(claims);
             }
-        }
-
-        Box::pin(async move { inner.call(req).await })
+            inner.call(req).await
+        })
     }
 }
 

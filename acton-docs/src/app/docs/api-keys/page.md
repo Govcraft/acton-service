@@ -16,12 +16,12 @@ This guide covers API key authentication. See the [Authentication Overview](/doc
 
 API key authentication in acton-service provides machine-to-machine authentication for services, integrations, and third-party access. Keys follow the format `{prefix}_{random_base32}`, similar to Stripe (`sk_live_...`) and GitHub (`ghp_...`), making them recognizable and easy to manage.
 
-Keys are hashed with Argon2id before storage—only the hash is persisted. The framework supports scope-based permissions, rate limiting per key, and efficient prefix-based lookup for validation. Storage backends include Redis, PostgreSQL, and Turso.
+Keys are hashed with keyed BLAKE3 before storage. Only the versioned digest is persisted; a separate server-side pepper protects it. The framework supports scope-based permissions, rate limiting per key, and efficient prefix-based lookup for validation. Storage backends include Redis, PostgreSQL, MSSQL, Turso, and SurrealDB.
 
 **Key characteristics:**
 
 - **High entropy**: 192 bits of randomness per key
-- **Secure storage**: Argon2id-hashed, same as passwords
+- **Secure storage**: Keyed BLAKE3 with a persistent 256-bit server-side pepper
 - **Prefix lookup**: First 8 characters indexed for efficient validation
 - **Scope-based access**: Fine-grained permissions per key
 - **Revocation**: Instant revocation without affecting other keys
@@ -36,19 +36,32 @@ acton-service = { version = "{% version() %}", features = ["auth", "cache"] }
 ```
 
 ```rust
-use acton_service::auth::ApiKeyGenerator;
+use acton_service::auth::{ApiKeyGenerator, ApiKeyPepper};
 
 // Create generator with your prefix
-let generator = ApiKeyGenerator::new("sk_live");
+let pepper = ApiKeyPepper::from_file("./secrets/api-key.pepper")?;
+let generator = ApiKeyGenerator::new("sk_live", pepper);
 
 // Generate a new API key
-let (key, key_hash) = generator.generate();
+let (key, key_hash) = generator.generate()?;
 // key = "sk_live_abc123..." - show to user ONCE
-// key_hash = "$argon2id$..." - store in database
+// key_hash = "$blake3-keyed$v1$..." - store in database
 
 // Later, verify an incoming key
 let is_valid = generator.verify(&incoming_key, &stored_hash)?;
 ```
+
+Provision `./secrets/api-key.pepper` once with exactly 32 cryptographically random raw bytes. Keep it in a server secret store, separate from the API-key database, and restrict file access to the service. The file must contain no text encoding or trailing newline. The generator never creates a replacement secret automatically, and missing or incorrectly sized files return an error. Initialize the generator before serving requests and pass its clone to your storage constructor.
+
+Key verification uses BLAKE3's constant-time digest comparison. API keys have 192 bits of random entropy and do not need password stretching; human passwords continue to use Argon2id.
+
+## Upgrading existing keys and rotating the pepper
+
+Version 0.47 stores digests as `$blake3-keyed$v1$` followed by 64 hexadecimal characters. Existing `$argon2id$` hashes and unknown formats are rejected immediately. The verifier does not run Argon2 as a compatibility fallback, so legacy requests cannot trigger password-hashing memory or CPU costs.
+
+Before upgrading, revoke and reissue existing API keys under the new generator. An Argon2id hash cannot be converted into a keyed BLAKE3 digest. If a trusted offline process already holds the original high-entropy plaintext keys, it may instead call `generator.hash(&plaintext_key)` and replace the stored `key_hash`. Never hash the old Argon2 digest as if it were plaintext. The existing string column and lookup-prefix index need no schema change.
+
+Persist the same pepper across restarts and share it among every issuer and verifier, including all service replicas. Replacing the pepper invalidates existing digests. Rotation therefore requires coordinated key reissuance or offline rehashing from securely held plaintext before switching all replicas. There is no old-pepper fallback or automatic rotation. A wrong pepper returns a verification mismatch; unreadable or malformed pepper files return initialization errors.
 
 ---
 
@@ -79,12 +92,13 @@ sk_live_abcdefghijklmnopqrstuvwxyz234567
 ## Generating Keys
 
 ```rust
-use acton_service::auth::ApiKeyGenerator;
+use acton_service::auth::{ApiKeyGenerator, ApiKeyPepper};
 
-let generator = ApiKeyGenerator::new("sk_live");
+let pepper = ApiKeyPepper::from_file("./secrets/api-key.pepper")?;
+let generator = ApiKeyGenerator::new("sk_live", pepper);
 
-// Generate returns (plaintext_key, argon2id_hash)
-let (key, hash) = generator.generate();
+// Generate returns (plaintext_key, keyed_blake3_digest)
+let (key, hash) = generator.generate()?;
 
 // IMPORTANT: Show the key to the user exactly ONCE
 // After this, you can never recover it
@@ -95,7 +109,8 @@ store_api_key(ApiKey {
     id: uuid::Uuid::new_v4().to_string(),
     user_id: "user:123".to_string(),
     name: "Production API Key".to_string(),
-    prefix: "sk_live".to_string(),
+    prefix: ApiKeyGenerator::key_prefix_for_lookup(&key)
+        .ok_or(Error::ValidationError("Invalid API-key format".into()))?,
     key_hash: hash,
     scopes: vec!["read:data".to_string(), "write:data".to_string()],
     rate_limit: Some(1000), // 1000 requests/minute
@@ -117,7 +132,8 @@ Two approaches for validating incoming API keys:
 If you already have the stored hash:
 
 ```rust
-let generator = ApiKeyGenerator::new("sk_live");
+let pepper = ApiKeyPepper::from_file("./secrets/api-key.pepper")?;
+let generator = ApiKeyGenerator::new("sk_live", pepper);
 
 // Verify the key against stored hash
 if generator.verify(&incoming_key, &stored_hash)? {
@@ -132,7 +148,7 @@ Using the storage trait for complete validation:
 ```rust
 use acton_service::auth::{ApiKeyStorage, RedisApiKeyStorage};
 
-let storage = RedisApiKeyStorage::new(redis_pool, "sk_live");
+let storage = RedisApiKeyStorage::new(redis_pool, generator.clone());
 
 // Get by full key (includes hash verification)
 if let Some(api_key) = storage.get_by_key(&incoming_key).await? {
@@ -178,10 +194,10 @@ pub struct ApiKey {
     /// User-provided name for the key
     pub name: String,
 
-    /// Key prefix (e.g., "sk_live")
+    /// Indexed lookup prefix (e.g., "sk_live_abcd2345")
     pub prefix: String,
 
-    /// Hashed key value (Argon2id)
+    /// Versioned keyed BLAKE3 digest
     pub key_hash: String,
 
     /// Allowed scopes/permissions
@@ -267,7 +283,7 @@ acton-service = { version = "{% version() %}", features = ["auth", "cache"] }
 ```rust
 use acton_service::auth::RedisApiKeyStorage;
 
-let storage = RedisApiKeyStorage::new(redis_pool, "sk_live");
+let storage = RedisApiKeyStorage::new(redis_pool, generator.clone());
 ```
 
 ### PostgreSQL
@@ -282,7 +298,7 @@ acton-service = { version = "{% version() %}", features = ["auth", "database"] }
 ```rust
 use acton_service::auth::PgApiKeyStorage;
 
-let storage = PgApiKeyStorage::new(pg_pool, "sk_live");
+let storage = PgApiKeyStorage::new(pg_pool, generator.clone());
 ```
 
 **Database schema:**
@@ -318,8 +334,19 @@ acton-service = { version = "{% version() %}", features = ["auth", "turso"] }
 ```rust
 use acton_service::auth::TursoApiKeyStorage;
 
-let storage = TursoApiKeyStorage::new(turso_conn, "sk_live");
+let storage = TursoApiKeyStorage::new(turso_conn, generator.clone());
 ```
+
+### MSSQL and SurrealDB
+
+These backends use the same configured generator and stored digest format. Enable `auth` with the corresponding `mssql` or `surrealdb` feature:
+
+```rust
+let mssql_storage = MssqlApiKeyStorage::new(mssql_pool, generator.clone()).await?;
+let surreal_storage = SurrealDbApiKeyStorage::new(surreal_client, generator.clone());
+```
+
+Select one primary database backend per build. Each storage verifier must use the same persistent pepper as the generator that issued the keys.
 
 ---
 
@@ -366,6 +393,9 @@ pub struct ApiKeyConfig {
     /// Key prefix (default: "sk_live")
     pub prefix: String,
 
+    /// Path to a persistent raw 32-byte secret
+    pub pepper_path: Option<std::path::PathBuf>,
+
     /// Header name for API key (default: "X-API-Key")
     pub header: String,
 
@@ -383,9 +413,23 @@ pub struct ApiKeyConfig {
 [auth.api_keys]
 enabled = true
 prefix = "sk_live"
+pepper_path = "./secrets/api-key.pepper"
 header = "X-API-Key"
 default_rate_limit = 1000
 storage = "redis"
+```
+
+Configuration supplies the generator explicitly; API-key storage and authentication middleware are managed by the application:
+
+```rust
+use acton_service::auth::{ApiKeyConfig, RedisApiKeyStorage};
+
+let config = ApiKeyConfig {
+    pepper_path: Some("./secrets/api-key.pepper".into()),
+    ..ApiKeyConfig::default()
+};
+let generator = config.generator()?;
+let storage = RedisApiKeyStorage::new(redis_pool, generator.clone());
 ```
 
 ---
@@ -402,9 +446,9 @@ async fn create_api_key(
     user_id: &str,
     request: CreateKeyRequest,
     storage: &RedisApiKeyStorage,
+    generator: &ApiKeyGenerator,
 ) -> Result<CreateKeyResponse, Error> {
-    let generator = ApiKeyGenerator::new("sk_live");
-    let (key, hash) = generator.generate();
+    let (key, hash) = generator.generate()?;
 
     let api_key = ApiKey {
         id: Uuid::new_v4().to_string(),
@@ -436,6 +480,7 @@ async fn create_api_key(
 async fn list_api_keys(
     user_id: &str,
     storage: &RedisApiKeyStorage,
+    generator: &ApiKeyGenerator,
 ) -> Result<Vec<KeyInfo>, Error> {
     let keys = storage.list_by_user(user_id).await?;
 
@@ -455,6 +500,7 @@ async fn revoke_api_key(
     user_id: &str,
     key_id: &str,
     storage: &RedisApiKeyStorage,
+    generator: &ApiKeyGenerator,
 ) -> Result<(), Error> {
     // Verify ownership
     let key = storage.get_by_id(key_id).await?
@@ -541,6 +587,7 @@ async fn rotate_api_key(
     user_id: &str,
     old_key_id: &str,
     storage: &RedisApiKeyStorage,
+    generator: &ApiKeyGenerator,
 ) -> Result<CreateKeyResponse, Error> {
     // Get old key details
     let old_key = storage.get_by_id(old_key_id).await?

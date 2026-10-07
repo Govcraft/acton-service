@@ -12,7 +12,6 @@ use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use jsonwebtoken::decode_header;
 use std::{fs, sync::Arc};
 
-#[cfg(feature = "cache")]
 use super::token::TokenRevocation;
 
 use super::token::{extract_token, Claims, TokenValidator};
@@ -32,7 +31,6 @@ use crate::auth::key_rotation::manager::KeyManager;
 pub struct JwtAuth {
     decoding_key: Arc<DecodingKey>,
     validation: Validation,
-    #[cfg(feature = "cache")]
     revocation: Option<Arc<dyn TokenRevocation>>,
     #[cfg(feature = "auth")]
     key_manager: Option<Arc<KeyManager>>,
@@ -107,7 +105,6 @@ impl JwtAuth {
         Ok(Self {
             decoding_key: Arc::new(decoding_key),
             validation,
-            #[cfg(feature = "cache")]
             revocation: None,
             #[cfg(feature = "auth")]
             key_manager: None,
@@ -131,9 +128,14 @@ impl JwtAuth {
     ///
     /// This allows the middleware to check if tokens have been revoked.
     /// Typically used with `RedisTokenRevocation` from the revocation module.
-    #[cfg(feature = "cache")]
     pub fn with_revocation<R: TokenRevocation + 'static>(mut self, revocation: R) -> Self {
         self.revocation = Some(Arc::new(revocation));
+        self
+    }
+
+    /// Install a shared revocation provider used by both HTTP and gRPC.
+    pub fn with_shared_revocation(mut self, revocation: Arc<dyn TokenRevocation>) -> Self {
+        self.revocation = Some(revocation);
         self
     }
 
@@ -274,17 +276,15 @@ impl JwtAuth {
             }
         };
 
-        // Check JTI revocation if cache feature is enabled and revocation checker is configured
-        #[cfg(feature = "cache")]
+        // Enforce both token and subject revocation before publishing claims.
         if let Some(revocation) = &auth.revocation {
-            if let Some(jti) = &claims.jti {
-                if revocation.is_revoked(jti).await? {
-                    #[cfg(feature = "audit")]
-                    if let Some(ref logger) = audit_logger {
-                        if logger.config().audit_auth_events {
-                            let mut source = audit_source.clone();
-                            source.subject = Some(claims.sub.clone());
-                            let event = crate::audit::event::AuditEvent::new(
+            if revocation.check_claims(&claims).await? {
+                #[cfg(feature = "audit")]
+                if let Some(ref logger) = audit_logger {
+                    if logger.config().audit_auth_events {
+                        let mut source = audit_source.clone();
+                        source.subject = Some(claims.sub.clone());
+                        let event = crate::audit::event::AuditEvent::new(
                                 crate::audit::event::AuditEventKind::AuthTokenRevoked,
                                 crate::audit::event::AuditSeverity::Warning,
                                 logger.service_name().to_string(),
@@ -297,17 +297,12 @@ impl JwtAuth {
                                 None,
                             )
                             .with_metadata(
-                                serde_json::json!({ "jti": jti, "reason": "bearer_token_revoked" }),
+                                serde_json::json!({ "jti": claims.jti, "reason": "bearer_token_revoked" }),
                             );
-                            logger.log(event).await;
-                        }
+                        logger.log(event).await;
                     }
-                    return Err(Error::Unauthorized("Token has been revoked".to_string()));
                 }
-            } else {
-                // If revocation is configured but token has no JTI, log a warning
-                // but allow the request (for backward compatibility)
-                tracing::warn!("JWT revocation is enabled but token has no JTI claim");
+                return Err(Error::Unauthorized("Token has been revoked".to_string()));
             }
         }
 
@@ -340,7 +335,17 @@ impl JwtAuth {
     }
 }
 
+#[async_trait::async_trait]
 impl TokenValidator for JwtAuth {
+    async fn check_revocation(&self, claims: &Claims) -> Result<(), Error> {
+        if let Some(revocation) = &self.revocation {
+            if revocation.check_claims(claims).await? {
+                return Err(Error::Unauthorized("Token has been revoked".into()));
+            }
+        }
+        Ok(())
+    }
+
     fn validate_token(&self, token: &str) -> Result<Claims, Error> {
         crate::crypto::ensure_jwt_crypto_provider();
         // If key_manager is configured, try to use rotated keys first

@@ -216,7 +216,9 @@ pub mod build_utils;
 
 /// Prelude module for convenient imports
 pub mod prelude {
-    pub use crate::config::{Config, RateLimitConfig, RouteRateLimitConfig};
+    pub use crate::config::{
+        Config, RateLimitConfig, RevocationBackend, RevocationConfig, RouteRateLimitConfig,
+    };
 
     #[cfg(feature = "cedar-authz")]
     pub use crate::config::CedarConfig;
@@ -256,8 +258,8 @@ pub mod prelude {
     pub use crate::middleware::{
         normalize_path, request_id_layer, request_id_propagation_layer, sensitive_headers_layer,
         Claims, ClaimsClassifier, CompiledRoutePatterns, PasetoAuth, RateClass, RateClassifier,
-        RateKey, RateLimit, RateRequest, RequestTrackingConfig, TokenValidator, PROPAGATE_HEADERS,
-        SENSITIVE_HEADERS,
+        RateKey, RateLimit, RateRequest, RequestTrackingConfig, TokenRevocation, TokenValidator,
+        PROPAGATE_HEADERS, SENSITIVE_HEADERS,
     };
     #[cfg(feature = "events")]
     pub use crate::pool_health::NatsClientHealth;
@@ -268,8 +270,17 @@ pub mod prelude {
     #[cfg(feature = "clickhouse")]
     pub use crate::clickhouse_backend::AnalyticsWriter;
 
+    #[cfg(feature = "mssql")]
+    pub use crate::middleware::revocation::MssqlTokenRevocation;
+    #[cfg(feature = "database")]
+    pub use crate::middleware::revocation::PgTokenRevocation;
+    pub use crate::middleware::revocation::RevocationNamespace;
+    #[cfg(feature = "surrealdb")]
+    pub use crate::middleware::revocation::SurrealTokenRevocation;
+    #[cfg(feature = "turso")]
+    pub use crate::middleware::revocation::TursoTokenRevocation;
     #[cfg(feature = "cache")]
-    pub use crate::middleware::{RedisTokenRevocation, TokenRevocation};
+    pub use crate::middleware::RedisTokenRevocation;
 
     pub use crate::extensions::{ActorExtension, ActorExtensions};
     #[cfg(feature = "jwt")]
@@ -348,9 +359,10 @@ pub mod prelude {
     // Auth module exports
     #[cfg(feature = "auth")]
     pub use crate::auth::{
-        ApiKey, ApiKeyGenerator, AuthConfig, CachedKey, KeyFormat, KeyManager, KeyRotationConfig,
-        KeyStatus, PasetoGenerationConfig, PasetoGenerator, PasswordConfig, PasswordHasher,
-        RefreshTokenConfig, SigningKeyMetadata, TokenGenerationConfig, TokenGenerator, TokenPair,
+        ApiKey, ApiKeyConfig, ApiKeyGenerator, ApiKeyPepper, AuthConfig, CachedKey, KeyFormat,
+        KeyManager, KeyRotationConfig, KeyStatus, PasetoGenerationConfig, PasetoGenerator,
+        PasswordConfig, PasswordHasher, RefreshTokenConfig, SigningKeyMetadata,
+        TokenGenerationConfig, TokenGenerator, TokenPair,
     };
 
     // Key rotation storage trait (requires auth + a database backend)
@@ -370,7 +382,7 @@ pub mod prelude {
 
     #[cfg(feature = "oauth")]
     pub use crate::auth::{
-        ApiKeyConfig, OAuthConfig, OAuthProvider, OAuthProviderConfig, OAuthTokens, OAuthUserInfo,
+        OAuthConfig, OAuthProvider, OAuthProviderConfig, OAuthTokens, OAuthUserInfo,
     };
 
     #[cfg(feature = "saml")]

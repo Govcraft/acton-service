@@ -8,12 +8,13 @@
 //! ```rust,ignore
 //! use acton_service::auth::{ApiKeyGenerator, ApiKey};
 //!
-//! let generator = ApiKeyGenerator::new("sk_live");
+//! let pepper = acton_service::auth::ApiKeyPepper::from_file("./secrets/api-key.pepper")?;
+//! let generator = ApiKeyGenerator::new("sk_live", pepper);
 //!
 //! // Generate a new API key
-//! let (key, key_hash) = generator.generate();
+//! let (key, key_hash) = generator.generate()?;
 //! // key = "sk_live_abc123..." (show to user once)
-//! // key_hash = "$argon2id$..." (store in database)
+//! // key_hash = "$blake3-keyed$v1$..." (store in database)
 //!
 //! // Later, verify an incoming key
 //! if generator.verify(&incoming_key, &stored_hash)? {
@@ -25,8 +26,48 @@
 use chrono::DateTime;
 use chrono::Utc;
 
-use crate::auth::password::PasswordHasher;
 use crate::error::Error;
+use rand::TryCryptoRng;
+use std::{fmt, path::Path};
+
+const HASH_PREFIX: &str = "$blake3-keyed$v1$";
+
+/// Persistent, server-held 256-bit secret for API-key hashing.
+///
+/// Provision this secret separately from API-key storage and reuse it across
+/// restarts and replicas. Replacing it invalidates existing hashes; reissue
+/// keys or explicitly rehash securely held plaintext before switching peppers.
+/// This type deliberately does not implement serialization or reveal its value
+/// through `Debug`.
+#[derive(Clone)]
+pub struct ApiKeyPepper([u8; 32]);
+
+impl ApiKeyPepper {
+    /// Use an explicitly supplied, cryptographically random 32-byte secret.
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// Read a persistent raw 32-byte secret, without encoding or a trailing newline.
+    ///
+    /// No secret is generated when the file is missing or invalid.
+    pub fn from_file(path: impl AsRef<Path>) -> Result<Self, Error> {
+        let bytes = std::fs::read(path)
+            .map_err(|_| Error::ValidationError("Cannot read API-key pepper file".to_string()))?;
+        let pepper = bytes.try_into().map_err(|_| {
+            Error::ValidationError(
+                "API-key pepper file must contain exactly 32 raw bytes".to_string(),
+            )
+        })?;
+        Ok(Self(pepper))
+    }
+}
+
+impl fmt::Debug for ApiKeyPepper {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ApiKeyPepper([REDACTED])")
+    }
+}
 
 // Inner module isolates the `SurrealValue` trait import the derive needs.
 // Keeping it out of the parent scope prevents `into_value` ambiguity with
@@ -50,7 +91,8 @@ mod model {
         /// User-provided name for the key
         pub name: String,
 
-        /// Key prefix (e.g., "sk_live")
+        /// Indexed lookup prefix, including eight random characters (e.g., "sk_live_abcd2345").
+        /// Construct this with [`super::ApiKeyGenerator::key_prefix_for_lookup`].
         pub prefix: String,
 
         /// Hashed key value (stored, not the actual key)
@@ -105,11 +147,12 @@ impl ApiKey {
 /// API key generator
 ///
 /// Generates API keys in the format `{prefix}_{random_base32}`.
-/// Keys are hashed using Argon2id before storage.
+/// Keys are hashed using keyed BLAKE3 before storage. Human passwords continue
+/// to use Argon2id through [`crate::auth::PasswordHasher`].
 #[derive(Clone)]
 pub struct ApiKeyGenerator {
     prefix: String,
-    hasher: PasswordHasher,
+    pepper: ApiKeyPepper,
 }
 
 impl ApiKeyGenerator {
@@ -118,10 +161,11 @@ impl ApiKeyGenerator {
     /// # Arguments
     ///
     /// * `prefix` - Key prefix (e.g., "sk_live", "sk_test", "acton")
-    pub fn new(prefix: impl Into<String>) -> Self {
+    /// * `pepper` - Persistent server-side secret, shared with storage verifiers
+    pub fn new(prefix: impl Into<String>, pepper: ApiKeyPepper) -> Self {
         Self {
             prefix: prefix.into(),
-            hasher: PasswordHasher::default(),
+            pepper,
         }
     }
 
@@ -129,10 +173,21 @@ impl ApiKeyGenerator {
     ///
     /// Returns a tuple of (key, hash) where:
     /// - `key` is the plaintext key to show to the user (once!)
-    /// - `hash` is the Argon2id hash to store in the database
-    pub fn generate(&self) -> (String, String) {
+    /// - `hash` is the versioned keyed BLAKE3 digest to store in the database
+    ///
+    /// Returns an error if the operating system cannot supply secure entropy.
+    pub fn generate(&self) -> Result<(String, String), Error> {
+        self.generate_with_rng(&mut rand::rngs::SysRng)
+    }
+
+    fn generate_with_rng(&self, rng: &mut impl TryCryptoRng) -> Result<(String, String), Error> {
         // Generate 24 random bytes (192 bits of entropy)
-        let random_bytes: [u8; 24] = rand::random();
+        let mut random_bytes = [0u8; 24];
+        rng.try_fill_bytes(&mut random_bytes).map_err(|_| {
+            Error::Internal(
+                "Operating system could not generate secure API-key entropy".to_string(),
+            )
+        })?;
 
         // Encode as base32 (no padding, lowercase)
         let encoded = base32_encode(&random_bytes);
@@ -140,17 +195,37 @@ impl ApiKeyGenerator {
         // Create the full key
         let key = format!("{}_{}", self.prefix, encoded);
 
-        // Hash the key for storage
-        // Note: We use a custom hasher config with lower memory for API keys
-        // since they have high entropy and don't need the same protection as passwords
-        let hash = self.hasher.hash(&key).expect("Failed to hash API key");
+        let hash = self.hash(&key);
 
-        (key, hash)
+        Ok((key, hash))
     }
 
-    /// Verify an API key against a stored hash
+    /// Hash a securely generated high-entropy API key with this generator's pepper.
+    ///
+    /// This deterministic function also supports explicit offline migration when
+    /// the plaintext key is securely available. An existing Argon2id hash cannot
+    /// be converted without its plaintext. Do not use this for human passwords.
+    pub fn hash(&self, key: &str) -> String {
+        let digest = blake3::keyed_hash(&self.pepper.0, key.as_bytes());
+        format!("{HASH_PREFIX}{}", digest.to_hex())
+    }
+
+    /// Verify an API key against a stored versioned digest in constant time.
+    ///
+    /// Argon2id and unknown formats are rejected immediately. Reissue legacy
+    /// keys before upgrading or explicitly migrate securely held plaintext.
     pub fn verify(&self, key: &str, hash: &str) -> Result<bool, Error> {
-        self.hasher.verify(key, hash)
+        let encoded = hash.strip_prefix(HASH_PREFIX).ok_or_else(|| {
+            Error::ValidationError(
+                "Unsupported API-key hash format; reissue or migrate legacy keys".to_string(),
+            )
+        })?;
+        let stored = blake3::Hash::from_hex(encoded).map_err(|_| {
+            Error::ValidationError("Malformed keyed BLAKE3 API-key hash".to_string())
+        })?;
+        let candidate = blake3::keyed_hash(&self.pepper.0, key.as_bytes());
+        // Hash::eq uses constant-time comparison; strings and raw slices do not.
+        Ok(candidate == stored)
     }
 
     /// Extract the prefix from a key
@@ -167,7 +242,7 @@ impl ApiKeyGenerator {
         let parts: Vec<&str> = key.rsplitn(2, '_').collect();
         if parts.len() == 2 && parts[0].len() >= 8 {
             // parts[0] is the random part, parts[1] is the prefix
-            Some(format!("{}_{}", parts[1], &parts[0][..8]))
+            Some(format!("{}_{}", parts[1], parts[0].get(..8)?))
         } else {
             None
         }
@@ -249,13 +324,12 @@ pub mod redis_storage {
     }
 
     impl RedisApiKeyStorage {
-        /// Create a new Redis API key storage
-        pub fn new(pool: Pool, api_key_prefix: impl Into<String>) -> Self {
-            let prefix: String = api_key_prefix.into();
+        /// Create storage using the same configured generator as API-key issuance.
+        pub fn new(pool: Pool, generator: ApiKeyGenerator) -> Self {
             Self {
                 pool,
                 key_prefix: "api_key".to_string(),
-                generator: ApiKeyGenerator::new(&prefix),
+                generator,
             }
         }
 
@@ -461,12 +535,9 @@ pub mod pg_storage {
     }
 
     impl PgApiKeyStorage {
-        /// Create a new PostgreSQL API key storage
-        pub fn new(pool: PgPool, api_key_prefix: impl Into<String>) -> Self {
-            Self {
-                pool,
-                generator: ApiKeyGenerator::new(api_key_prefix),
-            }
+        /// Create storage using the same configured generator as API-key issuance.
+        pub fn new(pool: PgPool, generator: ApiKeyGenerator) -> Self {
+            Self { pool, generator }
         }
     }
 
@@ -700,18 +771,17 @@ pub mod mssql_storage {
     use super::*;
     use crate::mssql::{execute, query, MssqlPool};
 
+    /// Microsoft SQL Server API-key storage using an explicitly configured verifier.
     #[derive(Clone)]
     pub struct MssqlApiKeyStorage {
         pool: MssqlPool,
         generator: ApiKeyGenerator,
     }
     impl MssqlApiKeyStorage {
-        pub async fn new(pool: MssqlPool, prefix: impl Into<String>) -> Result<Self, Error> {
+        /// Initialize storage using the same configured generator as API-key issuance.
+        pub async fn new(pool: MssqlPool, generator: ApiKeyGenerator) -> Result<Self, Error> {
             execute(&pool,"IF OBJECT_ID(N'api_keys',N'U') IS NULL CREATE TABLE api_keys(id NVARCHAR(255) PRIMARY KEY,user_id NVARCHAR(255) NOT NULL,name NVARCHAR(255) NOT NULL,key_prefix NVARCHAR(255) NOT NULL UNIQUE,key_hash NVARCHAR(MAX) NOT NULL,scopes NVARCHAR(MAX) NOT NULL,rate_limit INT NULL,is_revoked BIT NOT NULL,last_used_at DATETIMEOFFSET NULL,expires_at DATETIMEOFFSET NULL,created_at DATETIMEOFFSET NOT NULL)",&[]).await?;
-            Ok(Self {
-                pool,
-                generator: ApiKeyGenerator::new(prefix),
-            })
+            Ok(Self { pool, generator })
         }
     }
     fn required(row: &tiberius::Row, name: &str) -> Result<String, Error> {
@@ -741,11 +811,12 @@ pub mod mssql_storage {
         async fn get_by_key(&self, key: &str) -> Result<Option<ApiKey>, Error> {
             let prefix = ApiKeyGenerator::key_prefix_for_lookup(key)
                 .ok_or_else(|| Error::ValidationError("Invalid API key format".to_string()))?;
-            Ok(self.get_by_prefix(&prefix).await?.filter(|stored| {
-                self.generator
-                    .verify(key, &stored.key_hash)
-                    .unwrap_or(false)
-            }))
+            if let Some(stored) = self.get_by_prefix(&prefix).await? {
+                if self.generator.verify(key, &stored.key_hash)? {
+                    return Ok(Some(stored));
+                }
+            }
+            Ok(None)
         }
         async fn get_by_prefix(&self, prefix: &str) -> Result<Option<ApiKey>, Error> {
             query(
@@ -826,12 +897,9 @@ pub mod turso_storage {
     }
 
     impl TursoApiKeyStorage {
-        /// Create a new Turso API key storage
-        pub fn new(conn: Arc<Connection>, api_key_prefix: impl Into<String>) -> Self {
-            Self {
-                conn,
-                generator: ApiKeyGenerator::new(api_key_prefix),
-            }
+        /// Create storage using the same configured generator as API-key issuance.
+        pub fn new(conn: Arc<Connection>, generator: ApiKeyGenerator) -> Self {
+            Self { conn, generator }
         }
     }
 
@@ -1051,12 +1119,9 @@ pub mod surrealdb_storage {
     }
 
     impl SurrealDbApiKeyStorage {
-        /// Create a new SurrealDB API key storage
-        pub fn new(client: Arc<SurrealClient>, api_key_prefix: impl Into<String>) -> Self {
-            Self {
-                client,
-                generator: ApiKeyGenerator::new(api_key_prefix),
-            }
+        /// Create storage using the same configured generator as API-key issuance.
+        pub fn new(client: Arc<SurrealClient>, generator: ApiKeyGenerator) -> Self {
+            Self { client, generator }
         }
     }
 
@@ -1170,24 +1235,113 @@ mod tests {
 
     #[test]
     fn test_generate_api_key() {
-        let generator = ApiKeyGenerator::new("sk_live");
-        let (key, hash) = generator.generate();
+        let generator = ApiKeyGenerator::new("sk_live", ApiKeyPepper::from_bytes([7; 32]));
+        let (key, hash) = generator.generate().unwrap();
 
         assert!(key.starts_with("sk_live_"));
-        assert!(hash.starts_with("$argon2id$"));
+        assert!(hash.starts_with(HASH_PREFIX));
+        assert_eq!(key.len(), "sk_live_".len() + 39);
 
         // Key should be unique each time
-        let (key2, _) = generator.generate();
+        let (key2, _) = generator.generate().unwrap();
         assert_ne!(key, key2);
     }
 
     #[test]
     fn test_verify_api_key() {
-        let generator = ApiKeyGenerator::new("sk_test");
-        let (key, hash) = generator.generate();
+        let generator = ApiKeyGenerator::new("sk_test", ApiKeyPepper::from_bytes([7; 32]));
+        let (key, hash) = generator.generate().unwrap();
 
         assert!(generator.verify(&key, &hash).unwrap());
         assert!(!generator.verify("wrong_key", &hash).unwrap());
+    }
+
+    #[test]
+    fn digest_tampering_wrong_pepper_and_invalid_formats_are_rejected() {
+        let generator = ApiKeyGenerator::new("sk_test", ApiKeyPepper::from_bytes([7; 32]));
+        let (key, hash) = generator.generate().unwrap();
+        let other = ApiKeyGenerator::new("sk_test", ApiKeyPepper::from_bytes([8; 32]));
+        assert!(!other.verify(&key, &hash).unwrap());
+        assert!(!generator.verify(&format!("{key}a"), &hash).unwrap());
+        let replacement = if hash.ends_with('0') { "1" } else { "0" };
+        let tampered = format!("{}{replacement}", &hash[..hash.len() - 1]);
+        assert!(!generator.verify(&key, &tampered).unwrap());
+        for invalid in [
+            "",
+            "$blake3-keyed$v2$deadbeef",
+            "$blake3-keyed$v1$invalid",
+            "$blake3-keyed$v1$",
+            "$argon2id$v=19$m=65536,t=3,p=4$legacy",
+        ] {
+            let error = generator.verify(&key, invalid).unwrap_err();
+            assert!(matches!(error, Error::ValidationError(_)));
+            assert!(!error.to_string().contains(&key));
+        }
+        // Reject legacy hashes by format even when their cost parameters would
+        // make a password verifier consume excessive memory.
+        let legacy = "$argon2id$v=19$m=4294967295,t=3,p=4$c29tZXNhbHQ$aGFzaA";
+        let error = generator.verify(&key, legacy).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Unsupported API-key hash format"));
+    }
+
+    #[test]
+    fn persisted_digest_survives_generator_restart_and_plaintext_migration() {
+        let issuer = ApiKeyGenerator::new("sk_test", ApiKeyPepper::from_bytes([7; 32]));
+        let (key, hash) = issuer.generate().unwrap();
+        let stored = serde_json::to_string(&hash).unwrap();
+        let loaded: String = serde_json::from_str(&stored).unwrap();
+        let restarted = ApiKeyGenerator::new("sk_test", ApiKeyPepper::from_bytes([7; 32]));
+        assert!(restarted.verify(&key, &loaded).unwrap());
+        assert_eq!(restarted.hash(&key), loaded);
+    }
+
+    #[test]
+    fn pepper_file_errors_and_reload_are_explicit_and_redacted() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("pepper");
+        assert!(ApiKeyPepper::from_file(directory.path()).is_err());
+        assert!(ApiKeyPepper::from_file(&path).is_err());
+        for invalid in [vec![], vec![7; 31], vec![7; 33]] {
+            std::fs::write(&path, invalid).unwrap();
+            assert!(ApiKeyPepper::from_file(&path).is_err());
+        }
+        std::fs::write(&path, [7; 32]).unwrap();
+        let pepper = ApiKeyPepper::from_file(&path).unwrap();
+        assert_eq!(format!("{pepper:?}"), "ApiKeyPepper([REDACTED])");
+        let issuer = ApiKeyGenerator::new("test", pepper);
+        let (key, hash) = issuer.generate().unwrap();
+        let verifier = ApiKeyGenerator::new("test", ApiKeyPepper::from_file(&path).unwrap());
+        assert!(verifier.verify(&key, &hash).unwrap());
+    }
+
+    #[test]
+    fn entropy_failure_returns_an_error() {
+        struct FailingRng;
+
+        impl rand::TryRng for FailingRng {
+            type Error = std::io::Error;
+
+            fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+                Err(std::io::Error::other("entropy unavailable"))
+            }
+
+            fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+                Err(std::io::Error::other("entropy unavailable"))
+            }
+
+            fn try_fill_bytes(&mut self, _: &mut [u8]) -> Result<(), Self::Error> {
+                Err(std::io::Error::other("entropy unavailable"))
+            }
+        }
+        impl rand::TryCryptoRng for FailingRng {}
+
+        let generator = ApiKeyGenerator::new("test", ApiKeyPepper::from_bytes([7; 32]));
+        assert!(matches!(
+            generator.generate_with_rng(&mut FailingRng),
+            Err(Error::Internal(_))
+        ));
     }
 
     #[test]
@@ -1206,6 +1360,81 @@ mod tests {
     fn test_key_prefix_for_lookup() {
         let lookup = ApiKeyGenerator::key_prefix_for_lookup("sk_live_abcdefghijklmnop");
         assert_eq!(lookup, Some("sk_live_abcdefgh".to_string()));
+        assert_eq!(
+            ApiKeyGenerator::key_prefix_for_lookup("sk_live_aaaaaaaé"),
+            None
+        );
+        assert_eq!(
+            ApiKeyGenerator::key_prefix_for_lookup("sk_live_short"),
+            None
+        );
+    }
+
+    #[cfg(feature = "turso")]
+    #[tokio::test]
+    async fn persisted_api_key_verifies_after_storage_restart() {
+        use std::sync::Arc;
+
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let db = libsql::Builder::new_local(file.path())
+            .build()
+            .await
+            .unwrap();
+        let connection = Arc::new(db.connect().unwrap());
+        connection.execute("CREATE TABLE api_keys (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, key_prefix TEXT UNIQUE NOT NULL, key_hash TEXT NOT NULL, scopes TEXT NOT NULL, rate_limit INTEGER, is_revoked INTEGER NOT NULL, last_used_at TEXT, expires_at TEXT, created_at TEXT NOT NULL)", ()).await.unwrap();
+        let generator = ApiKeyGenerator::new("test", ApiKeyPepper::from_bytes([7; 32]));
+        let (key, hash) = generator.generate().unwrap();
+        let stored = ApiKey {
+            id: "persisted-key".to_string(),
+            user_id: "owner".to_string(),
+            name: "test".to_string(),
+            prefix: ApiKeyGenerator::key_prefix_for_lookup(&key).unwrap(),
+            key_hash: hash,
+            scopes: vec!["read".to_string()],
+            rate_limit: None,
+            is_revoked: false,
+            last_used_at: None,
+            expires_at: None,
+            created_at: Utc::now(),
+        };
+        TursoApiKeyStorage::new(connection.clone(), generator)
+            .create(&stored)
+            .await
+            .unwrap();
+        drop(connection);
+        drop(db);
+
+        let reopened = libsql::Builder::new_local(file.path())
+            .build()
+            .await
+            .unwrap();
+        let connection = Arc::new(reopened.connect().unwrap());
+        let restarted = TursoApiKeyStorage::new(
+            connection.clone(),
+            ApiKeyGenerator::new("test", ApiKeyPepper::from_bytes([7; 32])),
+        );
+        let loaded = restarted.get_by_key(&key).await.unwrap().unwrap();
+        assert_eq!(loaded.id, stored.id);
+        assert_eq!(loaded.scopes, stored.scopes);
+        assert!(restarted
+            .get_by_key(&format!("{key}a"))
+            .await
+            .unwrap()
+            .is_none());
+        let wrong = TursoApiKeyStorage::new(
+            connection.clone(),
+            ApiKeyGenerator::new("test", ApiKeyPepper::from_bytes([8; 32])),
+        );
+        assert!(wrong.get_by_key(&key).await.unwrap().is_none());
+
+        connection
+            .execute("UPDATE api_keys SET key_hash = '$argon2id$legacy'", ())
+            .await
+            .unwrap();
+        assert!(matches!(
+            restarted.get_by_key(&key).await,
+            Err(Error::ValidationError(_))
+        ));
     }
 
     #[test]

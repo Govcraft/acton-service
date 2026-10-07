@@ -114,6 +114,8 @@ where
     #[cfg(feature = "auth")]
     key_manager: Option<Arc<crate::auth::key_rotation::KeyManager>>,
 
+    token_revocation: Option<Arc<dyn crate::middleware::TokenRevocation>>,
+
     /// Background worker for managed background tasks
     background_worker: Option<crate::agents::BackgroundWorker>,
 
@@ -158,6 +160,7 @@ where
             account_service: None,
             #[cfg(feature = "auth")]
             key_manager: None,
+            token_revocation: None,
             background_worker: None,
             broker: None,
             actor_extensions: crate::extensions::ActorExtensions::default(),
@@ -170,6 +173,18 @@ impl<T> AppState<T>
 where
     T: Serialize + DeserializeOwned + Clone + Default + Send + Sync + 'static,
 {
+    /// Revocation storage installed by ServiceBuilder, available for deactivation and logout.
+    pub fn token_revocation(&self) -> Option<Arc<dyn crate::middleware::TokenRevocation>> {
+        self.token_revocation.clone()
+    }
+
+    pub(crate) fn set_token_revocation(
+        &mut self,
+        revocation: Option<Arc<dyn crate::middleware::TokenRevocation>>,
+    ) {
+        self.token_revocation = revocation;
+    }
+
     /// Create a new AppState with the given configuration
     ///
     /// This creates an AppState with no connection pools initialized.
@@ -201,6 +216,7 @@ where
             account_service: None,
             #[cfg(feature = "auth")]
             key_manager: None,
+            token_revocation: None,
             background_worker: None,
             broker: None,
             actor_extensions: crate::extensions::ActorExtensions::default(),
@@ -972,6 +988,7 @@ where
             account_service: None,
             #[cfg(feature = "auth")]
             key_manager: None,
+            token_revocation: None,
             background_worker: None,
             broker: None,
             actor_extensions: crate::extensions::ActorExtensions::default(),

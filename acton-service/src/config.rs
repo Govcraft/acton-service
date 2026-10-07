@@ -55,6 +55,10 @@ where
     #[serde(default)]
     pub token: Option<TokenConfig>,
 
+    /// Persistent token revocation configuration. Unsupported backends fail startup.
+    #[serde(default)]
+    pub revocation: Option<RevocationConfig>,
+
     /// Rate limiting configuration
     pub rate_limit: RateLimitConfig,
 
@@ -162,6 +166,35 @@ where
     /// will be deserialized into this field. Use `()` (unit type) for no custom config.
     #[serde(flatten)]
     pub custom: T,
+}
+
+/// Persistent token revocation backend selected explicitly at startup.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RevocationBackend {
+    /// Redis (`cache` feature).
+    Redis,
+    /// PostgreSQL (`database` feature).
+    Postgres,
+    /// Microsoft SQL Server (`mssql` feature).
+    Mssql,
+    /// Turso/libsql (`turso` feature).
+    Turso,
+    /// SurrealDB (`surrealdb` feature).
+    Surrealdb,
+}
+
+/// Storage used to deny tokens before expiration.
+///
+/// Run the backend's `initialize()` before serving. Missing schemas, storage
+/// errors, and disconnected pools deny protected requests.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RevocationConfig {
+    /// Explicit storage backend; its feature and connection config are required.
+    pub backend: RevocationBackend,
+    /// Service-specific scope, shared by issuers and validators (1 to 128 bytes).
+    pub namespace: String,
 }
 
 /// Service-level configuration
@@ -2110,6 +2143,7 @@ where
         Ok(Self {
             service: framework.service,
             token: framework.token,
+            revocation: framework.revocation,
             rate_limit: framework.rate_limit,
             middleware: framework.middleware,
             database: framework.database,
@@ -2290,6 +2324,7 @@ where
                 trust_forwarded_headers: false,
             },
             token: None,
+            revocation: None,
             rate_limit: RateLimitConfig::default(),
             middleware: MiddlewareConfig::default(),
             database: None,
@@ -3290,6 +3325,7 @@ port = 9091
                 audience: None,
                 public_paths: Vec::new(),
             })),
+            revocation: None,
             rate_limit: RateLimitConfig {
                 per_user_rpm: 100,
                 per_client_rpm: 500,
@@ -3362,6 +3398,7 @@ port = 9091
                 trust_forwarded_headers: false,
             },
             token: None,
+            revocation: None,
             rate_limit: RateLimitConfig {
                 per_user_rpm: 200,
                 per_client_rpm: 1000,

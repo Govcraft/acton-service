@@ -124,6 +124,7 @@ where
 {
     config: Option<Config<T>>,
     optional_token_auth: Option<fn(&http::Method, &str) -> bool>,
+    token_revocation: Option<std::sync::Arc<dyn crate::middleware::TokenRevocation>>,
     routes: Option<VersionedRoutes<T>>,
     state: Option<AppState<T>>,
     #[cfg(feature = "grpc")]
@@ -192,11 +193,23 @@ where
         self
     }
 
+    /// Install shared token and subject revocation for HTTP and gRPC validators.
+    ///
+    /// Takes precedence over `[revocation]`. Storage failures deny protected requests.
+    pub fn with_token_revocation(
+        mut self,
+        revocation: std::sync::Arc<dyn crate::middleware::TokenRevocation>,
+    ) -> Self {
+        self.token_revocation = Some(revocation);
+        self
+    }
+
     /// Create a new service builder with defaults
     pub fn new() -> Self {
         Self {
             config: None,
             optional_token_auth: None,
+            token_revocation: None,
             routes: None,
             state: None,
             #[cfg(feature = "grpc")]
@@ -755,13 +768,14 @@ where
     /// Build the service
     ///
     /// Automatically handles:
-    /// - **Config loading**: Calls `Config::load()` if not provided (falls back to `Config::default()` on error)
+    /// - **Config loading**: Calls `Config::load()` if not provided; load errors refuse startup
     /// - **Tracing initialization**: Initializes tracing with the loaded config
     /// - **Pool agent spawning**: Spawns internal agents for database/redis/nats when configured
     /// - **Health endpoints**: Always includes `/health` and `/ready` endpoints
     ///
     /// Uses defaults for any fields not set:
-    /// - config: `Config::load()` → `Config::default()` if load fails
+    /// - config: `Config::load()` merges defaults when no file is present; malformed
+    ///   configuration records an error surfaced by `try_build()`, `bind()`, or `serve()`
     /// - routes: `VersionedRoutes::default()` (health + readiness only)
     /// - state: `AppState::default()` with agent-managed pools
     ///
@@ -796,7 +810,9 @@ where
         // Load config if not provided
         let config = self.config.take().unwrap_or_else(|| {
             Config::<T>::load().unwrap_or_else(|e| {
-                eprintln!("Warning: Failed to load config: {}, using defaults", e);
+                // Defaults already come from Figment when no file is present.
+                // Extraction failure must not erase configured authentication.
+                record_startup_error(&mut startup_error, e);
                 Config::<T>::default()
             })
         });
@@ -1517,6 +1533,36 @@ where
             state
         };
 
+        let token_revocation = if let Some(revocation) = self.token_revocation {
+            Some(revocation)
+        } else if let Some(revocation_config) = &config.revocation {
+            match crate::middleware::revocation::ConfiguredRevocation::new(
+                &config,
+                revocation_config,
+                state.clone(),
+            ) {
+                Ok(revocation) => Some(std::sync::Arc::new(revocation)
+                    as std::sync::Arc<dyn crate::middleware::TokenRevocation>),
+                Err(error) => {
+                    record_startup_error(&mut startup_error, error);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        if let Some(revocation) = &token_revocation {
+            if config.token.is_none() {
+                record_startup_error(
+                    &mut startup_error,
+                    crate::error::Error::Internal(
+                        "Token revocation requires [token] authentication configuration".into(),
+                    ),
+                );
+            }
+            state.set_token_revocation(Some(revocation.clone()));
+        }
+
         // Install app-defined checks on whichever state is in play — built
         // here or caller-provided — so `/health` and `/ready` see them either
         // way.
@@ -1870,6 +1916,11 @@ where
                 crate::config::TokenConfig::Paseto(paseto_config) => {
                     match crate::middleware::paseto::PasetoAuth::new(paseto_config) {
                         Ok(paseto_auth) => {
+                            let paseto_auth = if let Some(revocation) = &token_revocation {
+                                paseto_auth.with_shared_revocation(revocation.clone())
+                            } else {
+                                paseto_auth
+                            };
                             let paseto_auth = if let Some(predicate) = self.optional_token_auth {
                                 paseto_auth.with_optional_auth(predicate)
                             } else {
@@ -1906,6 +1957,11 @@ where
                 crate::config::TokenConfig::Jwt(jwt_config) => {
                     match crate::middleware::jwt::JwtAuth::new(jwt_config) {
                         Ok(jwt_auth) => {
+                            let jwt_auth = if let Some(revocation) = &token_revocation {
+                                jwt_auth.with_shared_revocation(revocation.clone())
+                            } else {
+                                jwt_auth
+                            };
                             let jwt_auth = if let Some(predicate) = self.optional_token_auth {
                                 jwt_auth.with_optional_auth(predicate)
                             } else {
@@ -5099,6 +5155,384 @@ mod rate_limit_posture_tests {
             calls.load(Ordering::SeqCst),
             0,
             "Cedar evaluates before caller quota"
+        );
+    }
+}
+
+#[cfg(test)]
+mod revocation_tests {
+    use super::*;
+    use crate::{
+        config::{PasetoConfig, RevocationBackend, RevocationConfig, TokenConfig},
+        middleware::{Claims, TokenRevocation},
+    };
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+        routing::get,
+    };
+    use std::sync::Arc;
+    use tower::ServiceExt;
+
+    #[cfg(feature = "grpc")]
+    #[derive(Clone)]
+    struct GrpcProbe;
+    #[cfg(feature = "grpc")]
+    impl tonic::server::NamedService for GrpcProbe {
+        const NAME: &'static str = "test.Service";
+    }
+    #[cfg(feature = "grpc")]
+    impl<B> tower::Service<http::Request<B>> for GrpcProbe {
+        type Response = http::Response<Body>;
+        type Error = std::convert::Infallible;
+        type Future = std::future::Ready<Result<Self::Response, Self::Error>>;
+        fn poll_ready(
+            &mut self,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+        fn call(&mut self, _req: http::Request<B>) -> Self::Future {
+            std::future::ready(Ok(http::Response::builder()
+                .header("handler-reached", "yes")
+                .body(Body::empty())
+                .unwrap()))
+        }
+    }
+    struct Checker {
+        revoked: bool,
+        cutoff: Option<i64>,
+        broken: bool,
+    }
+    #[async_trait::async_trait]
+    impl TokenRevocation for Checker {
+        async fn is_revoked(&self, _jti: &str) -> Result<bool, crate::error::Error> {
+            if self.broken {
+                Err(crate::error::Error::Internal("unavailable storage".into()))
+            } else {
+                Ok(self.revoked)
+            }
+        }
+        async fn revoke(&self, _jti: &str, _ttl: u64) -> Result<(), crate::error::Error> {
+            Ok(())
+        }
+        async fn subject_not_before(
+            &self,
+            _subject: &str,
+        ) -> Result<Option<i64>, crate::error::Error> {
+            if self.broken {
+                Err(crate::error::Error::Internal("unavailable storage".into()))
+            } else {
+                Ok(self.cutoff)
+            }
+        }
+    }
+    fn paseto(claims: &Claims) -> String {
+        use rusty_paseto::generic::*;
+        let key = PasetoSymmetricKey::<V4, Local>::from(Key::<32>::from([42_u8; 32]));
+        let expiry = chrono::DateTime::from_timestamp(claims.exp, 0)
+            .unwrap()
+            .to_rfc3339();
+        let mut builder = GenericBuilder::<V4, Local>::default();
+        builder
+            .set_claim(SubjectClaim::from(claims.sub.as_str()))
+            .set_claim(ExpirationClaim::try_from(expiry.as_str()).unwrap());
+        if let Some(iat) = claims.iat {
+            let issued = chrono::DateTime::from_timestamp(iat, 0)
+                .unwrap()
+                .to_rfc3339();
+            builder.set_claim(IssuedAtClaim::try_from(issued.as_str()).unwrap());
+        }
+        if let Some(jti) = &claims.jti {
+            builder.set_claim(TokenIdentifierClaim::from(jti.as_str()));
+        }
+        builder.try_encrypt(&key).unwrap()
+    }
+    fn config(token: TokenConfig) -> Config<()> {
+        let mut config = Config {
+            token: Some(token),
+            ..Default::default()
+        };
+        #[cfg(feature = "audit")]
+        {
+            config.audit = Some(crate::audit::AuditConfig {
+                enabled: false,
+                ..Default::default()
+            });
+        }
+        config.middleware.cors_mode = "disabled".into();
+        config
+    }
+    async fn assert_flow(token_config: TokenConfig, encode: impl Fn(&Claims) -> String) {
+        let cases = [
+            (
+                false,
+                None,
+                false,
+                Some("token"),
+                Some(100),
+                false,
+                StatusCode::OK,
+            ),
+            (
+                true,
+                None,
+                false,
+                Some("token"),
+                Some(100),
+                false,
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                false,
+                Some(100),
+                false,
+                None,
+                Some(100),
+                false,
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                false,
+                Some(100),
+                false,
+                None,
+                Some(101),
+                false,
+                StatusCode::OK,
+            ),
+            (
+                false,
+                Some(100),
+                false,
+                None,
+                None,
+                false,
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                false,
+                None,
+                true,
+                None,
+                Some(100),
+                false,
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+            (
+                false,
+                None,
+                false,
+                None,
+                Some(100),
+                true,
+                StatusCode::UNAUTHORIZED,
+            ),
+        ];
+        for (revoked, cutoff, broken, jti, iat, expired, expected) in cases {
+            let claims:Claims=serde_json::from_value(serde_json::json!({"sub":"user:test","exp":chrono::Utc::now().timestamp()+if expired {-3600} else {3600},"jti":jti,"iat":iat})).unwrap();
+            let provider = Arc::new(Checker {
+                revoked,
+                cutoff,
+                broken,
+            });
+            let config = config(token_config.clone());
+            #[cfg(feature = "grpc")]
+            let config = Config {
+                grpc: Some(crate::config::GrpcConfig {
+                    enabled: true,
+                    ..Default::default()
+                }),
+                ..config
+            };
+            let builder = ServiceBuilder::new()
+                .with_config(config)
+                .with_routes(VersionedRoutes::WithoutState(
+                    Router::new().route("/private", get(|| async { StatusCode::OK })),
+                ))
+                .with_token_revocation(provider);
+            #[cfg(feature = "grpc")]
+            let builder = builder.with_grpc_services(tonic::service::Routes::new(GrpcProbe));
+            let service = builder.try_build().unwrap();
+            #[cfg(feature = "grpc")]
+            {
+                let response = service
+                    .grpc_routes
+                    .clone()
+                    .unwrap()
+                    .oneshot(
+                        Request::builder()
+                            .uri("/test.Service/Call")
+                            .header("authorization", format!("Bearer {}", encode(&claims)))
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.headers().get("handler-reached").is_some(),
+                    expected == StatusCode::OK
+                );
+                if expected != StatusCode::OK {
+                    assert_eq!(response.headers().get("grpc-status").unwrap(), "16");
+                }
+            }
+            let response = service
+                .app
+                .oneshot(
+                    Request::builder()
+                        .uri("/private")
+                        .header("authorization", format!("Bearer {}", encode(&claims)))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                expected,
+                "jti={jti:?} iat={iat:?} cutoff={cutoff:?} broken={broken}"
+            );
+        }
+    }
+    #[tokio::test]
+    async fn paseto_revocation_through_service_builder() {
+        let key = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(key.path(), [42_u8; 32]).unwrap();
+        assert_flow(
+            TokenConfig::Paseto(PasetoConfig {
+                key_path: key.path().into(),
+                ..Default::default()
+            }),
+            paseto,
+        )
+        .await;
+    }
+    #[cfg(feature = "jwt")]
+    #[tokio::test]
+    async fn jwt_revocation_through_service_builder() {
+        crate::crypto::ensure_jwt_crypto_provider();
+        let key = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(key.path(), [42_u8; 32]).unwrap();
+        let token_config = TokenConfig::Jwt(crate::config::JwtConfig {
+            algorithm: "HS256".into(),
+            public_key_path: key.path().into(),
+            issuer: None,
+            audience: None,
+            public_paths: vec![],
+        });
+        assert_flow(token_config, |claims| {
+            jsonwebtoken::encode(
+                &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
+                claims,
+                &jsonwebtoken::EncodingKey::from_secret(&[42_u8; 32]),
+            )
+            .unwrap()
+        })
+        .await;
+    }
+    #[tokio::test]
+    async fn configured_revocation_requires_a_backend_and_token_validator() {
+        let config = Config::<()> {
+            revocation: Some(RevocationConfig {
+                backend: RevocationBackend::Postgres,
+                namespace: "test".into(),
+            }),
+            ..Default::default()
+        };
+        assert!(ServiceBuilder::new()
+            .with_config(config)
+            .try_build()
+            .is_err());
+        assert!(ServiceBuilder::new()
+            .with_config(Config::<()>::default())
+            .with_token_revocation(Arc::new(Checker {
+                revoked: false,
+                cutoff: None,
+                broken: false
+            }))
+            .try_build()
+            .is_err());
+    }
+    #[cfg(feature = "turso")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn configured_turso_revocation_wires_shared_state_and_fails_until_migrated() {
+        let key = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(key.path(), [42_u8; 32]).unwrap();
+        let mut config = config(TokenConfig::Paseto(PasetoConfig {
+            key_path: key.path().into(),
+            ..Default::default()
+        }));
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("revocation.db");
+        config.turso =
+            Some(serde_json::from_value(serde_json::json!({"mode":"local","path":path})).unwrap());
+        config.revocation = Some(RevocationConfig {
+            backend: RevocationBackend::Turso,
+            namespace: "configured".into(),
+        });
+        let state = AppState::new(config.clone());
+        let db = Arc::new(libsql::Builder::new_local(&path).build().await.unwrap());
+        *state.turso_lock().write().await = Some(db.clone());
+        let service = ServiceBuilder::new()
+            .with_config(config)
+            .with_state(state.clone())
+            .with_routes(VersionedRoutes::WithoutState(
+                Router::new().route("/private", get(|| async { StatusCode::OK })),
+            ))
+            .try_build()
+            .unwrap();
+        let claims:Claims=serde_json::from_value(serde_json::json!({"sub":"user:test","exp":chrono::Utc::now().timestamp()+3600,"iat":100})).unwrap();
+        let request = || {
+            Request::builder()
+                .uri("/private")
+                .header("authorization", format!("Bearer {}", paseto(&claims)))
+                .body(Body::empty())
+                .unwrap()
+        };
+        assert_eq!(
+            service
+                .app
+                .clone()
+                .oneshot(request())
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        let provider = service.state().token_revocation().unwrap();
+        provider.initialize().await.unwrap();
+        assert_eq!(
+            service
+                .app
+                .clone()
+                .oneshot(request())
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        provider.revoke_subject(&claims.sub, 100).await.unwrap();
+        assert_eq!(
+            service
+                .app
+                .clone()
+                .oneshot(request())
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        *state.turso_lock().write().await = None;
+        assert_eq!(
+            service
+                .app
+                .clone()
+                .oneshot(request())
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::INTERNAL_SERVER_ERROR
         );
     }
 }
