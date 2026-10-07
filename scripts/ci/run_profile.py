@@ -36,6 +36,15 @@ def commands(name: str) -> list[list[str]]:
                     for feature in profile.features.split(",")
                 )
         options.extend(["-p", profile.companion])
+    if profile.harness:
+        options.extend(
+            [
+                "-p",
+                "acton-service-integration-tests",
+                "--features",
+                f"acton-service-integration-tests/{profile.harness}",
+            ]
+        )
     result.append(
         ["cargo", "clippy", *options, "--all-targets", "--", "-D", "warnings"]
     )
@@ -47,7 +56,8 @@ def commands(name: str) -> list[list[str]]:
             test_options.extend(
                 [
                     "-E",
-                    "test(tls) | test(crypto) | binary(tls) | binary(metrics_exporter)",
+                    "test(tls) | test(crypto) | "
+                    "binary(~tls) | binary(~metrics_exporter)",
                 ]
             )
         result.append(["cargo", "nextest", "run", *test_options, *options])

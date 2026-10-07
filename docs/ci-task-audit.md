@@ -115,7 +115,7 @@ feature unification problems; testing the facade does not run dependency tests.
 | `surrealdb-adapter` | 11:01 | 6 | **Keep real tests; consolidate expensive builds.** Includes memory-engine connection, audit corruption, and legacy archive round trips. Its ignored auth test uses an unsupported undefined-root setup and needs a provisioned-server replacement. Zero doctests currently. |
 | `clickhouse-adapter` | 1:01 | 24 | **Keep standalone/config/row-contract checks.** No live ClickHouse persistence test was found. Add targeted server evidence before claiming backend qualification. Zero doctests currently. |
 | `cli` | 2:39 | 10 | **Keep for changes affecting the maintained legacy tool; remove as a mandatory service release gate.** It is deprecated, unpublished (`publish = false`), and not a service release artifact. Its generated projects are not smoke-compiled. |
-| `mssql-integration` | 5:34 | 1 | **Keep.** A real SQL Server container verifies pool health, schema initialization, and account/API-key/refresh-token persistence. Migrate the ignored audit corruption test into this harness. |
+| `mssql-integration` | 5:34 | 1 | **Keep.** A real SQL Server container verifies pool health, schema initialization, and account/API-key/refresh-token persistence. Migrate the ignored audit chain/filter assertions into this harness and add corruption detection. |
 | `grpc-examples` | 1:38 | Compile only | **Keep compilation coverage, consider folding into transport jobs.** Compiles/lints all four generated examples, including Cedar without TLS. Other current harness profiles do not cover that precise combination. Nextest installation here is unnecessary. |
 | `grpc-integration` | 3:24 | 2 | **Keep.** Live TLS/mTLS RPCs and rejection of a wrong CA under AWS-LC. Does not exercise the public `build_utils` wrapper or the Cedar example. |
 | `grpc-integration-ring` | 2:52 | 2 | **Keep.** The same live connection behavior under isolated ring selection. This is valuable provider coverage. |
@@ -201,7 +201,7 @@ Removing them will not shorten hosted CI.
    ignored audit persistence/corruption test deliberately. One passing config
    test under each crypto provider establishes compilation, not database behavior.
 3. **SQL Server audit:** reuse the existing container to execute the currently
-   ignored audit corruption test. Schema initialization/account persistence do
+   ignored audit chain/filter assertions and add privileged corruption checks. Schema initialization/account persistence do
    not prove audit chain persistence and detection of tampered rows.
 4. **SurrealDB authentication:** replace the ignored undefined-root memory-engine
    test with a supported authenticated server setup. Keep the working memory

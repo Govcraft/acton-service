@@ -114,7 +114,8 @@ class SelectionTests(unittest.TestCase):
                 plan = select([path])
                 self.assertTrue(plan["security"])
                 self.assertEqual(
-                    {p["profile"] for p in plan["matrix"]["include"]}, PROFILES.keys()
+                    {p["profile"] for p in plan["matrix"]["include"]},
+                    QUALIFICATION | {"cli"},
                 )
 
     def test_shared_source_and_contracts_require_all_profiles(self):
@@ -127,7 +128,7 @@ class SelectionTests(unittest.TestCase):
             "acton-service-audit/src/storage.rs",
         ):
             with self.subTest(path=path):
-                self.assertEqual(selected(path), PROFILES.keys())
+                self.assertEqual(selected(path), QUALIFICATION | {"cli"})
 
     def test_unknown_paths_fail_safe(self):
         for path in (
@@ -137,11 +138,13 @@ class SelectionTests(unittest.TestCase):
             "acton-service/proto/hello.proto",
         ):
             with self.subTest(path=path):
-                self.assertEqual(selected(path), PROFILES.keys())
+                self.assertEqual(selected(path), QUALIFICATION | {"cli"})
 
     def test_build_workflow_changes_test_the_build_workflow(self):
-        self.assertEqual(selected(".github/workflows/build.yml"), PROFILES.keys())
-        self.assertEqual(selected("scripts/ci/plan.py"), PROFILES.keys())
+        self.assertEqual(
+            selected(".github/workflows/build.yml"), QUALIFICATION | {"cli"}
+        )
+        self.assertEqual(selected("scripts/ci/plan.py"), QUALIFICATION | {"cli"})
 
     def test_private_harness_proto_changes_validate_transport_without_databases(self):
         self.assertEqual(
@@ -369,9 +372,28 @@ class ProfileTests(unittest.TestCase):
         runtime = next(command for command in checks if "nextest" in command)
         self.assertIn("acton-service", runtime)
         self.assertIn("acton-service-surrealdb", runtime)
+        self.assertIn("acton-service-integration-tests", runtime)
+        self.assertIn("acton-service-integration-tests/surrealdb", runtime)
         self.assertIn(
             "acton-service/surrealdb", runtime[runtime.index("--features") + 1]
         )
+
+    def test_qualification_live_backend_coverage_is_combined_without_duplicates(self):
+        for feature, name in (
+            ("mssql", "mssql"),
+            ("surrealdb", "audit-surrealdb"),
+            ("clickhouse", "audit-clickhouse"),
+        ):
+            self.assertIn(name, QUALIFICATION)
+            self.assertEqual(PROFILES[name].harness, feature)
+            self.assertNotIn(feature + "-integration", QUALIFICATION)
+            self.assertTrue(
+                any(
+                    "nextest" in command
+                    and "acton-service-integration-tests/" + feature in command
+                    for command in commands(name)
+                )
+            )
 
 
 class CacheTests(unittest.TestCase):
@@ -452,6 +474,7 @@ class EvidenceTests(unittest.TestCase):
             {"version": 0},
             {"repository": "fork/repo"},
             {"sha": "main"},
+            {"sha": 123},
         ):
             with self.subTest(change=change):
                 self.assertFalse(
@@ -477,6 +500,8 @@ class EvidenceTests(unittest.TestCase):
     def test_reuse_requires_completed_trusted_pr_and_api_tree_agreement(self, request):
         run = {
             "event": "pull_request",
+            "status": "completed",
+            "conclusion": "success",
             "head_repository": {"full_name": "Govcraft/acton-service"},
             "head_sha": "b" * 40,
             "id": 123,
@@ -508,6 +533,8 @@ class EvidenceTests(unittest.TestCase):
                 "workflow_runs": [
                     {
                         "event": "pull_request",
+                        "status": "completed",
+                        "conclusion": "success",
                         "head_repository": {"full_name": "Govcraft/acton-service"},
                         "head_sha": "b" * 40,
                         "id": 123,

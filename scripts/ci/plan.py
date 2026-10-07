@@ -19,10 +19,10 @@ BACKEND_PROFILES = {
         "postgres-integration-ring",
         "full",
     },
-    "mssql": {"mssql", "mssql-integration", "windows-mssql"},
+    "mssql": {"mssql", "windows-mssql"},
     "turso": {"audit-turso"},
-    "surrealdb": {"audit-surrealdb", "surrealdb-integration"},
-    "clickhouse": {"audit-clickhouse", "clickhouse-integration"},
+    "surrealdb": {"audit-surrealdb"},
+    "clickhouse": {"audit-clickhouse"},
 }
 FEATURE_PATHS = (
     ("auth/oauth/", {"oauth-no-cache", "oauth-with-cache"}),
@@ -310,6 +310,15 @@ def select(paths: list[str], full: bool = False) -> dict[str, object]:
             selected.update(PROFILES)
             reasons.append(f"Unclassified path, validating everything: {path}")
 
+    # Composite jobs already execute these exact fixtures; retain standalone jobs
+    # only for isolated fixture edits whose facade integration is not selected.
+    for composite, fixture in (
+        ("mssql", "mssql-integration"),
+        ("audit-surrealdb", "surrealdb-integration"),
+        ("audit-clickhouse", "clickhouse-integration"),
+    ):
+        if composite in selected:
+            selected.discard(fixture)
     return {
         "matrix": matrix(selected),
         "code": bool(selected),

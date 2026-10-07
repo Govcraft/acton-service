@@ -15,6 +15,7 @@ class Profile:
     kerberos: bool = False
     companion: str = ""
     compile_only: bool = False
+    harness: str = ""
 
     def cargo_options(self) -> list[str]:
         options = ["--locked", "-p", self.package]
@@ -69,16 +70,21 @@ PROFILES = {
     ),
     "audit-turso": narrow("audit,turso,observability", companion="acton-service-turso"),
     "audit-surrealdb": narrow(
-        "audit,surrealdb,auth,jwt,observability", companion="acton-service-surrealdb"
+        "audit,surrealdb,auth,jwt,observability",
+        companion="acton-service-surrealdb",
+        harness="surrealdb",
     ),
     "audit-clickhouse": Profile(
-        features="audit,clickhouse", companion="acton-service-clickhouse"
+        features="audit,clickhouse",
+        companion="acton-service-clickhouse",
+        harness="clickhouse",
     ),
     "audit-otel": narrow("audit,observability"),
     "mssql": narrow(
         "mssql,grpc,auth,accounts,audit,observability",
         kerberos=True,
         companion="acton-service-mssql",
+        harness="mssql",
     ),
     "tls-no-grpc": narrow("tls"),
     "windows-auth": narrow("tls,windows-auth"),
@@ -140,9 +146,21 @@ PROFILES = {
         protoc=True,
     ),
 }
-QUALIFICATION = PROFILES.keys() - {"cli"}
+QUALIFICATION = PROFILES.keys() - {
+    "cli",
+    "mssql-integration",
+    "surrealdb-integration",
+    "clickhouse-integration",
+}
 # One deliberate writer per family; rare profiles restore without competing saves.
-CACHE_WRITERS = {"default", "full", "ring", "audit-surrealdb", "windows", "frontend"}
+CACHE_WRITERS = {
+    "default",
+    "full",
+    "tls-ring",
+    "audit-surrealdb",
+    "windows",
+    "frontend",
+}
 
 
 def cache_family(name: str) -> str:

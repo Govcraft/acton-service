@@ -6,7 +6,10 @@ qualify every supported configuration at the exact commit being published.
 ## Development
 
 `Build & Test` selects configurations from owned feature modules, backend packages,
-private harness files, and declared example targets. Isolated optional changes do
+private harness files, and declared example targets. Resolved backend graphs are
+separate: SurrealDB profiles do not enable PostgreSQL, SQL Server, or ClickHouse,
+and each other backend profile selects its own optional driver. The shared harness
+uses per-backend feature flags, including per-backend container modules. Isolated optional changes do
 not rebuild default/minimal consumers whose inputs have not changed. Shared
 contracts, manifests, and unknown files retain conservative complete selection.
 Each behavioral profile runs Clippy with denied warnings and Nextest. Compile-only
@@ -31,6 +34,10 @@ changes still run Actionlint and CI helper lint/format checks.
 The required `ci-gate` verifies successful selection and every selected job.
 Missing outputs, failures, cancellations, and unexpected skips fail the gate.
 New commits cancel earlier feedback for that PR; qualification retains its own run.
+The Rust matrix cancels sibling jobs at its first failure. Nextest 0.9.146 is
+downloaded as a checksummed prebuilt binary with fallback compilation disabled;
+compile-only profiles do not install it. Cargo still compiles the project test
+binaries that Nextest executes.
 
 Main reuses a successful same-repository PR run only when GitHub's commit-tree
 API and retained evidence agree with the actual merged Git tree, the recorded
@@ -70,7 +77,10 @@ excluded. A writer skips oversized uploads above 1.5 GiB uncompressed. Retention
 keeps the newest entry per family/ref within an 8 GiB total CI budget and removes
 obsolete v0-rust caches; unrelated caches are untouched. This leaves room within
 the observed repository storage for documentation/dependency tooling. Cache misses
-always compile normally and never weaken validation. Qualification cannot fill
+always compile normally and never weaken validation. Live SQL Server, SurrealDB, and ClickHouse scenarios run in their composite backend
+jobs during qualification; their fixture-only profiles remain available for narrow
+fixture edits. The ring cache writer uses narrow TLS runtime artifacts, while the
+broad ring compile profile restores them. Qualification cannot fill
 storage with 38 independent registry/compiler copies.
 
 `task` now runs normal service formatting, lint, and runtime checks. Legacy CLI

@@ -16,6 +16,8 @@ ARTIFACT = "development-evidence"
 
 
 def compatible(record: dict, plan: dict, tree: str, repository: str) -> bool:
+    if not isinstance(record, dict) or not isinstance(record.get("sha"), str):
+        return False
     required = {entry["profile"] for entry in plan["matrix"]["include"]}
     return (
         record.get("version") == 1
@@ -74,7 +76,9 @@ def find_evidence(plan: dict, tree: str) -> tuple[dict | None, str]:
     ]
     for run in runs:
         if (
-            run["event"] != "pull_request"
+            run.get("status") != "completed"
+            or run.get("conclusion") != "success"
+            or run["event"] != "pull_request"
             or run["head_repository"]["full_name"] != repository
         ):
             continue

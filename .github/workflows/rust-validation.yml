@@ -91,7 +91,7 @@ jobs:
     runs-on: ${{ matrix.runner == 'windows' && 'windows-latest' || inputs.linux-runner }}
     timeout-minutes: 60
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix: ${{ fromJSON(inputs.matrix) }}
     defaults:
       run:
@@ -146,8 +146,11 @@ jobs:
           path: target
           key: ci-v2-${{ matrix.cache }}--${{ runner.os }}-1.99.0-debug0--${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml') }}
           restore-keys: ci-v2-${{ matrix.cache }}--${{ runner.os }}-1.99.0-debug0--
-      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@v2
         if: matrix.tests
+        with:
+          tool: cargo-nextest@0.9.146
+          fallback: none
       - name: Clippy, tests, and profile checks
         env:
           PROFILE: ${{ matrix.profile }}
