@@ -10,7 +10,7 @@ checksum = "fe438c63458706e03479442743baae6c88256498e6431708f6dfc520a26515d3"
 
 [[package]]
 name = "acton-cli"
-version = "0.47.0"
+version = "0.47.1"
 dependencies = [
  "acton-service",
  "anyhow",
@@ -80,7 +80,7 @@ dependencies = [
 
 [[package]]
 name = "acton-service"
-version = "0.47.0"
+version = "0.47.1"
 dependencies = [
  "acton-reactive",
  "acton-service-audit",
@@ -180,7 +180,7 @@ dependencies = [
 
 [[package]]
 name = "acton-service-audit"
-version = "0.47.0"
+version = "0.47.1"
 dependencies = [
  "acton-service-core",
  "async-trait",
@@ -196,7 +196,7 @@ dependencies = [
 
 [[package]]
 name = "acton-service-clickhouse"
-version = "0.47.0"
+version = "0.47.1"
 dependencies = [
  "acton-service-audit",
  "acton-service-core",
@@ -212,14 +212,14 @@ dependencies = [
 
 [[package]]
 name = "acton-service-core"
-version = "0.47.0"
+version = "0.47.1"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "acton-service-integration-tests"
-version = "0.47.0"
+version = "0.47.1"
 dependencies = [
  "acton-service",
  "acton-service-clickhouse",
@@ -246,7 +246,7 @@ dependencies = [
 
 [[package]]
 name = "acton-service-mssql"
-version = "0.47.0"
+version = "0.47.1"
 dependencies = [
  "acton-service-audit",
  "acton-service-core",
@@ -263,7 +263,7 @@ dependencies = [
 
 [[package]]
 name = "acton-service-postgres"
-version = "0.47.0"
+version = "0.47.1"
 dependencies = [
  "acton-service-audit",
  "acton-service-core",
@@ -278,7 +278,7 @@ dependencies = [
 
 [[package]]
 name = "acton-service-surrealdb"
-version = "0.47.0"
+version = "0.47.1"
 dependencies = [
  "acton-service-audit",
  "acton-service-core",
@@ -294,7 +294,7 @@ dependencies = [
 
 [[package]]
 name = "acton-service-turso"
-version = "0.47.0"
+version = "0.47.1"
 dependencies = [
  "acton-service-audit",
  "acton-service-core",
