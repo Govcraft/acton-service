@@ -8,10 +8,18 @@ qualify every supported configuration at the exact commit being published.
 `Build & Test` selects configurations from owned feature modules, backend packages,
 private harness files, and declared example targets. Resolved backend graphs are
 separate: SurrealDB profiles do not enable PostgreSQL, SQL Server, or ClickHouse,
-and each other backend profile selects its own optional driver. The shared harness
+and each other backend profile selects its own optional driver. Before compilation,
+a resolved Cargo graph guard rejects mixed database drivers and requires exactly
+the selected SQLx TLS provider. The shared harness
 uses per-backend feature flags, including per-backend container modules. Isolated optional changes do
 not rebuild default/minimal consumers whose inputs have not changed. Shared
 contracts, manifests, and unknown files retain conservative complete selection.
+Stable workspace version-only edits use semantic manifest/lockfile comparison:
+only workspace versions and compatible local version requirements may change.
+External dependencies, checksums, feature flags, and all other configuration must
+match. This path requires `cargo metadata --locked` and rebuilds versioned docs;
+it skips compilation and repeated dependency-policy work. Malformed or ambiguous
+changes fall back to normal validation. Release qualification remains exhaustive.
 Each behavioral profile runs Clippy with denied warnings and Nextest. Compile-only
 profiles retain provider/platform coverage; designated profiles also run doctests.
 
@@ -26,7 +34,7 @@ profiles retain provider/platform coverage; designated profiles also run doctest
 | Shared contracts/manifests or unknown source | Complete development catalog, including dependent legacy CLI |
 
 Use `[full-ci]` in a PR title/body before the next push, or dispatch `Build & Test`
-for immediate complete service validation. Editing PR descriptions does not
+for immediate complete development validation, including the legacy CLI. Editing PR descriptions does not
 cancel an in-progress source validation. The old `[skip-matrix]` marker cannot
 bypass checks. Documentation-only changes skip Rust; workflow-only documentation
 changes still run Actionlint and CI helper lint/format checks.
@@ -73,7 +81,8 @@ compiler writers populate default, full, ring, SurrealDB, frontend, and Windows
 families; other jobs restore compatible artifacts without racing to save partial
 snapshots. Dependencies and unchanged workspace libraries are retained, including
 the expensive SurrealDB adapter. Test executables, docs, and incremental output are
-excluded. A writer skips oversized uploads above 1.5 GiB uncompressed. Retention
+excluded. A writer skips oversized uploads above 4 GiB uncompressed; the measured
+full-profile footprint is 2.3 GiB before compression. Retention
 keeps the newest entry per family/ref within an 8 GiB total CI budget and removes
 obsolete v0-rust caches; unrelated caches are untouched. This leaves room within
 the observed repository storage for documentation/dependency tooling. Cache misses

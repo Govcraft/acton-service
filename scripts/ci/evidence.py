@@ -147,8 +147,12 @@ def main():
         ) as error:
             print(f"No reusable evidence ({error}); validating the merge.")
     with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
-        for name in ("matrix", "code", "docs", "security", "tooling"):
-            value = plan[name] if name == "matrix" or record is None else False
+        for name in ("matrix", "code", "docs", "security", "tooling", "metadata"):
+            value = (
+                plan[name]
+                if name in {"matrix", "metadata"} or record is None
+                else False
+            )
             stream.write(f"{name}={json.dumps(value, separators=(',', ':'))}\n")
         stream.write(
             f"deploy_docs={str(plan['docs']).lower()}\nevidence_run={run_id}\n"

@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 
 from profiles import PROFILES, QUALIFICATION, matrix
+from versions import snapshot, version_only
 
 BACKENDS = {"postgres", "mssql", "turso", "surrealdb", "clickhouse"}
 GRPC_INTEGRATION = {"grpc-integration", "grpc-integration-ring"}
@@ -181,7 +182,12 @@ def docs_only(path: str) -> bool:
     )
 
 
-def select(paths: list[str], full: bool = False) -> dict[str, object]:
+def select(
+    paths: list[str],
+    full: bool = False,
+    versions_only: bool = False,
+    qualification: bool = False,
+) -> dict[str, object]:
     docs = any(p.startswith("acton-docs/") or p == "Cargo.toml" for p in paths)
     security = any(
         Path(p).name in {"Cargo.toml", "Cargo.lock"}
@@ -194,13 +200,30 @@ def select(paths: list[str], full: bool = False) -> dict[str, object]:
     reasons: list[str] = []
     if full:
         selected.update(QUALIFICATION)
+        if not qualification:
+            selected.add("cli")
         return {
             "matrix": matrix(selected),
             "code": True,
             "docs": True,
             "security": True,
             "tooling": True,
+            "metadata": False,
             "reasons": ["Exhaustive validation requested"],
+        }
+
+    if versions_only:
+        return {
+            "matrix": matrix(set()),
+            "code": False,
+            "docs": docs,
+            "security": False,
+            "tooling": tooling,
+            "metadata": True,
+            "reasons": [
+                "Only stable workspace versions and local references changed; "
+                "Cargo metadata remains required"
+            ],
         }
 
     for path in paths:
@@ -325,6 +348,7 @@ def select(paths: list[str], full: bool = False) -> dict[str, object]:
         "docs": docs,
         "security": security,
         "tooling": tooling,
+        "metadata": False,
         "reasons": reasons,
     }
 
@@ -351,11 +375,15 @@ def changed_paths(event: str, base: str, head: str, forced: bool) -> list[str]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--full", action="store_true")
+    parser.add_argument("--qualification", action="store_true")
     parser.add_argument("--paths", nargs="*")
     args = parser.parse_args()
-    full = args.full or "[full-ci]" in os.environ.get(
-        "PR_TITLE", ""
-    ) + "\n" + os.environ.get("PR_BODY", "")
+    full = (
+        args.full
+        or args.qualification
+        or "[full-ci]"
+        in os.environ.get("PR_TITLE", "") + "\n" + os.environ.get("PR_BODY", "")
+    )
     if args.paths is not None:
         paths = args.paths
     elif full:
@@ -371,13 +399,29 @@ def main() -> None:
         except (ValueError, subprocess.CalledProcessError) as error:
             print(f"Incremental selection unavailable ({error}); selecting everything.")
             paths, full = [], True
-    plan = select(paths, full)
+    versions_only = False
+    if not full and args.paths is None:
+        manifests = [path for path in paths if not docs_only(path)]
+        if manifests and all(
+            Path(path).name in {"Cargo.toml", "Cargo.lock"} for path in manifests
+        ):
+            try:
+                base = os.environ["BASE_SHA"]
+                head = os.environ["HEAD_SHA"]
+                if os.environ["EVENT"] == "pull_request":
+                    base = subprocess.check_output(
+                        ["git", "merge-base", base, head], text=True
+                    ).strip()
+                versions_only = version_only(manifests, snapshot(base), snapshot(head))
+            except (KeyError, ValueError, subprocess.CalledProcessError):
+                versions_only = False
+    plan = select(paths, full, versions_only, args.qualification)
     Path("ci-plan.json").write_text(json.dumps(plan, indent=2) + "\n")
     print(json.dumps(plan, indent=2))
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
         with open(output, "a", encoding="utf-8") as stream:
-            for name in ("matrix", "code", "docs", "security", "tooling"):
+            for name in ("matrix", "code", "docs", "security", "tooling", "metadata"):
                 stream.write(
                     f"{name}={json.dumps(plan[name], separators=(',', ':'))}\n"
                 )

@@ -163,7 +163,10 @@ class SelectionTests(unittest.TestCase):
     def test_manual_full_ci_cannot_skip_docs_or_security(self):
         plan = select([], full=True)
         self.assertTrue(all(plan[name] for name in ("code", "docs", "security")))
-        validate_matrix(plan["matrix"], exhaustive=True)
+        validate_matrix(plan["matrix"], exhaustive=False)
+        validate_matrix(
+            select([], qualification=True, full=True)["matrix"], exhaustive=True
+        )
 
     @patch("plan.subprocess.check_output")
     def test_pull_requests_diff_from_merge_base_and_keep_unusual_filenames(
@@ -212,11 +215,16 @@ class SelectionTests(unittest.TestCase):
 
     def test_qualification_excludes_deprecated_cli_but_development_checks_it(self):
         names = {
-            entry["profile"] for entry in select([], full=True)["matrix"]["include"]
+            entry["profile"]
+            for entry in select([], full=True, qualification=True)["matrix"]["include"]
         }
         self.assertEqual(names, QUALIFICATION)
         self.assertNotIn("cli", names)
         self.assertIn("cli", selected("acton-service/src/lib.rs"))
+        self.assertIn(
+            "cli",
+            {entry["profile"] for entry in select([], full=True)["matrix"]["include"]},
+        )
 
     def test_every_declared_framework_example_has_executable_feature_coverage(self):
         root = Path(__file__).resolve().parents[3]

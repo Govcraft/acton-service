@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 
+from graph import backend_for, verify_graph
 from profiles import PROFILES, QUALIFICATION, matrix_entry
 
 
@@ -99,7 +100,30 @@ def main() -> None:
         return
     if not args.profile:
         parser.error("A profile is required unless --check-matrix is selected")
-    for command in commands(args.profile):
+    checks = commands(args.profile)
+    if not args.print_only:
+        command = max(checks, key=lambda value: value.count("-p"))
+        options = command[2 : command.index("--all-targets")]
+        graph = subprocess.check_output(
+            [
+                "cargo",
+                "tree",
+                *options,
+                "-e",
+                "normal,build,dev",
+                "--prefix",
+                "none",
+                "--format",
+                "{p}|{f}",
+            ],
+            text=True,
+        )
+        backend = backend_for(args.profile)
+        verify_graph(graph, backend, "crypto-ring" in PROFILES[args.profile].features)
+        print(
+            f"Resolved graph is isolated: {backend or 'no database driver'}", flush=True
+        )
+    for command in checks:
         print(json.dumps(command), flush=True)
         if not args.print_only:
             subprocess.run(command, check=True)

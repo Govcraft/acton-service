@@ -47,7 +47,7 @@ jobs:
           echo "sha=$EXPECTED_SHA" >> "$GITHUB_OUTPUT"
       - name: Select every supported profile
         id: plan
-        run: python scripts/ci/plan.py --full
+        run: python scripts/ci/plan.py --qualification
 
   rust:
     needs: plan

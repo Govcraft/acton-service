@@ -26,6 +26,7 @@ jobs:
       docs: ${{ steps.evidence.outputs.docs }}
       security: ${{ steps.evidence.outputs.security }}
       tooling: ${{ steps.evidence.outputs.tooling }}
+      metadata: ${{ steps.evidence.outputs.metadata }}
       deploy_docs: ${{ steps.evidence.outputs.deploy_docs }}
       evidence_run: ${{ steps.evidence.outputs.evidence_run }}
     steps:
@@ -48,6 +49,22 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: python scripts/ci/plan.py
+      - uses: dtolnay/rust-toolchain@master
+        if: steps.plan.outputs.metadata == 'true'
+        with:
+          toolchain: '1.99.0'
+      - uses: actions/cache/restore@v5
+        if: steps.plan.outputs.metadata == 'true'
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git/db
+          enableCrossOsArchive: true
+          key: ci-v2-registry--${{ hashFiles('Cargo.lock') }}
+          restore-keys: ci-v2-registry--
+      - name: Validate version-only workspace metadata
+        if: steps.plan.outputs.metadata == 'true'
+        run: cargo metadata --locked --format-version 1 > /dev/null
       - name: Reuse proven identical-tree evidence or validate
         id: evidence
         env:

@@ -9,7 +9,7 @@ from pathlib import Path
 
 PREFIX = "ci-v2-"
 BUDGET = 8 * 1024**3
-UPLOAD_LIMIT = 1536 * 1024**2
+UPLOAD_LIMIT = 4096 * 1024**2
 
 
 def trim_target(target: Path) -> bool:
