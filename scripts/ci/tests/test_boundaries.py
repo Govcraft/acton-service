@@ -199,3 +199,11 @@ class GraphBoundaryTests(unittest.TestCase):
         for driver in ("sqlx-mysql", "sqlx-sqlite"):
             with self.assertRaises(ValueError):
                 verify_graph(self.graph("postgres") + f"\n{driver} v0.8.0|", "postgres")
+
+    def test_remote_surrealdb_rejects_embedded_engine_and_default_parser(self):
+        remote = self.graph("surrealdb")
+        for package in ("surrealdb-core", "surrealdb-engine-local", "surrealdb-kvs"):
+            with self.subTest(package=package), self.assertRaises(ValueError):
+                verify_graph(remote + f"\n{package} v3.3.0|", "surrealdb")
+        with self.assertRaises(ValueError):
+            verify_graph(remote + "\nsurrealdb v3.3.0|parse", "surrealdb")

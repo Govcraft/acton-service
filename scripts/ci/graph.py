@@ -6,7 +6,7 @@ DRIVERS = {
     "postgres": "sqlx-postgres",
     "mssql": "tiberius",
     "turso": "libsql",
-    "surrealdb": "surrealdb-core",
+    "surrealdb": "surrealdb",
     "clickhouse": "clickhouse",
 }
 
@@ -43,6 +43,14 @@ def verify_graph(text: str, backend: str | None, ring: bool = False) -> None:
     expected = {backend} if backend else set()
     if actual != expected:
         raise ValueError(f"Expected isolated backend {expected}, resolved {actual}")
+    local_engine = {"surrealdb-core", "surrealdb-engine-local", "surrealdb-kvs"}
+    resolved_engine = local_engine & packages.keys()
+    if resolved_engine:
+        raise ValueError(
+            f"Remote-only graph resolved embedded engine: {resolved_engine}"
+        )
+    if backend == "surrealdb" and "parse" in packages.get("surrealdb", set()):
+        raise ValueError("SurrealDB SDK's unused default parser must remain disabled")
     if backend == "postgres":
         provider = "_tls-rustls-ring-webpki" if ring else "_tls-rustls-aws-lc-rs"
         configured = packages.get("sqlx-core", set()) & {

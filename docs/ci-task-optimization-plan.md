@@ -4,6 +4,8 @@ The measured baseline is 17m30s and 150.6 aggregate job minutes. This change
 implements the accompanying task audit, without publishing a release or changing
 paid cache settings. The pending workspace version remains 0.47.0: these are CI
 and test changes to an unreleased version, not another public API release.
+The subsequent SurrealDB optimization removes embedded `mem://` support
+within that pending 0.47.0 release, with an explicit migration note.
 
 ## Workflow architecture
 
@@ -58,6 +60,15 @@ future snippets. Signature policy documentation distinguishes signed release
 preparation from the checks actually performed by CI.
 
 ## Acceptance evidence
+
+The SurrealDB follow-up upgrades SDK 3.0.5 to 3.3 with defaults disabled,
+keeping WebSocket, HTTP, and Rustls. The unused SDK parser stays disabled.
+Keep only remote connections: the user chose this after the embedded engine
+introduced unfixed XML advisories. Remove the redundant memory-connection test,
+while preserving audit paging, retention, integrity, and legacy archive checks
+against the existing authenticated 3.0.5 server using memory storage. Neither
+development nor qualification may resolve local engine/store crates. Document
+the `mem://` migration and measure the hosted remote job.
 
 Behavioral helper tests must cover precise selection, every maintained example,
 qualification completeness, cache budget/writers, and fail-closed same-tree reuse.

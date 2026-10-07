@@ -89,6 +89,12 @@ class SelectionTests(unittest.TestCase):
         self.assertNotIn("ring", names)
         self.assertNotIn("windows", names)
 
+    def test_surreal_archive_fixture_retains_remote_regression_coverage(self):
+        self.assertEqual(
+            selected("acton-service-surrealdb/src/fixtures/legacy-v1.json"),
+            {"audit-surrealdb"},
+        )
+
     def test_multiple_changes_combine_required_profiles(self):
         self.assertEqual(
             selected(

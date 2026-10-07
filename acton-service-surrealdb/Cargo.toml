@@ -14,7 +14,7 @@ async-trait.workspace = true
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-surrealdb.workspace = true
+surrealdb = { version = "3.3.0", default-features = false, features = ["protocol-ws", "protocol-http", "rustls"] }
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true

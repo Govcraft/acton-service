@@ -33,6 +33,7 @@ the backend SDK under a standalone graph.
 | OAuth implementation | OAuth with and without cache |
 | gRPC implementation | Transport with/without TLS, examples, both provider RPCs, native Windows compilation |
 | Turso adapter | Isolated adapter lint, adapter tests and facade integration in one job |
+| SurrealDB adapter | Remote SDK, isolated adapter lint, authenticated server and facade integration |
 | SQL Server fixture | That live container test |
 | PostgreSQL adapter | Standalone adapter, both provider TLS/database scenarios and facade integration |
 | HTMX example | Frontend including the literal htmx-full feature |
@@ -82,10 +83,10 @@ and debug info for development/test profiles, reducing upload size and codegen w
 Local builds retain their usual debugging configuration.
 
 One preflight job populates a shared lockfile-keyed registry cache. Six deliberate
-compiler writers populate default, full, ring, SurrealDB, frontend, and Windows
+compiler writers populate default, full, ring, remote SurrealDB, frontend, and Windows
 families; other jobs restore compatible artifacts without racing to save partial
 snapshots. Dependencies and unchanged workspace libraries are retained, including
-the expensive SurrealDB adapter. Test executables, docs, and incremental output are
+the SurrealDB remote adapter. Test executables, docs, and incremental output are
 excluded. A writer skips oversized uploads above 4 GiB uncompressed; the measured
 full-profile footprint is 2.3 GiB before compression. Retention
 keeps the newest entry per family/ref within an 8 GiB total CI budget and removes
@@ -128,6 +129,15 @@ specific old module should include its new target, for example
 Database-specific actor orchestration and authentication/account integration
 remain in the facade. Cross-subsystem integration checks therefore remain
 necessary even when an adapter's own unit tests pass.
+
+SurrealDB SDK 3.3 separates remote clients from the embedded query engine.
+The `surrealdb` facade feature enables WebSocket, HTTP, and Rustls, with SDK
+defaults and its unused standalone parser disabled. Embedded `mem://` connections
+are no longer supported in 0.47.0. For tests and local development, use a server
+with memory storage over WebSocket or HTTP. Audit paging, retention, hash-chain,
+and legacy archive regressions reuse the authenticated server fixture. The graph
+guard rejects embedded engine/store crates in every development and qualification
+profile. No release job needs to compile the embedded SDK engine.
 
 The private `acton-service-integration-tests` package contains container tests
 and gRPC examples. It is never published. Protobuf example generation and the

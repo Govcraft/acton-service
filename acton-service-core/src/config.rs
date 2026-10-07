@@ -121,7 +121,7 @@ pub struct TursoConfig {
 /// SurrealDB database configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SurrealDbConfig {
-    /// Connection URL (ws://localhost:8000, mem://, http://localhost:8000, etc.)
+    /// Server connection URL (ws://, wss://, http://, or https://).
     pub url: String,
 
     /// Namespace to use

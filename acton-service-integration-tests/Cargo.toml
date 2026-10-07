@@ -10,7 +10,7 @@ acton-service = { version = "0.47.0", path = "../acton-service", default-feature
 acton-service-clickhouse = { version = "0.47.0", path = "../acton-service-clickhouse", optional = true }
 acton-service-mssql = { version = "0.47.0", path = "../acton-service-mssql", optional = true }
 acton-service-postgres = { version = "0.47.0", path = "../acton-service-postgres", default-features = false, optional = true }
-acton-service-surrealdb = { version = "0.47.0", path = "../acton-service-surrealdb", optional = true }
+acton-service-surrealdb = { version = "0.47.0", path = "../acton-service-surrealdb", optional = true, default-features = false }
 axum = { workspace = true, optional = true }
 chrono.workspace = true
 prost = { workspace = true, optional = true }
@@ -39,6 +39,7 @@ mssql = ["acton-service/mssql", "acton-service/accounts", "acton-service/auth", 
 postgres = ["acton-service/database", "acton-service/audit", "dep:acton-service-postgres", "dep:sqlx", "dep:testcontainers-modules", "testcontainers-modules/postgres"]
 clickhouse = ["acton-service/clickhouse", "acton-service/audit", "dep:acton-service-clickhouse", "dep:testcontainers-modules", "testcontainers-modules/clickhouse"]
 surrealdb = ["acton-service/surrealdb", "acton-service/audit", "dep:acton-service-surrealdb", "dep:testcontainers-modules", "testcontainers-modules/surrealdb"]
+
 
 [[example]]
 name = "ping-pong"

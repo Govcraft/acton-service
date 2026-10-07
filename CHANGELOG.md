@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- SurrealDB SDK 3.3 uses only WebSocket, HTTP, and Rustls for remote clients.
+  Embedded `mem://` connections are no longer supported. Use a SurrealDB
+  server with memory storage over `ws://` or `http://` for local development
+  and tests. Audit regressions retain paging, retention, integrity, and legacy
+  archive coverage against that server. The unused SDK parser is disabled.
 - Pull requests select Rust profiles from affected subsystems, cancel superseded
   runs, and retain the required `ci-gate`. Shared contracts, dependency changes,
   and unknown paths receive the complete matrix.

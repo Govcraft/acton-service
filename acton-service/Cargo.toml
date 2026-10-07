@@ -39,9 +39,6 @@ sqlx = { workspace = true, optional = true }
 # Turso/libsql (optional)
 libsql = { workspace = true, optional = true }
 
-# SurrealDB (optional)
-surrealdb = { workspace = true, optional = true }
-
 # Redis (optional)
 redis = { workspace = true, optional = true }
 deadpool-redis = { workspace = true, optional = true }
@@ -149,6 +146,7 @@ acton-service-surrealdb = { version = "0.47.0", path = "../acton-service-surreal
 acton-service-clickhouse = { version = "0.47.0", path = "../acton-service-clickhouse", default-features = false, optional = true }
 acton-service-core = { version = "0.47.0", path = "../acton-service-core" }
 acton-service-audit = { version = "0.47.0", path = "../acton-service-audit", optional = true }
+surrealdb = { version = "3.3.0", default-features = false, features = ["protocol-ws", "protocol-http", "rustls"], optional = true }
 
 # saml-rs's aws-lc XML-DSig backend (kryptering) compiles only on Linux
 # x86_64/aarch64 and refuses every other target with compile_error!, so the
@@ -290,7 +288,6 @@ graphql-cedar = ["graphql", "cedar-authz"]
 acton-service-postgres = ["dep:acton-service-postgres"]
 acton-service-mssql = ["dep:acton-service-mssql"]
 acton-service-turso = ["dep:acton-service-turso"]
-acton-service-surrealdb = ["dep:acton-service-surrealdb"]
 acton-service-clickhouse = ["dep:acton-service-clickhouse"]
 acton-service-audit = ["dep:acton-service-audit"]
 # Basic examples
