@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import sys
 import tarfile
 import tempfile
@@ -356,6 +357,47 @@ class ProfileTests(unittest.TestCase):
                 for command in commands("full")
             )
         )
+
+    def test_component_documentation_code_requires_explicit_doctest_coverage(self):
+        root = Path(__file__).resolve().parents[3]
+        components = {
+            package
+            for profile in PROFILES.values()
+            for package in (profile.package, profile.companion)
+            if package.startswith("acton-service-")
+            and package != "acton-service-integration-tests"
+        }
+        for package in components:
+            requires_docs = any(
+                re.search(
+                    r"```|~~~|^\s*/\*[*!]|\bdoc\s*=|^\s*//[!/] {4,}\S",
+                    file.read_text(),
+                    re.M,
+                )
+                for file in (root / package / "src").rglob("*.rs")
+            )
+            if requires_docs:
+                with self.subTest(package=package):
+                    self.assertTrue(
+                        any(
+                            profile.doctests
+                            and package in (profile.package, profile.companion)
+                            for name, profile in PROFILES.items()
+                            if name in QUALIFICATION
+                        ),
+                        "Documentation code requires a doctest-enabled "
+                        "qualification profile",
+                    )
+
+    def test_empty_adapter_doctests_do_not_rebuild_the_backend_graph(self):
+        for name in ("audit-surrealdb", "audit-clickhouse", "audit-turso", "mssql"):
+            with self.subTest(name=name):
+                self.assertFalse(
+                    any(
+                        command[:3] == ["cargo", "test", "--doc"]
+                        for command in commands(name)
+                    )
+                )
 
     @patch("run_profile.subprocess.check_output", return_value="a" * 40 + "\n")
     def test_revision_mismatch_and_symbolic_refs_are_rejected(self, _output):

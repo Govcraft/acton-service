@@ -99,12 +99,12 @@ PROFILES = {
     "frontend": narrow("htmx-full"),
     "graphql": narrow("graphql,graphql-cedar,cedar-authz"),
     "audit-nodb": narrow("audit"),
-    "core": Profile(package="acton-service-core", doctests=True),
-    "audit": Profile(package="acton-service-audit", doctests=True),
+    "core": Profile(package="acton-service-core"),
+    "audit": Profile(package="acton-service-audit"),
     "audit-events": Profile(
         package="acton-service-audit", features="accounts,login-lockout"
     ),
-    "postgres": Profile(package="acton-service-postgres", doctests=True),
+    "postgres": Profile(package="acton-service-postgres"),
     "postgres-ring": Profile(
         package="acton-service-postgres",
         features="crypto-ring",

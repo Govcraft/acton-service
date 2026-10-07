@@ -22,6 +22,11 @@ it skips compilation and repeated dependency-policy work. Malformed or ambiguous
 changes fall back to normal validation. Release qualification remains exhaustive.
 Each behavioral profile runs Clippy with denied warnings and Nextest. Compile-only
 profiles retain provider/platform coverage; designated profiles also run doctests.
+The seven component crates currently have no Rustdoc examples, so they skip empty
+doctest builds. Selection tests require an explicit doctest profile when a
+component adds documentation code, including indirect or block documentation.
+For composite jobs, doctests use the combined feature graph to avoid rebuilding
+the backend SDK under a standalone graph.
 
 | Change | Selected work |
 | --- | --- |

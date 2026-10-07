@@ -64,8 +64,6 @@ def commands(name: str) -> list[list[str]]:
         result.append(["cargo", "nextest", "run", *test_options, *options])
     if profile.doctests:
         result.append(["cargo", "test", "--doc", *options])
-    elif profile.companion:
-        result.append(["cargo", "test", "--doc", "--locked", "-p", profile.companion])
     return result
 
 
