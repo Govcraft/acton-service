@@ -214,6 +214,48 @@ class SelectionTests(unittest.TestCase):
             {"postgres-integration", "postgres-integration-ring"},
         )
 
+    def test_cache_fixture_and_shared_contract_selection(self):
+        self.assertEqual(
+            selected("acton-service-integration-tests/tests/redis_integration.rs"),
+            {"oauth-with-cache"},
+        )
+        shared = selected("acton-service-integration-tests/tests/common/revocation.rs")
+        self.assertTrue({"oauth-with-cache", "mssql", "audit-surrealdb"} <= shared)
+        runtime = next(
+            command for command in commands("oauth-with-cache") if "nextest" in command
+        )
+        self.assertIn("acton-service-integration-tests/cache", runtime)
+
+    def test_auth_storage_and_revocation_changes_cover_their_backends(self):
+        self.assertEqual(
+            selected("acton-service/tests/turso_revocation.rs"), {"audit-turso"}
+        )
+        self.assertTrue(
+            {"auth", "jwt"} <= set(PROFILES["audit-turso"].features.split(","))
+        )
+        self.assertEqual(
+            selected("acton-service/src/middleware/revocation/mssql.rs"),
+            {"mssql", "windows-mssql"},
+        )
+        self.assertEqual(
+            selected("acton-service/src/middleware/revocation/redis.rs"),
+            {"oauth-with-cache", "full"},
+        )
+        storage = {
+            "full",
+            "mssql",
+            "audit-turso",
+            "audit-surrealdb",
+            "oauth-with-cache",
+        }
+        for path in (
+            "acton-service/src/auth/api_keys/mod.rs",
+            "acton-service/src/middleware/revocation/configured.rs",
+            "acton-service/src/middleware/revocation.rs",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(storage <= selected(path))
+
     def test_workflow_only_docs_change_still_validates_workflow_and_builds_site(self):
         plan = select([".github/workflows/deploy-docs.yml"])
         self.assertTrue(plan["tooling"])

@@ -46,21 +46,6 @@ async fn mssql_fixture() {
     let config=DatabaseConfig{url:format!("Server=tcp:{host},{port};Database=master;User Id=sa;Password={};TrustServerCertificate=True;",MssqlServer::DEFAULT_SA_PASSWORD),max_connections:5,min_connections:1,connection_timeout_secs:30,max_retries:10,retry_delay_secs:2,optional:false,lazy_init:false,mssql_auth:acton_service::config::MssqlAuthMode::ConnectionString};
     let pool = mssql::create_pool(&config).await.expect("SQL Server pool");
     mssql::health_check(&pool).await.expect("health query");
-    {
-        let mut connection = pool.get().await.unwrap();
-        let row = connection
-            .simple_query("SELECT CASE WHEN 0x61=0x6100 THEN 1 ELSE 0 END AS padded")
-            .await
-            .unwrap()
-            .into_row()
-            .await
-            .unwrap()
-            .unwrap();
-        println!(
-            "SQL Server compares trailing zero bytes as equal: {}",
-            row.get::<i32, _>("padded").unwrap()
-        );
-    }
     let revocation = acton_service::middleware::revocation::MssqlTokenRevocation::new(
         pool.clone(),
         acton_service::middleware::revocation::RevocationNamespace::new("fixture-a")

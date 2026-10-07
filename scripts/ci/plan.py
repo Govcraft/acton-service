@@ -25,10 +25,24 @@ BACKEND_PROFILES = {
     "surrealdb": {"audit-surrealdb"},
     "clickhouse": {"audit-clickhouse"},
 }
+AUTH_STORAGE_PROFILES = {
+    "tokens",
+    "oauth-with-cache",
+    "full",
+    "mssql",
+    "audit-turso",
+    "audit-surrealdb",
+    "windows-full",
+    "windows-mssql",
+}
+REVOCATION_PROFILES = AUTH_STORAGE_PROFILES | {"minimal"}
 FEATURE_PATHS = (
     ("auth/oauth/", {"oauth-no-cache", "oauth-with-cache"}),
     ("auth/saml/", {"saml", "full", "windows-saml", "windows-full"}),
     ("auth/tokens/", {"tokens", "full"}),
+    ("auth/api_keys/", AUTH_STORAGE_PROFILES),
+    ("auth/config.rs", AUTH_STORAGE_PROFILES),
+    ("auth/mod.rs", AUTH_STORAGE_PROFILES),
     ("auth/", {"tokens", "oauth-no-cache", "saml", "full"}),
     ("accounts/", {"full", "mssql", "audit-turso", "audit-surrealdb"}),
     ("lockout/", {"full"}),
@@ -71,6 +85,13 @@ FEATURE_PATHS = (
     ("repository/", {"postgres", "full"}),
     ("handlers/", {"full"}),
     ("middleware/metrics.rs", {"otel-only", "metrics", "full"}),
+    ("middleware/revocation/postgres.rs", BACKEND_PROFILES["postgres"]),
+    ("middleware/revocation/mssql.rs", BACKEND_PROFILES["mssql"]),
+    ("middleware/revocation/turso.rs", BACKEND_PROFILES["turso"]),
+    ("middleware/revocation/surreal.rs", BACKEND_PROFILES["surrealdb"]),
+    ("middleware/revocation/redis.rs", {"oauth-with-cache", "full"}),
+    ("middleware/revocation/", REVOCATION_PROFILES),
+    ("middleware/revocation.rs", REVOCATION_PROFILES),
     ("middleware/", {"full", "tokens", "tls-no-grpc", "graphql"}),
     (
         "tls.rs",
@@ -136,6 +157,7 @@ HARNESS_TESTS = {
     "postgres_integration": {"postgres-integration", "postgres-integration-ring"},
     "surrealdb_integration": {"surrealdb-integration"},
     "clickhouse_integration": {"clickhouse-integration"},
+    "redis_integration": {"oauth-with-cache"},
 }
 EXAMPLE_PROFILES = {
     "examples/basic/simple-api.rs": {"default", "minimal"},
@@ -273,6 +295,7 @@ def select(
                             name
                             for name, profile in PROFILES.items()
                             if profile.package == "acton-service-integration-tests"
+                            or profile.harness
                         }
                     )
                 reasons.append(f"Integration harness: {path}")
@@ -300,6 +323,8 @@ def select(
             if path.startswith("acton-service/tests/"):
                 test = Path(path).name
                 test_profiles = (
+                    ("turso", BACKEND_PROFILES["turso"]),
+                    ("revocation_config_load", REVOCATION_PROFILES),
                     ("oauth", {"oauth-no-cache", "oauth-with-cache"}),
                     ("saml", {"saml", "windows-saml"}),
                     ("graphql", {"graphql"}),

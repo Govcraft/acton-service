@@ -68,7 +68,9 @@ PROFILES = {
     "windows-saml": Profile(
         features="http,saml,crypto-aws-lc-rs", defaults=False, runner="windows"
     ),
-    "audit-turso": narrow("audit,turso,observability", companion="acton-service-turso"),
+    "audit-turso": narrow(
+        "audit,turso,auth,jwt,observability", companion="acton-service-turso"
+    ),
     "audit-surrealdb": narrow(
         "audit,surrealdb,auth,jwt,observability",
         companion="acton-service-surrealdb",
@@ -92,7 +94,7 @@ PROFILES = {
     "grpc-no-tls": narrow("grpc"),
     "grpc-tls": narrow("grpc,tls,auth,cedar-authz"),
     "oauth-no-cache": narrow("oauth"),
-    "oauth-with-cache": narrow("oauth,cache,jwt"),
+    "oauth-with-cache": narrow("oauth,cache,jwt", harness="cache"),
     "otel-only": narrow("otel-metrics"),
     "metrics": narrow("otel-metrics,prometheus-metrics,tls"),
     "tokens": narrow("jwt,auth"),
