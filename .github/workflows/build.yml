@@ -136,7 +136,8 @@ jobs:
 
   deploy-docs:
     needs: [changes, ci-gate]
-    if: needs.ci-gate.result == 'success' && github.ref == 'refs/heads/main' && needs.changes.outputs.deploy_docs == 'true'
+    # Identical-tree reuse intentionally skips validation ancestors of ci-gate.
+    if: always() && needs.changes.result == 'success' && needs.ci-gate.result == 'success' && github.ref == 'refs/heads/main' && needs.changes.outputs.deploy_docs == 'true'
     permissions:
       contents: read
       actions: read
