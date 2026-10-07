@@ -10,8 +10,9 @@ use acton_service::{
         AuditChain, AuditEvent, AuditEventKind, AuditSeverity,
     },
     auth::{
-        ApiKey, ApiKeyStorage, KeyRotationStorage, MssqlApiKeyStorage, MssqlKeyRotationStorage,
-        MssqlRefreshStorage, RefreshTokenMetadata, RefreshTokenStorage,
+        ApiKey, ApiKeyGenerator, ApiKeyPepper, ApiKeyStorage, KeyRotationStorage,
+        MssqlApiKeyStorage, MssqlKeyRotationStorage, MssqlRefreshStorage, RefreshTokenMetadata,
+        RefreshTokenStorage,
     },
     config::DatabaseConfig,
     mssql,
@@ -44,7 +45,8 @@ async fn mssql_fixture() {
     let accounts = MssqlAccountStorage::new(pool.clone())
         .await
         .expect("accounts schema");
-    let api_keys = MssqlApiKeyStorage::new(pool.clone(), "test")
+    let generator = ApiKeyGenerator::new("test", ApiKeyPepper::from_bytes([7; 32]));
+    let api_keys = MssqlApiKeyStorage::new(pool.clone(), generator.clone())
         .await
         .expect("api key schema");
     let refresh = MssqlRefreshStorage::new(pool.clone())
@@ -67,12 +69,13 @@ async fn mssql_fixture() {
         .expect("account exists");
     assert_eq!(loaded.email, account.email);
     assert_eq!(loaded.roles, account.roles);
+    let (plaintext, key_hash) = generator.generate().expect("generate API key");
     let key = ApiKey {
         id: uuid::Uuid::new_v4().to_string(),
         user_id: account.id.to_string(),
         name: "integration".to_string(),
-        prefix: format!("test_{}", uuid::Uuid::new_v4()),
-        key_hash: "not-used-for-id-lookup".to_string(),
+        prefix: ApiKeyGenerator::key_prefix_for_lookup(&plaintext).expect("lookup prefix"),
+        key_hash,
         scopes: vec!["read".to_string()],
         rate_limit: Some(100),
         is_revoked: false,
@@ -81,6 +84,20 @@ async fn mssql_fixture() {
         created_at: now,
     };
     api_keys.create(&key).await.expect("create API key");
+    assert_eq!(
+        api_keys
+            .get_by_key(&plaintext)
+            .await
+            .expect("verify key")
+            .expect("key exists")
+            .id,
+        key.id
+    );
+    assert!(api_keys
+        .get_by_key(&format!("{plaintext}a"))
+        .await
+        .expect("mismatched key")
+        .is_none());
     assert_eq!(
         api_keys
             .get_by_id(&key.id)

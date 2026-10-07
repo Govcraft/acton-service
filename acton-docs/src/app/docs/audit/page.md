@@ -155,7 +155,8 @@ use acton_service::audit::{AuditedApiKeyStorage, AuditedOAuthProvider, AuditedRe
 
 let logger = state.audit_logger().expect("audit enabled").clone();
 let refresh = AuditedRefreshStorage::new(RedisRefreshStorage::new(pool.clone()), logger.clone());
-let api_keys = AuditedApiKeyStorage::new(RedisApiKeyStorage::new(pool, "sk_live"), logger.clone());
+// Share the configured API-key generator with issuance and storage verification.
+let api_keys = AuditedApiKeyStorage::new(RedisApiKeyStorage::new(pool, generator.clone()), logger.clone());
 let google = AuditedOAuthProvider::new(google_provider, logger);
 ```
 

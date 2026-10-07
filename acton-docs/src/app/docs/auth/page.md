@@ -103,10 +103,11 @@ API key authentication generates prefixed, high-entropy keys for service-to-serv
 **Core types**: `ApiKeyGenerator`, `ApiKey`, `ApiKeyStorage` trait
 
 ```rust
-use acton_service::auth::ApiKeyGenerator;
+use acton_service::auth::{ApiKeyGenerator, ApiKeyPepper};
 
-let generator = ApiKeyGenerator::new("sk_live");
-let (key, key_hash) = generator.generate();
+let pepper = ApiKeyPepper::from_file("./secrets/api-key.pepper")?;
+let generator = ApiKeyGenerator::new("sk_live", pepper);
+let (key, key_hash) = generator.generate()?;
 // key = "sk_live_abc123..." - show to user ONCE
 // key_hash = store in database
 ```
@@ -243,7 +244,7 @@ Real applications often combine multiple authentication types. The framework's c
 ```rust
 use acton_service::auth::{
     PasswordHasher, PasetoGenerator, RedisRefreshStorage,
-    ApiKeyGenerator, TokenGenerator,
+    ApiKeyGenerator, ApiKeyPepper, TokenGenerator,
     RefreshTokenMetadata, RefreshTokenStorage,
 };
 use chrono::{Duration, Utc};
@@ -274,7 +275,9 @@ storage
     .await?;
 
 // API access: generate API key for developers
-let (key, key_hash) = api_generator.generate();
+let pepper = ApiKeyPepper::from_file("./secrets/api-key.pepper")?;
+let api_generator = ApiKeyGenerator::new("sk_live", pepper);
+let (key, key_hash) = api_generator.generate()?;
 ```
 
 On subsequent refreshes, use `storage.rotate(&old_token_id, &new_token_id, ...)` rather than

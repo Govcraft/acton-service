@@ -209,6 +209,13 @@ pub struct ApiKeyConfig {
     #[serde(default = "default_api_key_prefix")]
     pub prefix: String,
 
+    /// File containing exactly 32 raw bytes of persistent server-side pepper.
+    ///
+    /// Required by [`Self::generator`]. Keep this secret outside API-key storage
+    /// and share it across replicas and restarts. No default secret is generated.
+    #[serde(default)]
+    pub pepper_path: Option<PathBuf>,
+
     /// Header name for API key (default: "X-API-Key")
     #[serde(default = "default_api_key_header")]
     pub header: String,
@@ -217,7 +224,7 @@ pub struct ApiKeyConfig {
     #[serde(default)]
     pub default_rate_limit: Option<u32>,
 
-    /// Storage backend: "redis", "postgres", or "turso"
+    /// Application-selected storage backend: "redis", "postgres", "mssql", "turso", or "surrealdb"
     #[serde(default = "default_storage_backend")]
     pub storage: String,
 }
@@ -227,10 +234,36 @@ impl Default for ApiKeyConfig {
         Self {
             enabled: true,
             prefix: default_api_key_prefix(),
+            pepper_path: None,
             header: default_api_key_header(),
             default_rate_limit: None,
             storage: default_storage_backend(),
         }
+    }
+}
+
+impl ApiKeyConfig {
+    /// Initialize the explicitly configured API-key generator before serving.
+    ///
+    /// Applications pass a clone of this generator into their API-key storage
+    /// constructor so issuance and verification use the same persistent pepper.
+    /// API-key storage and middleware are application-managed.
+    pub fn generator(&self) -> Result<super::api_keys::ApiKeyGenerator, crate::error::Error> {
+        use super::api_keys::{ApiKeyGenerator, ApiKeyPepper};
+        use crate::error::Error;
+
+        if !self.enabled {
+            return Err(Error::ValidationError(
+                "API-key authentication is disabled".to_string(),
+            ));
+        }
+        let path = self.pepper_path.as_ref().ok_or_else(|| {
+            Error::ValidationError("API-key configuration requires pepper_path".to_string())
+        })?;
+        Ok(ApiKeyGenerator::new(
+            self.prefix.clone(),
+            ApiKeyPepper::from_file(path)?,
+        ))
     }
 }
 
@@ -372,5 +405,25 @@ mod tests {
         assert!(config.enabled);
         assert_eq!(config.prefix, "sk_live");
         assert_eq!(config.header, "X-API-Key");
+        assert!(config.pepper_path.is_none());
+        assert!(config.generator().is_err());
+    }
+
+    #[test]
+    fn api_key_generator_requires_explicit_valid_configuration() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), [7; 32]).unwrap();
+        let config = ApiKeyConfig {
+            pepper_path: Some(file.path().to_path_buf()),
+            ..ApiKeyConfig::default()
+        };
+        let issuer = config.generator().unwrap();
+        let (key, hash) = issuer.generate().unwrap();
+        assert!(config.generator().unwrap().verify(&key, &hash).unwrap());
+        let disabled = ApiKeyConfig {
+            enabled: false,
+            ..config
+        };
+        assert!(disabled.generator().is_err());
     }
 }

@@ -55,11 +55,12 @@ pub mod saml;
 
 // Re-exports for convenience
 pub use config::{
-    AuthConfig, PasetoGenerationConfig, PasswordConfig, RefreshTokenConfig, TokenGenerationConfig,
+    ApiKeyConfig, AuthConfig, PasetoGenerationConfig, PasswordConfig, RefreshTokenConfig,
+    TokenGenerationConfig,
 };
 
 #[cfg(feature = "oauth")]
-pub use config::{ApiKeyConfig, OAuthConfig, OAuthProviderConfig};
+pub use config::{OAuthConfig, OAuthProviderConfig};
 
 pub use password::PasswordHasher;
 
@@ -85,7 +86,7 @@ pub use tokens::refresh::SurrealDbRefreshStorage;
 pub use tokens::jwt_generator::JwtGenerator;
 
 // API key exports
-pub use api_keys::{ApiKey, ApiKeyGenerator, ApiKeyStorage};
+pub use api_keys::{ApiKey, ApiKeyGenerator, ApiKeyPepper, ApiKeyStorage};
 
 #[cfg(feature = "cache")]
 pub use api_keys::RedisApiKeyStorage;
