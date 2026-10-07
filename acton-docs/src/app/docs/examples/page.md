@@ -90,7 +90,7 @@ Demonstrates:
 - Proto compilation via the acton-service `build_utils` helpers
 
 ```bash
-cargo run --manifest-path=acton-service/Cargo.toml --example ping-pong --features grpc
+cargo run -p acton-service-integration-tests --example ping-pong --features grpc
 ```
 
 **Best for**: First-time users, understanding basic patterns (start with `simple-api.rs` if you only need HTTP)
@@ -147,7 +147,7 @@ Demonstrates:
 - All other requests → axum HTTP handlers
 
 ```bash
-cargo run --manifest-path=acton-service/Cargo.toml --example single-port --features grpc
+cargo run -p acton-service-integration-tests --example single-port --features grpc
 ```
 
 Test HTTP:
@@ -183,7 +183,7 @@ Demonstrates:
 - Async event processing
 
 ```bash
-cargo run --manifest-path=acton-service/Cargo.toml --example event-driven --features grpc
+cargo run -p acton-service-integration-tests --example event-driven --features grpc
 ```
 
 Architecture:
@@ -414,16 +414,16 @@ All examples run from the repository root with updated paths:
 # Basic examples
 cargo run --manifest-path=acton-service/Cargo.toml --example simple-api
 cargo run --manifest-path=acton-service/Cargo.toml --example users-api
-cargo run --manifest-path=acton-service/Cargo.toml --example ping-pong --features grpc
+cargo run -p acton-service-integration-tests --example ping-pong --features grpc
 
 # Authorization (requires features)
 cargo run --manifest-path=acton-service/Cargo.toml --example cedar-authz --features cedar-authz,cache
 
 # gRPC (requires features)
-cargo run --manifest-path=acton-service/Cargo.toml --example single-port --features grpc
+cargo run -p acton-service-integration-tests --example single-port --features grpc
 
 # Events (requires features)
-cargo run --manifest-path=acton-service/Cargo.toml --example event-driven --features grpc
+cargo run -p acton-service-integration-tests --example event-driven --features grpc
 
 # Observability (requires features)
 cargo run --manifest-path=acton-service/Cargo.toml --example test-metrics --features otel-metrics

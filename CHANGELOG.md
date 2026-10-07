@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Independent core, audit, PostgreSQL, SQL Server, Turso, SurrealDB, and
+  ClickHouse packages, retaining the existing `acton-service` facade APIs.
+- Exhaustive nightly and release qualification tied to the exact commit being
+  published, with dependency-ordered workspace publication and a first-release
+  bootstrap route for new crate names.
+
+### Changed
+
+- Pull requests select Rust profiles from affected subsystems, cancel superseded
+  runs, and retain the required `ci-gate`. Shared contracts, dependency changes,
+  and unknown paths receive the complete matrix.
+- gRPC examples and SQL Server container tests live in a private integration
+  package, removing their build dependencies from ordinary facade compilation.
+- Workspace version advances to 0.47.0 for the component architecture. Cargo
+  feature unification exposes additional audit event variants when applications
+  combine the facade with standalone adapters enabling account/lockout events.
+
 ## [acton-service-v0.46.0] - 2026-10-06
 
 This release lets gRPC health checks share application state with custom

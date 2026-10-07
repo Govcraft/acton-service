@@ -604,7 +604,7 @@ curl http://localhost:8080/api/v1/cache-stats
 4. **Change the type**: Update `State<AppState>` to `State<YourState>` in all handlers
 5. **Re-exports included**: You don't need to add axum as a dependency; `State` is re-exported in the prelude
 
-For a complete example with event buses and gRPC, see the {% link href=githubUrl("/tree/main/acton-service/examples/events/event-driven.rs") %}event-driven example{% /link %}.
+For a complete example with event buses and gRPC, see the {% link href=githubUrl("/tree/main/acton-service-integration-tests/examples/events/event-driven.rs") %}event-driven example{% /link %}.
 
 ---
 

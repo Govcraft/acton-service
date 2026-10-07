@@ -1,0 +1,113 @@
+name: Release qualification
+
+on:
+  workflow_call:
+    inputs:
+      sha:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Exact commit SHA; leave empty to qualify the selected branch commit'
+        required: false
+        type: string
+  schedule:
+    - cron: '0 5 * * *'
+
+permissions:
+  contents: read
+
+# Qualification and publication must finish even when development moves on.
+concurrency:
+  group: qualification-${{ inputs.sha || github.sha }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.revision.outputs.sha }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Verify immutable qualification revision
+        id: revision
+        env:
+          EXPECTED_SHA: ${{ inputs.sha || github.sha }}
+        run: |
+          python -c 'import sys; sys.path.insert(0, "scripts/ci"); import os; from run_profile import verify_revision; verify_revision(os.environ["EXPECTED_SHA"])'
+          echo "sha=$EXPECTED_SHA" >> "$GITHUB_OUTPUT"
+      - name: Select every supported profile
+        id: plan
+        run: python scripts/ci/plan.py --full
+
+  rust:
+    needs: plan
+    uses: ./.github/workflows/rust-validation.yml
+    with:
+      sha: ${{ needs.plan.outputs.sha }}
+      matrix: ${{ needs.plan.outputs.matrix }}
+      exhaustive: true
+      # Exhaustive jobs fan out on hosted runners; one local runner serializes them.
+      linux-runner: ubuntu-latest
+
+  docs:
+    needs: plan
+    uses: ./.github/workflows/docs-validation.yml
+    with:
+      sha: ${{ needs.plan.outputs.sha }}
+
+  security:
+    needs: plan
+    uses: ./.github/workflows/security-audit.yml
+    with:
+      sha: ${{ needs.plan.outputs.sha }}
+
+  package:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install native prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler libkrb5-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: package
+      - name: Verify publication graph and packaged crates
+        env:
+          EXPECTED_SHA: ${{ needs.plan.outputs.sha }}
+        run: python scripts/ci/release.py dry-run
+
+  qualification-gate:
+    needs: [plan, rust, docs, security, package]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Require exhaustive successful qualification
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: python scripts/ci/gate.py qualification

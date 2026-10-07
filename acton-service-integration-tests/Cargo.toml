@@ -1,0 +1,57 @@
+[package]
+name = "acton-service-integration-tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+acton-service = { version = "0.47.0", path = "../acton-service", default-features = false }
+axum = { workspace = true, optional = true }
+chrono.workspace = true
+prost = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+testcontainers-modules = { version = "0.15.0", features = ["mssql_server"], optional = true }
+tokio.workspace = true
+tokio-rustls = { workspace = true, optional = true }
+tonic = { workspace = true, optional = true }
+tonic-prost = { workspace = true, optional = true }
+tracing.workspace = true
+uuid.workspace = true
+
+[build-dependencies]
+tonic-prost-build = { workspace = true, optional = true }
+
+
+[features]
+default = ["acton-service/default"]
+crypto-ring = ["acton-service/crypto-ring"]
+grpc = ["acton-service/grpc", "dep:tonic", "dep:prost", "dep:tonic-prost", "dep:tonic-prost-build"]
+tls = ["acton-service/tls", "dep:axum", "dep:tokio-rustls"]
+cedar-authz = ["acton-service/cedar-authz", "acton-service/auth"]
+mssql = ["acton-service/mssql", "acton-service/accounts", "acton-service/auth", "acton-service/audit", "dep:testcontainers-modules"]
+
+[[example]]
+name = "ping-pong"
+path = "examples/basic/ping-pong.rs"
+required-features = ["grpc"]
+
+[[example]]
+name = "single-port"
+path = "examples/grpc/single-port.rs"
+required-features = ["grpc"]
+
+[[example]]
+name = "cedar-grpc"
+path = "examples/grpc/cedar-grpc.rs"
+required-features = ["grpc", "cedar-authz"]
+
+[[example]]
+name = "event-driven"
+path = "examples/events/event-driven.rs"
+required-features = ["grpc"]
+
+[dev-dependencies]
+rcgen = "0.14.8"
+tempfile = "3.24.0"

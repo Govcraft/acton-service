@@ -21,7 +21,7 @@ Key concepts:
 
 Run with:
 ```bash
-cargo run --manifest-path=../../Cargo.toml --example event-driven --features grpc
+cargo run -p acton-service-integration-tests --example event-driven --features grpc
 ```
 
 ## Architecture Pattern
@@ -43,7 +43,7 @@ This pattern provides:
 
 Requires the `grpc` feature flag:
 ```bash
-cargo run --manifest-path=../../Cargo.toml --example event-driven --features grpc
+cargo run -p acton-service-integration-tests --example event-driven --features grpc
 ```
 
 ## Testing

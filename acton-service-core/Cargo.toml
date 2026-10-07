@@ -1,0 +1,14 @@
+[package]
+name = "acton-service-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Independent core contracts and implementation for acton-service"
+repository = "https://github.com/Govcraft/acton-service"
+
+[dependencies]
+serde.workspace = true
+
+[features]
+mssql = []

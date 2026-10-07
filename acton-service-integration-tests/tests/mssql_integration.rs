@@ -1,9 +1,4 @@
-#![cfg(all(
-    feature = "mssql",
-    feature = "accounts",
-    feature = "auth",
-    feature = "audit"
-))]
+#![cfg(feature = "mssql")]
 
 use acton_service::{
     accounts::{

@@ -1,0 +1,24 @@
+[package]
+name = "acton-service-surrealdb"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Independent surrealdb contracts and implementation for acton-service"
+repository = "https://github.com/Govcraft/acton-service"
+
+[dependencies]
+acton-service-audit = { version = "0.47.0", path = "../acton-service-audit" }
+acton-service-core = { version = "0.47.0", path = "../acton-service-core" }
+async-trait.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+surrealdb.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[features]
+accounts = ["acton-service-audit/accounts"]
+login-lockout = ["acton-service-audit/login-lockout"]

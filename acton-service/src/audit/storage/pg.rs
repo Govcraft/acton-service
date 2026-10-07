@@ -1,649 +1,108 @@
-//! PostgreSQL audit storage backend
-//!
-//! Enforces immutability using `CREATE RULE` to silently discard UPDATE/DELETE operations.
-
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use sqlx::PgPool;
-
-use super::lazy::InitializableStorage;
-use super::AuditStorage;
+//! Compatibility audit backend.
+use super::{AuditQuery, AuditStorage, AuditVerification};
 use crate::audit::event::AuditEvent;
 use crate::error::Error;
-
-/// PostgreSQL-backed audit storage
-pub struct PgAuditStorage {
-    pool: PgPool,
-}
-
+/// Compatibility backend preserving the service error type.
+pub struct PgAuditStorage(acton_service_postgres::storage::PgAuditStorage);
 impl PgAuditStorage {
-    /// Create a new PostgreSQL audit storage
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+    /// Create audit storage from an established connection.
+    pub fn new(connection: sqlx::PgPool) -> Self {
+        Self(acton_service_postgres::storage::PgAuditStorage::new(
+            connection,
+        ))
     }
-
-    /// Initialize the audit_events table and immutability rules
-    ///
-    /// Should be called once during application startup.
+    /// Initialize the backend schema and append-only protections.
     pub async fn initialize(&self) -> Result<(), Error> {
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS audit_events (
-                id UUID PRIMARY KEY,
-                timestamp TIMESTAMPTZ NOT NULL,
-                kind TEXT NOT NULL,
-                severity SMALLINT NOT NULL,
-                source_ip TEXT,
-                source_user_agent TEXT,
-                source_subject TEXT,
-                source_request_id TEXT,
-                method TEXT,
-                path TEXT,
-                status_code SMALLINT,
-                duration_ms BIGINT,
-                service_name TEXT NOT NULL,
-                metadata JSONB,
-                hash TEXT NOT NULL,
-                previous_hash TEXT,
-                sequence BIGINT NOT NULL UNIQUE
-            )
-            "#,
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(|e| Error::Internal(format!("Failed to create audit_events table: {}", e)))?;
-
-        // Create index on sequence for chain verification queries
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_audit_events_sequence ON audit_events (sequence)",
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(|e| Error::Internal(format!("Failed to create audit index: {}", e)))?;
-
-        // Create index on timestamp for range queries
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_audit_events_timestamp ON audit_events (timestamp)",
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(|e| Error::Internal(format!("Failed to create audit timestamp index: {}", e)))?;
-
-        // Concurrent construction avoids blocking append traffic on existing stores.
-        // Each field expression is framework-owned, never user-provided SQL.
-        for (name, expression) in [
-            ("kind", "kind"),
-            ("subject", "source_subject"),
-            ("request", "source_request_id"),
-            ("schema", "(metadata->>'schema')"),
-            ("entity", "(metadata->>'entity_id')"),
-            ("actor", "(metadata->>'actor')"),
-            ("user", "(metadata->>'user')"),
-        ] {
-            sqlx::query(&format!("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_audit_events_{name}_sequence ON audit_events ({expression}, sequence)"))
-                .execute(&self.pool).await
-                .map_err(|e| Error::Internal(format!("Failed to create audit investigation index: {e}")))?;
-        }
-
-        // Enforce immutability: silently discard UPDATE/DELETE
-        sqlx::query(
-            r#"
-            DO $$
-            BEGIN
-                IF NOT EXISTS (
-                    SELECT 1 FROM pg_rewrite
-                    WHERE ev_class = 'audit_events'::regclass AND rulename = 'audit_no_update'
-                ) THEN
-                    CREATE RULE audit_no_update AS ON UPDATE TO audit_events DO INSTEAD NOTHING;
-                END IF;
-
-                IF NOT EXISTS (
-                    SELECT 1 FROM pg_rewrite
-                    WHERE ev_class = 'audit_events'::regclass AND rulename = 'audit_no_delete'
-                ) THEN
-                    CREATE RULE audit_no_delete AS ON DELETE TO audit_events DO INSTEAD NOTHING;
-                END IF;
-            END
-            $$;
-            "#,
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(|e| {
-            Error::Internal(format!("Failed to create audit immutability rules: {}", e))
-        })?;
-
-        Ok(())
+        self.0.initialize().await.map_err(Into::into)
     }
 }
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 
 #[async_trait]
 impl AuditStorage for PgAuditStorage {
     async fn append(&self, event: &AuditEvent) -> Result<(), Error> {
-        sqlx::query(
-            r#"
-            INSERT INTO audit_events (
-                id, timestamp, kind, severity,
-                source_ip, source_user_agent, source_subject, source_request_id,
-                method, path, status_code, duration_ms,
-                service_name, metadata, hash, previous_hash, sequence
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-            "#,
-        )
-        .bind(event.id.as_uuid())
-        .bind(event.timestamp)
-        .bind(event.kind.to_string())
-        .bind(event.severity.as_syslog_severity() as i16)
-        .bind(&event.source.ip)
-        .bind(&event.source.user_agent)
-        .bind(&event.source.subject)
-        .bind(&event.source.request_id)
-        .bind(&event.method)
-        .bind(&event.path)
-        .bind(event.status_code.map(|c| c as i16))
-        .bind(event.duration_ms.map(|d| d as i64))
-        .bind(&event.service_name)
-        .bind(&event.metadata)
-        .bind(&event.hash)
-        .bind(&event.previous_hash)
-        .bind(event.sequence as i64)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| Error::Internal(format!("Failed to append audit event: {}", e)))?;
-
-        Ok(())
-    }
-
-    async fn latest(&self) -> Result<Option<AuditEvent>, Error> {
-        let row = sqlx::query_as::<_, AuditEventRow>(
-            "SELECT * FROM audit_events ORDER BY sequence DESC LIMIT 1",
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| Error::Internal(format!("Failed to fetch latest audit event: {}", e)))?;
-
-        Ok(row.map(Into::into))
-    }
-
-    async fn query_filtered(&self, q: &super::AuditQuery) -> Result<Vec<AuditEvent>, Error> {
-        q.validate()?;
-        let (comparison, direction) = match q.order {
-            super::AuditOrder::NewestFirst => ("<", "DESC"),
-            super::AuditOrder::OldestFirst => (">", "ASC"),
-        };
-        let kind = q.kind.as_ref().map(ToString::to_string);
-        let severity = q.severity.map(|v| i16::from(v.as_syslog_severity()));
-        let status_code = q.status_code.map(|v| v as i16);
-        let ceiling = q.through_sequence.map(|v| v as i64);
-        let cursor = q.cursor.map(|v| v as i64);
-        let limit = q.limit as i64;
-        let statement = format!(
-            r#"SELECT * FROM audit_events WHERE ($1::timestamptz IS NULL OR timestamp >= $1::timestamptz)
- AND ($2::timestamptz IS NULL OR timestamp <= $2::timestamptz)
- AND ($3::text IS NULL OR kind = $3::text)
- AND ($4::smallint IS NULL OR severity = $4::smallint)
- AND ($5::text IS NULL OR source_subject = $5::text)
- AND ($6::text IS NULL OR source_request_id = $6::text)
- AND ($7::text IS NULL OR service_name = $7::text)
- AND ($8::text IS NULL OR (($16::text[] IS NULL OR kind = ANY($16::text[]))
- AND (jsonb_typeof(metadata->'schema') = 'string' AND metadata->>'schema' = $8::text)))
- AND ($9::text IS NULL OR (($16::text[] IS NULL OR kind = ANY($16::text[]))
- AND (jsonb_typeof(metadata->'entity_id') = 'string' AND metadata->>'entity_id' = $9::text)))
- AND ($10::text IS NULL OR (($16::text[] IS NULL OR kind = ANY($16::text[]))
- AND (jsonb_typeof(metadata->'tenant_id') = 'string' AND metadata->>'tenant_id' = $10::text)))
- AND ($11::smallint IS NULL OR status_code = $11::smallint)
- AND ($12::bigint IS NULL OR sequence <= $12::bigint)
- AND ($13::text IS NULL OR source_subject = $13::text OR (($16::text[] IS NULL OR kind = ANY($16::text[]))
- AND ((jsonb_typeof(metadata->'user') = 'string' AND metadata->>'user' = $13::text) OR (jsonb_typeof(metadata->'actor') = 'string' AND metadata->>'actor' = $13::text))))
- AND ($14::bigint IS NULL OR sequence {comparison} $14::bigint)
- ORDER BY sequence {direction} LIMIT $15"#
-        );
-        // Re-plan optional filters for their actual values instead of allowing
-        // a cached generic plan to degrade selective searches into table scans.
-        let rows = sqlx::query_as::<_, AuditEventRow>(&statement)
-            .persistent(false)
-            .bind(q.from)
-            .bind(q.to)
-            .bind(&kind)
-            .bind(severity)
-            .bind(&q.subject)
-            .bind(&q.request_id)
-            .bind(&q.service_name)
-            .bind(&q.schema)
-            .bind(&q.entity_id)
-            .bind(&q.tenant_id)
-            .bind(status_code)
-            .bind(ceiling)
-            .bind(&q.actor)
-            .bind(cursor)
-            .bind(limit)
-            .bind(&q.metadata_kinds)
-            .fetch_all(&self.pool)
+        acton_service_audit::storage::AuditStorage::append(&self.0, event)
             .await
-            .map_err(|e| Error::Internal(format!("Failed to query audit events: {e}")))?;
-        Ok(rows.into_iter().map(Into::into).collect())
+            .map_err(Into::into)
     }
-
-    async fn query_sequence(
-        &self,
-        from: u64,
-        to: u64,
-        limit: usize,
-    ) -> Result<Vec<AuditEvent>, Error> {
-        let from = i64::try_from(from)
-            .map_err(|_| Error::Internal("Audit sequence exceeds storage range".into()))?;
-        let to = i64::try_from(to)
-            .map_err(|_| Error::Internal("Audit sequence exceeds storage range".into()))?;
-        let limit = i64::try_from(limit)
-            .map_err(|_| Error::Internal("Audit query limit exceeds storage range".into()))?;
-
-        let rows = sqlx::query_as::<_, AuditEventRow>(
-            "SELECT * FROM audit_events WHERE sequence >= $1 AND sequence <= $2 ORDER BY sequence ASC LIMIT $3",
-        )
-        .bind(from)
-        .bind(to)
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| Error::Internal(format!("Failed to query audit events: {}", e)))?;
-
-        Ok(rows.into_iter().map(Into::into).collect())
+    async fn query_filtered(&self, _query: &AuditQuery) -> Result<Vec<AuditEvent>, Error> {
+        acton_service_audit::storage::AuditStorage::query_filtered(&self.0, &_query.into())
+            .await
+            .map_err(Into::into)
     }
-
+    async fn latest(&self) -> Result<Option<AuditEvent>, Error> {
+        acton_service_audit::storage::AuditStorage::latest(&self.0)
+            .await
+            .map_err(Into::into)
+    }
     async fn query_range(
         &self,
         from: DateTime<Utc>,
         to: DateTime<Utc>,
         limit: usize,
     ) -> Result<Vec<AuditEvent>, Error> {
-        let rows = sqlx::query_as::<_, AuditEventRow>(
-            "SELECT * FROM audit_events WHERE timestamp >= $1 AND timestamp <= $2 ORDER BY sequence ASC LIMIT $3",
-        )
-        .bind(from)
-        .bind(to)
-        .bind(limit as i64)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| Error::Internal(format!("Failed to query audit events: {}", e)))?;
-
-        Ok(rows.into_iter().map(Into::into).collect())
+        acton_service_audit::storage::AuditStorage::query_range(&self.0, from, to, limit)
+            .await
+            .map_err(Into::into)
     }
-
+    async fn query_sequence(
+        &self,
+        _from: u64,
+        _to: u64,
+        _limit: usize,
+    ) -> Result<Vec<AuditEvent>, Error> {
+        acton_service_audit::storage::AuditStorage::query_sequence(&self.0, _from, _to, _limit)
+            .await
+            .map_err(Into::into)
+    }
+    async fn sequence_bounds(&self) -> Result<Option<(u64, u64)>, Error> {
+        acton_service_audit::storage::AuditStorage::sequence_bounds(&self.0)
+            .await
+            .map_err(Into::into)
+    }
+    async fn verify_chain_range(&self, from: u64, to: u64) -> Result<AuditVerification, Error> {
+        acton_service_audit::storage::AuditStorage::verify_chain_range(&self.0, from, to)
+            .await
+            .map_err(Into::into)
+    }
+    async fn verify_chain(&self, from_sequence: u64) -> Result<Option<u64>, Error> {
+        acton_service_audit::storage::AuditStorage::verify_chain(&self.0, from_sequence)
+            .await
+            .map_err(Into::into)
+    }
     async fn query_before(
         &self,
-        cutoff: DateTime<Utc>,
-        limit: usize,
+        _cutoff: DateTime<Utc>,
+        _limit: usize,
     ) -> Result<Vec<AuditEvent>, Error> {
-        let rows = sqlx::query_as::<_, AuditEventRow>(
-            "SELECT * FROM audit_events WHERE timestamp < $1 ORDER BY sequence ASC LIMIT $2",
-        )
-        .bind(cutoff)
-        .bind(limit as i64)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| {
-            Error::Internal(format!("Failed to query audit events before cutoff: {}", e))
-        })?;
-
-        Ok(rows.into_iter().map(Into::into).collect())
-    }
-
-    async fn purge_before(&self, cutoff: DateTime<Utc>) -> Result<u64, Error> {
-        // Temporarily drop the no-delete rule
-        sqlx::query("DROP RULE IF EXISTS audit_no_delete ON audit_events")
-            .execute(&self.pool)
+        acton_service_audit::storage::AuditStorage::query_before(&self.0, _cutoff, _limit)
             .await
-            .map_err(|e| Error::Internal(format!("Failed to drop audit_no_delete rule: {}", e)))?;
-
-        // Perform the delete
-        let result = sqlx::query("DELETE FROM audit_events WHERE timestamp < $1")
-            .bind(cutoff)
-            .execute(&self.pool)
-            .await;
-
-        // Reinstate the rule regardless of delete outcome
-        let reinstate_result = sqlx::query(
-            "CREATE RULE audit_no_delete AS ON DELETE TO audit_events DO INSTEAD NOTHING",
-        )
-        .execute(&self.pool)
-        .await;
-
-        if let Err(e) = reinstate_result {
-            tracing::error!("CRITICAL: Failed to reinstate audit_no_delete rule: {}", e);
-        }
-
-        let rows =
-            result.map_err(|e| Error::Internal(format!("Failed to purge audit events: {}", e)))?;
-
-        Ok(rows.rows_affected())
+            .map_err(Into::into)
     }
-
-    async fn verify_chain(&self, from_sequence: u64) -> Result<Option<u64>, Error> {
-        let query_from = i64::try_from(from_sequence.saturating_sub(1)).map_err(|_| {
-            Error::Internal("Audit verification sequence exceeds the storage range".to_string())
-        })?;
-        let rows = sqlx::query_as::<_, AuditEventRow>(
-            "SELECT * FROM audit_events WHERE sequence >= $1 ORDER BY sequence ASC",
-        )
-        .bind(query_from)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| {
-            Error::Internal(format!(
-                "Failed to fetch audit events for verification: {}",
-                e
-            ))
-        })?;
-
-        let events: Vec<AuditEvent> = rows.into_iter().map(Into::into).collect();
-
-        super::verify_stored_chain(&events, from_sequence)
+    async fn purge_before(&self, _cutoff: DateTime<Utc>) -> Result<u64, Error> {
+        acton_service_audit::storage::AuditStorage::purge_before(&self.0, _cutoff)
+            .await
+            .map_err(Into::into)
+    }
+    async fn ensure_ready(&self) -> Result<(), Error> {
+        acton_service_audit::storage::AuditStorage::ensure_ready(&self.0)
+            .await
+            .map_err(Into::into)
     }
 }
-
 #[async_trait]
-impl InitializableStorage for PgAuditStorage {
-    type Conn = PgPool;
-
+impl super::lazy::InitializableStorage for PgAuditStorage {
+    type Conn = <acton_service_postgres::storage::PgAuditStorage as acton_service_audit::storage::lazy::InitializableStorage>::Conn;
     fn from_conn(conn: Self::Conn) -> Self {
-        Self::new(conn)
+        Self(<acton_service_postgres::storage::PgAuditStorage as acton_service_audit::storage::lazy::InitializableStorage>::from_conn(conn))
     }
-
     async fn init_schema(&self) -> Result<(), Error> {
-        self.initialize().await
+        acton_service_audit::storage::lazy::InitializableStorage::init_schema(&self.0)
+            .await
+            .map_err(Into::into)
     }
-
     fn backend_name() -> &'static str {
-        "PostgreSQL"
-    }
-}
-
-/// Internal row type for sqlx mapping
-#[derive(sqlx::FromRow)]
-struct AuditEventRow {
-    id: uuid::Uuid,
-    timestamp: DateTime<Utc>,
-    kind: String,
-    severity: i16,
-    source_ip: Option<String>,
-    source_user_agent: Option<String>,
-    source_subject: Option<String>,
-    source_request_id: Option<String>,
-    method: Option<String>,
-    path: Option<String>,
-    status_code: Option<i16>,
-    duration_ms: Option<i64>,
-    service_name: String,
-    metadata: Option<serde_json::Value>,
-    hash: Option<String>,
-    previous_hash: Option<String>,
-    sequence: i64,
-}
-
-impl From<AuditEventRow> for AuditEvent {
-    fn from(row: AuditEventRow) -> Self {
-        use crate::audit::event::{AuditEventKind, AuditSeverity, AuditSource};
-
-        let kind = match row.kind.as_str() {
-            "auth.token.validated" => AuditEventKind::AuthTokenValidated,
-            "auth.login.success" => AuditEventKind::AuthLoginSuccess,
-            "auth.login.failed" => AuditEventKind::AuthLoginFailed,
-            "auth.token.missing" => AuditEventKind::AuthTokenMissing,
-            "auth.token.invalid" => AuditEventKind::AuthTokenInvalid,
-            "auth.logout" => AuditEventKind::AuthLogout,
-            "auth.token.refresh" => AuditEventKind::AuthTokenRefresh,
-            "auth.token.revoked" => AuditEventKind::AuthTokenRevoked,
-            "auth.password.changed" => AuditEventKind::AuthPasswordChanged,
-            "auth.apikey.created" => AuditEventKind::AuthApiKeyCreated,
-            "auth.apikey.revoked" => AuditEventKind::AuthApiKeyRevoked,
-            "auth.oauth.callback" => AuditEventKind::AuthOAuthCallback,
-            "auth.permission.denied" => AuditEventKind::AuthPermissionDenied,
-            "auth.key.rotated" => AuditEventKind::AuthKeyRotated,
-            "auth.key.retired" => AuditEventKind::AuthKeyRetired,
-            "auth.key.rotation_failed" => AuditEventKind::AuthKeyRotationFailed,
-            #[cfg(feature = "login-lockout")]
-            "auth.account.locked" => AuditEventKind::AuthAccountLocked,
-            #[cfg(feature = "login-lockout")]
-            "auth.account.unlocked" => AuditEventKind::AuthAccountUnlocked,
-            #[cfg(feature = "accounts")]
-            "account.created" => AuditEventKind::AccountCreated,
-            #[cfg(feature = "accounts")]
-            "account.disabled" => AuditEventKind::AccountDisabled,
-            #[cfg(feature = "accounts")]
-            "account.enabled" => AuditEventKind::AccountEnabled,
-            #[cfg(feature = "accounts")]
-            "account.locked" => AuditEventKind::AccountLocked,
-            #[cfg(feature = "accounts")]
-            "account.unlocked" => AuditEventKind::AccountUnlocked,
-            #[cfg(feature = "accounts")]
-            "account.expired" => AuditEventKind::AccountExpired,
-            #[cfg(feature = "accounts")]
-            "account.deleted" => AuditEventKind::AccountDeleted,
-            #[cfg(feature = "accounts")]
-            "account.updated" => AuditEventKind::AccountUpdated,
-            "config.loaded" => AuditEventKind::ConfigLoaded,
-            "config.drift_detected" => AuditEventKind::ConfigDriftDetected,
-            "http.request" => AuditEventKind::HttpRequest,
-            "http.request.denied" => AuditEventKind::HttpRequestDenied,
-            other => AuditEventKind::Custom(super::parse_custom_kind(other)),
-        };
-
-        let severity = match row.severity {
-            0 => AuditSeverity::Emergency,
-            1 => AuditSeverity::Alert,
-            2 => AuditSeverity::Critical,
-            3 => AuditSeverity::Error,
-            4 => AuditSeverity::Warning,
-            5 => AuditSeverity::Notice,
-            7 => AuditSeverity::Debug,
-            _ => AuditSeverity::Informational,
-        };
-
-        AuditEvent {
-            id: row.id.into(),
-            timestamp: row.timestamp,
-            kind,
-            severity,
-            source: AuditSource {
-                ip: row.source_ip,
-                user_agent: row.source_user_agent,
-                subject: row.source_subject,
-                request_id: row.source_request_id,
-            },
-            method: row.method,
-            path: row.path,
-            status_code: row.status_code.map(|c| c as u16),
-            duration_ms: row.duration_ms.map(|d| d as u64),
-            service_name: row.service_name,
-            metadata: row.metadata,
-            hash: row.hash,
-            previous_hash: row.previous_hash,
-            sequence: row.sequence as u64,
-        }
-    }
-}
-
-#[cfg(test)]
-mod verification_tests {
-    use super::*;
-    use crate::audit::chain::AuditChain;
-    use crate::audit::event::{AuditEventKind, AuditSeverity};
-
-    #[tokio::test]
-    #[ignore = "requires AUDIT_TEST_DATABASE_URL pointing to a dedicated PostgreSQL test database"]
-    async fn verifies_postgres_suffix_and_retention_boundaries() {
-        let url = std::env::var("AUDIT_TEST_DATABASE_URL").expect("dedicated test database URL");
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(1)
-            .connect(&url)
-            .await
-            .expect("connect to test database");
-        let schema = format!("audit_verify_{}", uuid::Uuid::new_v4().simple());
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
-            .execute(&pool)
-            .await
-            .unwrap();
-        let shadow_schema = format!("{schema}_shadow");
-        sqlx::query(&format!("CREATE SCHEMA {shadow_schema}"))
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query(&format!("SET search_path TO {shadow_schema}"))
-            .execute(&pool)
-            .await
-            .unwrap();
-        PgAuditStorage::new(pool.clone())
-            .initialize()
-            .await
-            .unwrap();
-        sqlx::query(&format!("SET search_path TO {schema}"))
-            .execute(&pool)
-            .await
-            .unwrap();
-        let storage = PgAuditStorage::new(pool.clone());
-        storage.initialize().await.unwrap();
-        assert!(storage.verify_chain(1).await.is_err());
-
-        let mut chain = AuditChain::new("postgres-verification-test".to_string());
-        let mut events = Vec::new();
-        for offset in 0..5 {
-            let mut event = AuditEvent::new(
-                AuditEventKind::HttpRequest,
-                AuditSeverity::Informational,
-                "postgres-verification-test".to_string(),
-            );
-            event.timestamp =
-                DateTime::from_timestamp(1_700_000_000 + offset, 123_456_789).unwrap();
-            event.metadata =
-                Some(serde_json::json!({"actor":"actor_a","schema":"case","entity_id":"case_a"}));
-            event.source.request_id = Some("req_a".into());
-            event.status_code = Some(403);
-            if offset == 0 {
-                event.id = "dca93650-9d2c-4ca8-a00f-79a63467c187".parse().unwrap();
-            }
-            if offset == 4 {
-                event.kind = AuditEventKind::AuthTokenValidated;
-            }
-            let event = chain.seal(event);
-            storage.append(&event).await.unwrap();
-            assert_eq!(
-                storage.latest().await.unwrap().unwrap().timestamp,
-                event.timestamp
-            );
-            events.push(event);
-        }
-        // Identically named rules in another schema must not disable protection.
-        assert_eq!(
-            sqlx::query("DELETE FROM audit_events WHERE sequence = 5")
-                .execute(&pool)
-                .await
-                .unwrap()
-                .rows_affected(),
-            0
-        );
-        assert_eq!(
-            sqlx::query("UPDATE audit_events SET path = '/blocked' WHERE sequence = 4")
-                .execute(&pool)
-                .await
-                .unwrap()
-                .rows_affected(),
-            0
-        );
-        assert_eq!(storage.sequence_bounds().await.unwrap(), Some((1, 5)));
-        let mut q = super::super::AuditQuery {
-            through_sequence: Some(4),
-            limit: 2,
-            actor: Some("actor_a".into()),
-            schema: Some("case".into()),
-            entity_id: Some("case_a".into()),
-            status_code: Some(403),
-            request_id: Some("req_a".into()),
-            kind: Some(AuditEventKind::HttpRequest),
-            severity: Some(AuditSeverity::Informational),
-            from: Some(events[0].timestamp),
-            to: Some(events[4].timestamp),
-            ..Default::default()
-        };
-        assert_eq!(
-            storage
-                .query_filtered(&q)
-                .await
-                .unwrap()
-                .iter()
-                .map(|e| e.sequence)
-                .collect::<Vec<_>>(),
-            vec![4, 3]
-        );
-        q.cursor = Some(3);
-        assert_eq!(
-            storage
-                .query_filtered(&q)
-                .await
-                .unwrap()
-                .iter()
-                .map(|e| e.sequence)
-                .collect::<Vec<_>>(),
-            vec![2, 1]
-        );
-        q.order = super::super::AuditOrder::OldestFirst;
-        assert_eq!(
-            storage
-                .query_filtered(&q)
-                .await
-                .unwrap()
-                .iter()
-                .map(|e| e.sequence)
-                .collect::<Vec<_>>(),
-            vec![4]
-        );
-        q.metadata_kinds = Some(vec![]);
-        assert!(storage.query_filtered(&q).await.unwrap().is_empty());
-        q.metadata_kinds = Some(vec!["http.request".into()]);
-        assert_eq!(storage.query_filtered(&q).await.unwrap().len(), 1);
-        q.actor = Some("actor_a' OR 1=1 --".into());
-        assert!(storage.query_filtered(&q).await.unwrap().is_empty());
-        assert_eq!(
-            storage
-                .query_sequence(2, 4, 2)
-                .await
-                .unwrap()
-                .iter()
-                .map(|event| event.sequence)
-                .collect::<Vec<_>>(),
-            vec![2, 3]
-        );
-        assert_eq!(
-            storage.verify_chain_range(2, 4).await.unwrap(),
-            super::super::AuditVerification::Consistent
-        );
-        for from in [0, 1, 2, 3, 5] {
-            assert_eq!(storage.verify_chain(from).await.unwrap(), None);
-        }
-        assert!(storage.verify_chain(6).await.is_err());
-        assert!(storage.verify_chain(u64::MAX).await.is_err());
-        assert_eq!(storage.purge_before(events[2].timestamp).await.unwrap(), 2);
-        assert!(storage.verify_chain(1).await.is_err());
-        assert!(storage.verify_chain(3).await.is_err());
-        assert_eq!(storage.verify_chain(4).await.unwrap(), None);
-
-        // Simulate privileged tampering that bypasses the immutability rule.
-        sqlx::query("DROP RULE audit_no_update ON audit_events")
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("UPDATE audit_events SET path = '/tampered' WHERE sequence = 4")
-            .execute(&pool)
-            .await
-            .unwrap();
-        assert_eq!(storage.verify_chain(4).await.unwrap(), Some(4));
-        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query(&format!("DROP SCHEMA {shadow_schema} CASCADE"))
-            .execute(&pool)
-            .await
-            .unwrap();
-        pool.close().await;
+        <acton_service_postgres::storage::PgAuditStorage as acton_service_audit::storage::lazy::InitializableStorage>::backend_name()
     }
 }

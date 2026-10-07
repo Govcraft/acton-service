@@ -1,0 +1,15 @@
+# Independent storage packages
+
+Keep acton-service as the public compatibility facade. Extract driver-independent connection configuration, structured database error vocabulary and a storage-boundary error into acton-service-core. Extract audit event identifiers, events, BLAKE3 chains, audit configuration, bounded query contracts and storage traits into acton-service-audit. Move actual connection management, SQL/schema initialization, event parsing and backend unit tests into acton-service-postgres, acton-service-mssql, acton-service-turso, acton-service-surrealdb and acton-service-clickhouse.
+
+Adapter packages depend on core and optionally audit, never on the facade or another driver. The facade retains its Error, original AuditStorage trait and actor wiring. Its modules wrap adapter concrete types and implement facade traits by delegating to shared contracts, preserving error messages/categories through explicit conversions. Existing custom AuditStorage implementations continue to compile. Driver-specific From conversions remain on facade-owned DatabaseError and Error for compatibility; shared vocabulary and the core storage error do not import drivers.
+
+Move SQL Server container test dependencies into the private integration harness, activated only for its SQL Server profile. Move protobuf generation and gRPC examples into a private harness package so production builds do not invoke protoc or compile build-time protobuf tooling. Public build_utils remains available behind grpc.
+
+Validation: standalone core/audit/adapter cargo check, Clippy with denied warnings and Nextest, facade default/minimal/full and each backend audit profile; retain all unit tests, including chain tampering, query bounds, error classification and deferred schema readiness. Verify existing custom facade AuditStorage implementations and facade trait object identity. Use component packages in selective CI and qualify all facade profiles before publication.
+
+Publish in dependency order: core, audit, adapters, facade. The CLI and integration harness remain private workspace packages. Root approved a backwards-compatible 0.47.0 minor release. PostgreSQL exposes mutually exclusive crypto-aws-lc-rs (default) and crypto-ring providers; other adapters retain their existing dependency provider settings. Pool agents and account/auth integration remain facade orchestration.
+
+## Hosted qualification follow-up
+
+Keep protobuf-dependent TLS regressions in the private integration harness, adding a `tls` feature and a test profile with `grpc,tls`. Preserve both live RPC assertions and keep timeout unit tests in the facade. Activate the container dependency exclusively with the harness `mssql` feature. Validate both gRPC facade configurations and harness examples under the hosted Rust toolchain.

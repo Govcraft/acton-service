@@ -532,123 +532,10 @@ pub struct DatabaseConfig {
     pub mssql_auth: MssqlAuthMode,
 }
 
-/// Authentication used by the Microsoft SQL Server connection pool.
 #[cfg(feature = "mssql")]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum MssqlAuthMode {
-    /// Use the credentials encoded in the ADO connection string.
-    #[default]
-    ConnectionString,
-    /// Authenticate as the service process using SSPI or Kerberos/GSSAPI.
-    Integrated,
-}
+pub use acton_service_core::config::MssqlAuthMode;
 
-/// Turso/libsql connection mode
-#[cfg(feature = "turso")]
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum TursoMode {
-    /// Local SQLite file (no network, like regular SQLite)
-    #[default]
-    Local,
-    /// Remote-only (connect to Turso cloud or libsql-server)
-    Remote,
-    /// Embedded replica (local SQLite that syncs with remote Turso)
-    EmbeddedReplica,
-}
-
-/// Turso/libsql database configuration
-#[cfg(feature = "turso")]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TursoConfig {
-    /// Connection mode
-    #[serde(default)]
-    pub mode: TursoMode,
-
-    /// Local database file path (required for Local and EmbeddedReplica modes)
-    #[serde(default)]
-    pub path: Option<PathBuf>,
-
-    /// Remote database URL (required for Remote and EmbeddedReplica modes)
-    /// Format: libsql://your-db.turso.io or http://localhost:8080
-    #[serde(default)]
-    pub url: Option<String>,
-
-    /// Authentication token (required for Remote and EmbeddedReplica modes)
-    #[serde(default)]
-    pub auth_token: Option<String>,
-
-    /// Sync interval in seconds (EmbeddedReplica mode only)
-    /// If set, enables automatic background sync
-    #[serde(default)]
-    pub sync_interval_secs: Option<u64>,
-
-    /// Encryption key for local database (optional, all modes)
-    #[serde(default)]
-    pub encryption_key: Option<String>,
-
-    /// Read-your-writes consistency (EmbeddedReplica mode only)
-    /// When true, writes are visible locally before sync completes
-    #[serde(default = "default_true")]
-    pub read_your_writes: bool,
-
-    /// Maximum retry attempts for connection
-    #[serde(default = "default_max_retries")]
-    pub max_retries: u32,
-
-    /// Delay between retry attempts in seconds
-    #[serde(default = "default_retry_delay")]
-    pub retry_delay_secs: u64,
-
-    /// Whether database is optional (service can start without it)
-    #[serde(default = "default_false")]
-    pub optional: bool,
-
-    /// Whether to initialize connection lazily (in background)
-    #[serde(default = "default_lazy_init")]
-    pub lazy_init: bool,
-}
-
-/// SurrealDB database configuration
-#[cfg(feature = "surrealdb")]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SurrealDbConfig {
-    /// Connection URL (ws://localhost:8000, mem://, http://localhost:8000, etc.)
-    pub url: String,
-
-    /// Namespace to use
-    #[serde(default = "default_surrealdb_namespace")]
-    pub namespace: String,
-
-    /// Database to use
-    #[serde(default = "default_surrealdb_database")]
-    pub database: String,
-
-    /// Username for authentication (optional, for root-level access)
-    #[serde(default)]
-    pub username: Option<String>,
-
-    /// Password for authentication (optional, for root-level access)
-    #[serde(default)]
-    pub password: Option<String>,
-
-    /// Maximum retry attempts for establishing connection
-    #[serde(default = "default_max_retries")]
-    pub max_retries: u32,
-
-    /// Delay between retry attempts in seconds
-    #[serde(default = "default_retry_delay")]
-    pub retry_delay_secs: u64,
-
-    /// Whether database is optional (service can start without it)
-    #[serde(default = "default_false")]
-    pub optional: bool,
-
-    /// Whether to initialize connection lazily (in background)
-    #[serde(default = "default_lazy_init")]
-    pub lazy_init: bool,
-}
+pub use acton_service_core::config::{SurrealDbConfig, TursoConfig, TursoMode};
 
 /// Redis configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -712,48 +599,7 @@ pub struct NatsConfig {
     pub lazy_init: bool,
 }
 
-/// ClickHouse analytical database configuration
-///
-/// ClickHouse is a columnar OLAP database used as a complementary analytical store.
-/// Unlike the primary database backends (PostgreSQL, Turso, SurrealDB), ClickHouse
-/// is composable and can be used alongside any of them.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClickHouseConfig {
-    /// ClickHouse HTTP URL (e.g., `http://localhost:8123`)
-    pub url: String,
-
-    /// Database name
-    #[serde(default = "default_clickhouse_database")]
-    pub database: String,
-
-    /// Username for authentication
-    #[serde(default)]
-    pub username: Option<String>,
-
-    /// Password for authentication
-    #[serde(default)]
-    pub password: Option<String>,
-
-    /// Maximum retry attempts for establishing connection
-    #[serde(default = "default_max_retries")]
-    pub max_retries: u32,
-
-    /// Delay between retry attempts in seconds
-    #[serde(default = "default_retry_delay")]
-    pub retry_delay_secs: u64,
-
-    /// Whether ClickHouse is optional (service can start without it)
-    #[serde(default = "default_false")]
-    pub optional: bool,
-
-    /// Whether to initialize connection lazily (in background)
-    #[serde(default = "default_lazy_init")]
-    pub lazy_init: bool,
-}
-
-fn default_clickhouse_database() -> String {
-    "default".to_string()
-}
+pub use acton_service_core::config::ClickHouseConfig;
 
 /// OpenTelemetry configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1769,14 +1615,6 @@ fn default_route_burst_size() -> u32 {
     10 // 10% burst allowance by default
 }
 
-fn default_max_connections() -> u32 {
-    50
-}
-
-fn default_min_connections() -> u32 {
-    5
-}
-
 fn default_connection_timeout() -> u64 {
     10
 }
@@ -1807,16 +1645,6 @@ fn default_retry_delay() -> u64 {
 
 fn default_lazy_init() -> bool {
     true
-}
-
-#[cfg(feature = "surrealdb")]
-fn default_surrealdb_namespace() -> String {
-    "default".to_string()
-}
-
-#[cfg(feature = "surrealdb")]
-fn default_surrealdb_database() -> String {
-    "default".to_string()
 }
 
 // Security headers default functions
@@ -2501,6 +2329,33 @@ where
             custom: T::default(),
         }
     }
+}
+
+impl From<&DatabaseConfig> for acton_service_core::config::DatabaseConfig {
+    fn from(config: &DatabaseConfig) -> Self {
+        Self {
+            url: config.url.clone(),
+            max_connections: config.max_connections,
+            min_connections: config.min_connections,
+            connection_timeout_secs: config.connection_timeout_secs,
+            max_retries: config.max_retries,
+            retry_delay_secs: config.retry_delay_secs,
+            optional: config.optional,
+            lazy_init: config.lazy_init,
+            #[cfg(feature = "mssql")]
+            mssql_auth: config.mssql_auth,
+            #[cfg(not(feature = "mssql"))]
+            mssql_auth: acton_service_core::config::MssqlAuthMode::ConnectionString,
+        }
+    }
+}
+
+fn default_max_connections() -> u32 {
+    50
+}
+
+fn default_min_connections() -> u32 {
+    5
 }
 
 #[cfg(test)]

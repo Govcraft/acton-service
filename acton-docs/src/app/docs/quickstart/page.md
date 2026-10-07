@@ -174,7 +174,7 @@ cargo run --manifest-path=acton-service/Cargo.toml --example simple-api
 cargo run --manifest-path=acton-service/Cargo.toml --example users-api
 
 # Run the dual HTTP+gRPC example
-cargo run --manifest-path=acton-service/Cargo.toml --example ping-pong --features grpc
+cargo run -p acton-service-integration-tests --example ping-pong --features grpc
 ```
 
 ## Common First Questions

@@ -1,0 +1,637 @@
+//! Turso/libsql audit storage backend
+//!
+//! Enforces immutability using triggers that RAISE(ABORT) on UPDATE/DELETE.
+
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use std::sync::Arc;
+
+use super::AuditStorage;
+use crate::audit::event::{AuditEvent, AuditEventKind, AuditSeverity, AuditSource};
+use crate::error::Error;
+
+/// Turso-backed audit storage
+pub struct TursoAuditStorage {
+    db: Arc<libsql::Database>,
+}
+
+impl TursoAuditStorage {
+    /// Create a new Turso audit storage
+    pub fn new(db: Arc<libsql::Database>) -> Self {
+        Self { db }
+    }
+
+    /// Initialize the audit_events table and immutability triggers
+    pub async fn initialize(&self) -> Result<(), Error> {
+        let conn = self
+            .db
+            .connect()
+            .map_err(|e| Error::Internal(format!("Failed to connect for audit init: {}", e)))?;
+
+        conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS audit_events (
+                id TEXT PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                severity INTEGER NOT NULL,
+                source_ip TEXT,
+                source_user_agent TEXT,
+                source_subject TEXT,
+                source_request_id TEXT,
+                method TEXT,
+                path TEXT,
+                status_code INTEGER,
+                duration_ms INTEGER,
+                service_name TEXT NOT NULL,
+                metadata TEXT,
+                hash TEXT NOT NULL,
+                previous_hash TEXT,
+                sequence INTEGER NOT NULL UNIQUE
+            )
+            "#,
+            (),
+        )
+        .await
+        .map_err(|e| Error::Internal(format!("Failed to create audit_events table: {}", e)))?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_events_sequence ON audit_events (sequence)",
+            (),
+        )
+        .await
+        .map_err(|e| Error::Internal(format!("Failed to create audit index: {}", e)))?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_events_timestamp ON audit_events (timestamp)",
+            (),
+        )
+        .await
+        .map_err(|e| Error::Internal(format!("Failed to create audit timestamp index: {}", e)))?;
+
+        // Immutability triggers
+        conn.execute(
+            r#"
+            CREATE TRIGGER IF NOT EXISTS audit_no_update
+            BEFORE UPDATE ON audit_events
+            BEGIN
+                SELECT RAISE(ABORT, 'audit events are immutable');
+            END
+            "#,
+            (),
+        )
+        .await
+        .map_err(|e| Error::Internal(format!("Failed to create update trigger: {}", e)))?;
+
+        conn.execute(
+            r#"
+            CREATE TRIGGER IF NOT EXISTS audit_no_delete
+            BEFORE DELETE ON audit_events
+            BEGIN
+                SELECT RAISE(ABORT, 'audit events are immutable');
+            END
+            "#,
+            (),
+        )
+        .await
+        .map_err(|e| Error::Internal(format!("Failed to create delete trigger: {}", e)))?;
+
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl AuditStorage for TursoAuditStorage {
+    async fn append(&self, event: &AuditEvent) -> Result<(), Error> {
+        let conn = self
+            .db
+            .connect()
+            .map_err(|e| Error::Internal(format!("Failed to connect for audit append: {}", e)))?;
+
+        let metadata_str = event
+            .metadata
+            .as_ref()
+            .map(|m| serde_json::to_string(m).unwrap_or_default());
+
+        conn.execute(
+            r#"
+            INSERT INTO audit_events (
+                id, timestamp, kind, severity,
+                source_ip, source_user_agent, source_subject, source_request_id,
+                method, path, status_code, duration_ms,
+                service_name, metadata, hash, previous_hash, sequence
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+            "#,
+            libsql::params![
+                event.id.as_uuid().to_string(),
+                event.timestamp.to_rfc3339(),
+                event.kind.to_string(),
+                event.severity.as_syslog_severity() as i64,
+                event.source.ip.clone(),
+                event.source.user_agent.clone(),
+                event.source.subject.clone(),
+                event.source.request_id.clone(),
+                event.method.clone(),
+                event.path.clone(),
+                event.status_code.map(|c| c as i64),
+                event.duration_ms.map(|d| d as i64),
+                event.service_name.clone(),
+                metadata_str,
+                event.hash.clone(),
+                event.previous_hash.clone(),
+                event.sequence as i64,
+            ],
+        )
+        .await
+        .map_err(|e| Error::Internal(format!("Failed to append audit event: {}", e)))?;
+
+        Ok(())
+    }
+
+    async fn latest(&self) -> Result<Option<AuditEvent>, Error> {
+        let conn = self
+            .db
+            .connect()
+            .map_err(|e| Error::Internal(format!("Failed to connect for audit query: {}", e)))?;
+
+        let mut rows = conn
+            .query(
+                "SELECT * FROM audit_events ORDER BY sequence DESC LIMIT 1",
+                (),
+            )
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to query latest audit event: {}", e)))?;
+
+        match rows.next().await {
+            Ok(Some(row)) => Ok(Some(row_to_event(&row)?)),
+            Ok(None) => Ok(None),
+            Err(e) => Err(Error::Internal(format!(
+                "Failed to read audit event row: {}",
+                e
+            ))),
+        }
+    }
+
+    async fn query_sequence(
+        &self,
+        from: u64,
+        to: u64,
+        limit: usize,
+    ) -> Result<Vec<AuditEvent>, Error> {
+        let from = i64::try_from(from)
+            .map_err(|_| Error::Internal("Audit sequence exceeds storage range".into()))?;
+        let to = i64::try_from(to)
+            .map_err(|_| Error::Internal("Audit sequence exceeds storage range".into()))?;
+        let limit = i64::try_from(limit)
+            .map_err(|_| Error::Internal("Audit query limit exceeds storage range".into()))?;
+
+        let conn = self
+            .db
+            .connect()
+            .map_err(|e| Error::Internal(format!("Failed to connect for audit query: {}", e)))?;
+
+        let mut rows = conn
+            .query(
+                "SELECT * FROM audit_events WHERE sequence >= ?1 AND sequence <= ?2 ORDER BY sequence ASC LIMIT ?3",
+                libsql::params![from, to, limit],
+            )
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to query audit events: {}", e)))?;
+
+        let mut events = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to read audit event: {e}")))?
+        {
+            events.push(row_to_event(&row)?);
+        }
+        Ok(events)
+    }
+
+    async fn query_range(
+        &self,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+        limit: usize,
+    ) -> Result<Vec<AuditEvent>, Error> {
+        let conn = self
+            .db
+            .connect()
+            .map_err(|e| Error::Internal(format!("Failed to connect for audit query: {}", e)))?;
+
+        let mut rows = conn
+            .query(
+                "SELECT * FROM audit_events WHERE timestamp >= ?1 AND timestamp <= ?2 ORDER BY sequence ASC LIMIT ?3",
+                libsql::params![from.to_rfc3339(), to.to_rfc3339(), limit as i64],
+            )
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to query audit events: {}", e)))?;
+
+        let mut events = Vec::new();
+        while let Ok(Some(row)) = rows.next().await {
+            events.push(row_to_event(&row)?);
+        }
+        Ok(events)
+    }
+
+    async fn query_before(
+        &self,
+        cutoff: DateTime<Utc>,
+        limit: usize,
+    ) -> Result<Vec<AuditEvent>, Error> {
+        let conn = self
+            .db
+            .connect()
+            .map_err(|e| Error::Internal(format!("Failed to connect for audit query: {}", e)))?;
+
+        let mut rows = conn
+            .query(
+                "SELECT * FROM audit_events WHERE timestamp < ?1 ORDER BY sequence ASC LIMIT ?2",
+                libsql::params![cutoff.to_rfc3339(), limit as i64],
+            )
+            .await
+            .map_err(|e| {
+                Error::Internal(format!("Failed to query audit events before cutoff: {}", e))
+            })?;
+
+        let mut events = Vec::new();
+        while let Ok(Some(row)) = rows.next().await {
+            events.push(row_to_event(&row)?);
+        }
+        Ok(events)
+    }
+
+    async fn purge_before(&self, cutoff: DateTime<Utc>) -> Result<u64, Error> {
+        let conn = self
+            .db
+            .connect()
+            .map_err(|e| Error::Internal(format!("Failed to connect for audit purge: {}", e)))?;
+
+        // Drop the no-delete trigger
+        conn.execute("DROP TRIGGER IF EXISTS audit_no_delete", ())
+            .await
+            .map_err(|e| {
+                Error::Internal(format!("Failed to drop audit_no_delete trigger: {}", e))
+            })?;
+
+        // Perform the delete
+        let result = conn
+            .execute(
+                "DELETE FROM audit_events WHERE timestamp < ?1",
+                libsql::params![cutoff.to_rfc3339()],
+            )
+            .await;
+
+        // Reinstate the trigger regardless of delete outcome
+        let reinstate_result = conn
+            .execute(
+                r#"
+                CREATE TRIGGER IF NOT EXISTS audit_no_delete
+                BEFORE DELETE ON audit_events
+                BEGIN
+                    SELECT RAISE(ABORT, 'audit events are immutable');
+                END
+                "#,
+                (),
+            )
+            .await;
+
+        if let Err(e) = reinstate_result {
+            tracing::error!(
+                "CRITICAL: Failed to reinstate audit_no_delete trigger: {}",
+                e
+            );
+        }
+
+        let rows =
+            result.map_err(|e| Error::Internal(format!("Failed to purge audit events: {}", e)))?;
+
+        Ok(rows)
+    }
+
+    async fn verify_chain(&self, from_sequence: u64) -> Result<Option<u64>, Error> {
+        let query_from = i64::try_from(from_sequence.saturating_sub(1)).map_err(|_| {
+            Error::Internal("Audit verification sequence exceeds the storage range".to_string())
+        })?;
+        let conn = self
+            .db
+            .connect()
+            .map_err(|e| Error::Internal(format!("Failed to connect for chain verify: {}", e)))?;
+
+        let mut rows = conn
+            .query(
+                "SELECT * FROM audit_events WHERE sequence >= ?1 ORDER BY sequence ASC",
+                libsql::params![query_from],
+            )
+            .await
+            .map_err(|e| {
+                Error::Internal(format!("Failed to fetch events for verification: {}", e))
+            })?;
+
+        let mut events = Vec::new();
+        while let Some(row) = rows.next().await.map_err(|e| {
+            Error::Internal(format!("Failed to read events for verification: {}", e))
+        })? {
+            events.push(row_to_event(&row)?);
+        }
+
+        super::verify_stored_chain(&events, from_sequence)
+    }
+}
+
+fn row_to_event(row: &libsql::Row) -> Result<AuditEvent, Error> {
+    let id_str: String = row
+        .get(0)
+        .map_err(|e| Error::Internal(format!("Failed to read id: {}", e)))?;
+    let id = uuid::Uuid::parse_str(&id_str)
+        .map_err(|e| Error::Internal(format!("Failed to parse UUID: {}", e)))?;
+
+    let timestamp_str: String = row
+        .get(1)
+        .map_err(|e| Error::Internal(format!("Failed to read timestamp: {}", e)))?;
+    let timestamp = DateTime::parse_from_rfc3339(&timestamp_str)
+        .map(|dt| dt.with_timezone(&Utc))
+        .map_err(|e| Error::Internal(format!("Failed to parse timestamp: {}", e)))?;
+
+    let kind_str: String = row
+        .get(2)
+        .map_err(|e| Error::Internal(format!("Failed to read kind: {}", e)))?;
+    let kind = parse_event_kind(&kind_str);
+
+    let severity_val: i64 = row
+        .get(3)
+        .map_err(|e| Error::Internal(format!("Failed to read severity: {}", e)))?;
+    let severity = parse_severity(severity_val as i16);
+
+    let sequence: i64 = row
+        .get(16)
+        .map_err(|e| Error::Internal(format!("Failed to read sequence: {}", e)))?;
+
+    Ok(AuditEvent {
+        id: id.into(),
+        timestamp,
+        kind,
+        severity,
+        source: AuditSource {
+            ip: row.get(4).ok(),
+            user_agent: row.get(5).ok(),
+            subject: row.get(6).ok(),
+            request_id: row.get(7).ok(),
+        },
+        method: row.get(8).ok(),
+        path: row.get(9).ok(),
+        status_code: row.get::<i64>(10).ok().map(|c| c as u16),
+        duration_ms: row.get::<i64>(11).ok().map(|d| d as u64),
+        service_name: row
+            .get(12)
+            .map_err(|e| Error::Internal(format!("Failed to read service_name: {}", e)))?,
+        metadata: row
+            .get::<String>(13)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok()),
+        hash: row.get(14).ok(),
+        previous_hash: row.get(15).ok(),
+        sequence: sequence as u64,
+    })
+}
+
+fn parse_event_kind(s: &str) -> AuditEventKind {
+    match s {
+        "auth.token.validated" => AuditEventKind::AuthTokenValidated,
+        "auth.login.success" => AuditEventKind::AuthLoginSuccess,
+        "auth.login.failed" => AuditEventKind::AuthLoginFailed,
+        "auth.token.missing" => AuditEventKind::AuthTokenMissing,
+        "auth.token.invalid" => AuditEventKind::AuthTokenInvalid,
+        "auth.logout" => AuditEventKind::AuthLogout,
+        "auth.token.refresh" => AuditEventKind::AuthTokenRefresh,
+        "auth.token.revoked" => AuditEventKind::AuthTokenRevoked,
+        "auth.password.changed" => AuditEventKind::AuthPasswordChanged,
+        "auth.apikey.created" => AuditEventKind::AuthApiKeyCreated,
+        "auth.apikey.revoked" => AuditEventKind::AuthApiKeyRevoked,
+        "auth.oauth.callback" => AuditEventKind::AuthOAuthCallback,
+        "auth.permission.denied" => AuditEventKind::AuthPermissionDenied,
+        "auth.key.rotated" => AuditEventKind::AuthKeyRotated,
+        "auth.key.retired" => AuditEventKind::AuthKeyRetired,
+        "auth.key.rotation_failed" => AuditEventKind::AuthKeyRotationFailed,
+        #[cfg(feature = "login-lockout")]
+        "auth.account.locked" => AuditEventKind::AuthAccountLocked,
+        #[cfg(feature = "login-lockout")]
+        "auth.account.unlocked" => AuditEventKind::AuthAccountUnlocked,
+        #[cfg(feature = "accounts")]
+        "account.created" => AuditEventKind::AccountCreated,
+        #[cfg(feature = "accounts")]
+        "account.disabled" => AuditEventKind::AccountDisabled,
+        #[cfg(feature = "accounts")]
+        "account.enabled" => AuditEventKind::AccountEnabled,
+        #[cfg(feature = "accounts")]
+        "account.locked" => AuditEventKind::AccountLocked,
+        #[cfg(feature = "accounts")]
+        "account.unlocked" => AuditEventKind::AccountUnlocked,
+        #[cfg(feature = "accounts")]
+        "account.expired" => AuditEventKind::AccountExpired,
+        #[cfg(feature = "accounts")]
+        "account.deleted" => AuditEventKind::AccountDeleted,
+        #[cfg(feature = "accounts")]
+        "account.updated" => AuditEventKind::AccountUpdated,
+        "config.loaded" => AuditEventKind::ConfigLoaded,
+        "config.drift_detected" => AuditEventKind::ConfigDriftDetected,
+        "http.request" => AuditEventKind::HttpRequest,
+        "http.request.denied" => AuditEventKind::HttpRequestDenied,
+        other => AuditEventKind::Custom(super::parse_custom_kind(other)),
+    }
+}
+
+fn parse_severity(val: i16) -> AuditSeverity {
+    match val {
+        0 => AuditSeverity::Emergency,
+        1 => AuditSeverity::Alert,
+        2 => AuditSeverity::Critical,
+        3 => AuditSeverity::Error,
+        4 => AuditSeverity::Warning,
+        5 => AuditSeverity::Notice,
+        7 => AuditSeverity::Debug,
+        _ => AuditSeverity::Informational,
+    }
+}
+
+#[async_trait]
+impl super::lazy::InitializableStorage for TursoAuditStorage {
+    type Conn = Arc<libsql::Database>;
+
+    fn from_conn(conn: Self::Conn) -> Self {
+        Self::new(conn)
+    }
+
+    async fn init_schema(&self) -> Result<(), Error> {
+        self.initialize().await
+    }
+
+    fn backend_name() -> &'static str {
+        "Turso"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audit::chain::AuditChain;
+
+    async fn storage_with_events(events: &[AuditEvent]) -> (TursoAuditStorage, tempfile::TempDir) {
+        // The adapter opens a fresh connection per operation, so use a shared
+        // temporary database instead of a connection-local :memory: database.
+        let directory = tempfile::tempdir().expect("create test directory");
+        let database = libsql::Builder::new_local(directory.path().join("audit.db"))
+            .build()
+            .await
+            .expect("create temporary database");
+        let storage = TursoAuditStorage::new(Arc::new(database));
+        storage.initialize().await.expect("initialize audit schema");
+        for event in events {
+            storage.append(event).await.expect("append audit event");
+        }
+        (storage, directory)
+    }
+
+    fn sealed_events() -> Vec<AuditEvent> {
+        let mut chain = AuditChain::new("verification-test".to_string());
+        (0..5)
+            .map(|offset| {
+                let mut event = AuditEvent::new(
+                    AuditEventKind::HttpRequest,
+                    AuditSeverity::Informational,
+                    "verification-test".to_string(),
+                );
+                event.timestamp = DateTime::from_timestamp(1_700_000_000 + offset, 0)
+                    .expect("valid test timestamp");
+                if offset == 4 {
+                    event.kind = AuditEventKind::AuthTokenValidated;
+                }
+                if offset == 0 {
+                    event.id = "dca93650-9d2c-4ca8-a00f-79a63467c187".parse().unwrap();
+                }
+                chain.seal(event)
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn verifies_full_chain_and_anchored_suffixes() {
+        let (storage, _directory) = storage_with_events(&sealed_events()).await;
+        for from in [0, 1, 2, 3, 5] {
+            assert_eq!(storage.verify_chain(from).await.unwrap(), None);
+        }
+    }
+
+    #[tokio::test]
+    async fn reports_tampered_suffix_content() {
+        let mut events = sealed_events();
+        events[2].path = Some("/tampered".to_string());
+        let (storage, _directory) = storage_with_events(&events).await;
+        assert_eq!(storage.verify_chain(3).await.unwrap(), Some(3));
+    }
+
+    #[tokio::test]
+    async fn reports_broken_link_to_predecessor() {
+        let mut events = sealed_events();
+        events[2].previous_hash = Some("wrong-predecessor".to_string());
+        let (storage, _directory) = storage_with_events(&events).await;
+        assert_eq!(storage.verify_chain(3).await.unwrap(), Some(3));
+    }
+
+    #[tokio::test]
+    async fn rejects_empty_verification_ranges() {
+        let (storage, _directory) = storage_with_events(&[]).await;
+        assert!(storage.verify_chain(0).await.is_err());
+        assert!(storage.verify_chain(1).await.is_err());
+        let (storage, _directory) = storage_with_events(&sealed_events()).await;
+        assert!(storage.verify_chain(6).await.is_err());
+        assert!(storage.verify_chain(20).await.is_err());
+        assert!(storage.verify_chain(u64::MAX).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn purged_prefix_requires_a_retained_predecessor() {
+        let events = sealed_events();
+        let (storage, _directory) = storage_with_events(&events).await;
+        assert_eq!(storage.purge_before(events[2].timestamp).await.unwrap(), 2);
+        assert!(storage.verify_chain(1).await.is_err());
+        assert!(storage.verify_chain(3).await.is_err());
+        assert_eq!(storage.verify_chain(4).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn reports_missing_event_inside_suffix() {
+        let mut events = sealed_events();
+        events.remove(3);
+        let (storage, _directory) = storage_with_events(&events).await;
+        assert_eq!(storage.verify_chain(3).await.unwrap(), Some(5));
+    }
+    #[tokio::test]
+    async fn bounded_pages_and_verification_survive_append_and_report_retention() {
+        use super::super::AuditVerification;
+        let events = sealed_events();
+        let (storage, _directory) = storage_with_events(&events[..4]).await;
+        assert_eq!(storage.sequence_bounds().await.unwrap(), Some((1, 4)));
+        let first = storage.query_sequence(1, 4, 2).await.unwrap();
+        assert_eq!(
+            first.iter().map(|event| event.sequence).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        storage.append(&events[4]).await.unwrap();
+        let second = storage.query_sequence(3, 4, 2).await.unwrap();
+        assert_eq!(
+            second
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
+            vec![3, 4]
+        );
+        assert_eq!(
+            storage.verify_chain_range(2, 4).await.unwrap(),
+            AuditVerification::Consistent
+        );
+        assert_eq!(
+            storage.verify_chain_range(2, 6).await.unwrap(),
+            AuditVerification::Incomplete
+        );
+        storage.purge_before(events[2].timestamp).await.unwrap();
+        assert_eq!(storage.sequence_bounds().await.unwrap(), Some((3, 5)));
+        assert_eq!(
+            storage.verify_chain_range(3, 5).await.unwrap(),
+            AuditVerification::Incomplete
+        );
+        assert_eq!(
+            storage.verify_chain_range(4, 5).await.unwrap(),
+            AuditVerification::Consistent
+        );
+        assert!(storage.query_sequence(1, u64::MAX, 1).await.is_err());
+    }
+    #[tokio::test]
+    async fn legacy_archives_and_new_typeids_share_a_valid_stored_chain() {
+        for archived in [
+            include_str!("../fixtures/legacy-v1.json"),
+            include_str!("../fixtures/legacy-v2.json"),
+        ] {
+            let legacy: AuditEvent = serde_json::from_str(archived).unwrap();
+            let (storage, _directory) = storage_with_events(std::slice::from_ref(&legacy)).await;
+            let restored = storage.latest().await.unwrap().unwrap();
+            assert_eq!(
+                serde_json::to_value(&restored).unwrap(),
+                serde_json::to_value(&legacy).unwrap()
+            );
+            let mut chain =
+                AuditChain::resume(legacy.service_name.clone(), legacy.hash.clone().unwrap(), 1);
+            let modern = chain.seal(AuditEvent::new(
+                AuditEventKind::HttpRequest,
+                AuditSeverity::Informational,
+                legacy.service_name,
+            ));
+            storage.append(&modern).await.unwrap();
+            assert_eq!(
+                storage.verify_chain_range(1, 2).await.unwrap(),
+                super::super::AuditVerification::Consistent
+            );
+        }
+    }
+}

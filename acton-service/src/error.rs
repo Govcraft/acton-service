@@ -13,116 +13,7 @@ use thiserror::Error;
 // Structured Database Errors
 // ============================================================================
 
-/// Database operation being performed when the error occurred
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg(any(
-    feature = "database",
-    feature = "mssql",
-    feature = "turso",
-    feature = "surrealdb"
-))]
-pub enum DatabaseOperation {
-    /// Establishing a database connection
-    Connect,
-    /// Executing a query
-    Query,
-    /// Inserting records
-    Insert,
-    /// Updating records
-    Update,
-    /// Deleting records
-    Delete,
-    /// Transaction operations (begin, commit, rollback)
-    Transaction,
-    /// Syncing data (e.g., Turso embedded replica sync)
-    Sync,
-    /// Running database migrations
-    Migration,
-    /// Acquiring a connection from the pool
-    PoolAcquire,
-}
-
-#[cfg(any(
-    feature = "database",
-    feature = "mssql",
-    feature = "turso",
-    feature = "surrealdb"
-))]
-impl fmt::Display for DatabaseOperation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Connect => write!(f, "connect"),
-            Self::Query => write!(f, "query"),
-            Self::Insert => write!(f, "insert"),
-            Self::Update => write!(f, "update"),
-            Self::Delete => write!(f, "delete"),
-            Self::Transaction => write!(f, "transaction"),
-            Self::Sync => write!(f, "sync"),
-            Self::Migration => write!(f, "migration"),
-            Self::PoolAcquire => write!(f, "pool_acquire"),
-        }
-    }
-}
-
-/// Category of database error
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg(any(
-    feature = "database",
-    feature = "mssql",
-    feature = "turso",
-    feature = "surrealdb"
-))]
-pub enum DatabaseErrorKind {
-    /// Failed to establish connection
-    ConnectionFailed,
-    /// Record not found
-    NotFound,
-    /// Constraint violation (unique, foreign key, check)
-    ConstraintViolation,
-    /// Query execution failed
-    QueryFailed,
-    /// Transaction failed (begin, commit, or rollback)
-    TransactionFailed,
-    /// Type conversion error
-    TypeConversion,
-    /// Sync operation failed (Turso specific)
-    SyncFailed,
-    /// Configuration error
-    Configuration,
-    /// Operation timed out
-    Timeout,
-    /// Permission denied
-    PermissionDenied,
-    /// Connection pool exhausted
-    PoolExhausted,
-    /// Other/unknown error
-    Other,
-}
-
-#[cfg(any(
-    feature = "database",
-    feature = "mssql",
-    feature = "turso",
-    feature = "surrealdb"
-))]
-impl fmt::Display for DatabaseErrorKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ConnectionFailed => write!(f, "connection_failed"),
-            Self::NotFound => write!(f, "not_found"),
-            Self::ConstraintViolation => write!(f, "constraint_violation"),
-            Self::QueryFailed => write!(f, "query_failed"),
-            Self::TransactionFailed => write!(f, "transaction_failed"),
-            Self::TypeConversion => write!(f, "type_conversion"),
-            Self::SyncFailed => write!(f, "sync_failed"),
-            Self::Configuration => write!(f, "configuration"),
-            Self::Timeout => write!(f, "timeout"),
-            Self::PermissionDenied => write!(f, "permission_denied"),
-            Self::PoolExhausted => write!(f, "pool_exhausted"),
-            Self::Other => write!(f, "other"),
-        }
-    }
-}
+pub use acton_service_core::error::{DatabaseErrorKind, DatabaseOperation};
 
 /// Structured database error with operation context
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -819,86 +710,8 @@ impl From<figment::Error> for Error {
 // Conversion from sqlx::Error to DatabaseError
 #[cfg(feature = "database")]
 impl From<sqlx::Error> for DatabaseError {
-    fn from(err: sqlx::Error) -> Self {
-        use sqlx::Error as E;
-        match err {
-            E::RowNotFound => Self::not_found(DatabaseOperation::Query, "Row not found"),
-            E::PoolTimedOut => Self::pool_exhausted("Connection pool timed out"),
-            E::PoolClosed => Self::connection_failed("Connection pool is closed"),
-            E::Protocol(msg) => Self::new(
-                DatabaseOperation::Query,
-                DatabaseErrorKind::QueryFailed,
-                msg,
-            ),
-            E::Configuration(e) => Self::new(
-                DatabaseOperation::Connect,
-                DatabaseErrorKind::Configuration,
-                e.to_string(),
-            ),
-            E::Io(e) => Self::new(
-                DatabaseOperation::Connect,
-                DatabaseErrorKind::ConnectionFailed,
-                e.to_string(),
-            ),
-            E::Tls(e) => Self::new(
-                DatabaseOperation::Connect,
-                DatabaseErrorKind::ConnectionFailed,
-                format!("TLS error: {}", e),
-            ),
-            E::TypeNotFound { type_name } => Self::new(
-                DatabaseOperation::Query,
-                DatabaseErrorKind::TypeConversion,
-                format!("Type not found: {}", type_name),
-            ),
-            E::ColumnNotFound(col) => Self::new(
-                DatabaseOperation::Query,
-                DatabaseErrorKind::QueryFailed,
-                format!("Column not found: {}", col),
-            ),
-            E::ColumnIndexOutOfBounds { index, len } => Self::new(
-                DatabaseOperation::Query,
-                DatabaseErrorKind::QueryFailed,
-                format!("Column index {} out of bounds (len: {})", index, len),
-            ),
-            E::ColumnDecode { index, source } => Self::new(
-                DatabaseOperation::Query,
-                DatabaseErrorKind::TypeConversion,
-                format!("Failed to decode column {}: {}", index, source),
-            ),
-            E::Decode(e) => Self::new(
-                DatabaseOperation::Query,
-                DatabaseErrorKind::TypeConversion,
-                e.to_string(),
-            ),
-            E::AnyDriverError(e) => Self::new(
-                DatabaseOperation::Query,
-                DatabaseErrorKind::QueryFailed,
-                e.to_string(),
-            ),
-            E::Migrate(e) => Self::new(
-                DatabaseOperation::Migration,
-                DatabaseErrorKind::QueryFailed,
-                e.to_string(),
-            ),
-            E::Database(db_err) => {
-                // Parse database-specific errors - combine all constraint violations
-                let kind = if db_err.is_unique_violation()
-                    || db_err.is_foreign_key_violation()
-                    || db_err.is_check_violation()
-                {
-                    DatabaseErrorKind::ConstraintViolation
-                } else {
-                    DatabaseErrorKind::QueryFailed
-                };
-                Self::new(DatabaseOperation::Query, kind, db_err.to_string())
-            }
-            E::WorkerCrashed => Self::connection_failed("Database worker crashed"),
-            _ => Self::new(
-                DatabaseOperation::Query,
-                DatabaseErrorKind::Other,
-                err.to_string(),
-            ),
-        }
+    fn from(error: sqlx::Error) -> Self {
+        acton_service_postgres::database_error(error).into()
     }
 }
 
@@ -911,12 +724,8 @@ impl From<sqlx::Error> for Error {
 
 #[cfg(feature = "mssql")]
 impl From<tiberius::error::Error> for DatabaseError {
-    fn from(err: tiberius::error::Error) -> Self {
-        Self::new(
-            DatabaseOperation::Query,
-            DatabaseErrorKind::QueryFailed,
-            err.to_string(),
-        )
+    fn from(error: tiberius::error::Error) -> Self {
+        acton_service_mssql::database_error(error).into()
     }
 }
 
@@ -957,41 +766,8 @@ impl From<clickhouse::error::Error> for Error {
 // Conversion from libsql::Error to DatabaseError
 #[cfg(feature = "turso")]
 impl From<libsql::Error> for DatabaseError {
-    fn from(err: libsql::Error) -> Self {
-        let msg = err.to_string();
-
-        // Parse libsql error messages to determine kind and operation
-        // Combine all constraint violations into a single branch
-        let (kind, operation) = if msg.contains("UNIQUE constraint failed")
-            || msg.contains("FOREIGN KEY constraint failed")
-            || msg.contains("NOT NULL constraint failed")
-            || msg.contains("CHECK constraint failed")
-        {
-            (
-                DatabaseErrorKind::ConstraintViolation,
-                DatabaseOperation::Insert,
-            )
-        } else if msg.contains("no such table") || msg.contains("no such column") {
-            (DatabaseErrorKind::QueryFailed, DatabaseOperation::Query)
-        } else if msg.contains("timeout") || msg.contains("timed out") {
-            (DatabaseErrorKind::Timeout, DatabaseOperation::Query)
-        } else if msg.contains("connection") || msg.contains("Connection") {
-            (
-                DatabaseErrorKind::ConnectionFailed,
-                DatabaseOperation::Connect,
-            )
-        } else if msg.contains("permission denied") || msg.contains("Permission denied") {
-            (
-                DatabaseErrorKind::PermissionDenied,
-                DatabaseOperation::Query,
-            )
-        } else if msg.contains("sync") || msg.contains("Sync") {
-            (DatabaseErrorKind::SyncFailed, DatabaseOperation::Sync)
-        } else {
-            (DatabaseErrorKind::Other, DatabaseOperation::Query)
-        };
-
-        Self::new(operation, kind, msg)
+    fn from(error: libsql::Error) -> Self {
+        acton_service_turso::database_error(error).into()
     }
 }
 
@@ -1005,46 +781,8 @@ impl From<libsql::Error> for Error {
 // Conversion from surrealdb::Error to DatabaseError
 #[cfg(feature = "surrealdb")]
 impl From<surrealdb::Error> for DatabaseError {
-    fn from(err: surrealdb::Error) -> Self {
-        let msg = err.to_string();
-
-        let (kind, operation) = if msg.contains("already exists")
-            || msg.contains("unique")
-            || msg.contains("duplicate")
-        {
-            (
-                DatabaseErrorKind::ConstraintViolation,
-                DatabaseOperation::Insert,
-            )
-        } else if msg.contains("not found") || msg.contains("no record") {
-            (DatabaseErrorKind::NotFound, DatabaseOperation::Query)
-        } else if msg.contains("timeout") || msg.contains("timed out") {
-            (DatabaseErrorKind::Timeout, DatabaseOperation::Query)
-        } else if msg.contains("connect") || msg.contains("Connection") {
-            (
-                DatabaseErrorKind::ConnectionFailed,
-                DatabaseOperation::Connect,
-            )
-        } else if msg.contains("permission")
-            || msg.contains("not allowed")
-            || msg.contains("denied")
-        {
-            (
-                DatabaseErrorKind::PermissionDenied,
-                DatabaseOperation::Query,
-            )
-        } else if msg.contains("auth") || msg.contains("signin") || msg.contains("credentials") {
-            (
-                DatabaseErrorKind::ConnectionFailed,
-                DatabaseOperation::Connect,
-            )
-        } else if msg.contains("parse") || msg.contains("syntax") {
-            (DatabaseErrorKind::QueryFailed, DatabaseOperation::Query)
-        } else {
-            (DatabaseErrorKind::Other, DatabaseOperation::Query)
-        };
-
-        Self::new(operation, kind, msg)
+    fn from(error: surrealdb::Error) -> Self {
+        acton_service_surrealdb::database_error(error).into()
     }
 }
 
@@ -1105,6 +843,68 @@ impl From<DatabaseError> for crate::repository::RepositoryError {
             message: err.message,
             entity_type: None,
             entity_id: None,
+        }
+    }
+}
+
+impl From<acton_service_core::StorageError> for Error {
+    fn from(error: acton_service_core::StorageError) -> Self {
+        use acton_service_core::StorageError;
+        match error {
+            StorageError::Internal(message) => Self::Internal(message),
+            StorageError::Io(error) => Self::Io(error),
+            StorageError::Database(error) => {
+                #[cfg(any(
+                    feature = "database",
+                    feature = "mssql",
+                    feature = "turso",
+                    feature = "surrealdb"
+                ))]
+                {
+                    Self::Database(DatabaseError {
+                        operation: error.operation,
+                        kind: error.kind,
+                        message: error.message,
+                        context: error.context,
+                    })
+                }
+                #[cfg(not(any(
+                    feature = "database",
+                    feature = "mssql",
+                    feature = "turso",
+                    feature = "surrealdb"
+                )))]
+                {
+                    Self::Internal(error.to_string())
+                }
+            }
+            StorageError::ClickHouse(message) => {
+                #[cfg(feature = "clickhouse")]
+                {
+                    Self::ClickHouse(message)
+                }
+                #[cfg(not(feature = "clickhouse"))]
+                {
+                    Self::Internal(message)
+                }
+            }
+        }
+    }
+}
+
+#[cfg(any(
+    feature = "database",
+    feature = "mssql",
+    feature = "turso",
+    feature = "surrealdb"
+))]
+impl From<acton_service_core::DatabaseError> for DatabaseError {
+    fn from(error: acton_service_core::DatabaseError) -> Self {
+        Self {
+            operation: error.operation,
+            kind: error.kind,
+            message: error.message,
+            context: error.context,
         }
     }
 }

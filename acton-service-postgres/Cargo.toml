@@ -1,0 +1,26 @@
+[package]
+name = "acton-service-postgres"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Independent postgres contracts and implementation for acton-service"
+repository = "https://github.com/Govcraft/acton-service"
+
+[features]
+accounts = ["acton-service-audit/accounts"]
+login-lockout = ["acton-service-audit/login-lockout"]
+default = ["crypto-aws-lc-rs"]
+crypto-aws-lc-rs = ["sqlx/tls-rustls-aws-lc-rs"]
+crypto-ring = ["sqlx/tls-rustls-ring-webpki"]
+
+[dependencies]
+acton-service-audit = { version = "0.47.0", path = "../acton-service-audit" }
+acton-service-core = { version = "0.47.0", path = "../acton-service-core" }
+async-trait.workspace = true
+chrono.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true

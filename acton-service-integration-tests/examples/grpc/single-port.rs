@@ -13,7 +13,7 @@
 //! ## Running
 //!
 //! ```bash
-//! cargo run --example single-port --features grpc
+//! cargo run -p acton-service-integration-tests --example single-port --features grpc
 //! ```
 //!
 //! ## Testing
