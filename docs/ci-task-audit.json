@@ -1,0 +1,1917 @@
+{
+  "schema_version": 1,
+  "audited_commit": "60ebd8a94618077f30e18f2fd22d2671bd881166",
+  "run_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996",
+  "run_created_at": "2026-10-07T00:08:07Z",
+  "run_updated_at": "2026-10-07T00:25:37Z",
+  "wall_seconds": 1050.0,
+  "aggregate_job_seconds": 9036.0,
+  "total_jobs": 44,
+  "passing_test_executions": 8669,
+  "unique_passing_package_binary_test_ids": 1204,
+  "pr_validation_commit": "e12e69f3fbd340968c3bb45c93eb4c70baf13333",
+  "pr_validation_and_main_tree": "02323df3548c8f44c575297dd1c2866da7c35441",
+  "cache_snapshot": {
+    "cold_profiles": 38,
+    "uploaded_bytes": 22931100424,
+    "retained_entries": 13,
+    "retained_bytes": 10249816331,
+    "storage_limit_read_http_status": 402,
+    "missing_fresh_profiles": [
+      "default",
+      "minimal",
+      "oauth-no-cache"
+    ]
+  },
+  "disabled_workflows": [
+    "claude-code-review.yml",
+    "docs-sync-on-merge.yml"
+  ],
+  "profiles": [
+    {
+      "name": "audit",
+      "package": "acton-service-audit",
+      "features": "",
+      "default_features": true,
+      "runner": "linux",
+      "job_seconds": 50,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232280",
+      "nextest_passed": 47,
+      "nextest_skipped": 0,
+      "nextest_seconds": 0.083,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.91s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 7.45s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s"
+      ],
+      "doctests": [
+        {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 258862330,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service-audit",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service-audit"
+        ],
+        [
+          "cargo",
+          "test",
+          "--doc",
+          "--locked",
+          "-p",
+          "acton-service-audit"
+        ]
+      ]
+    },
+    {
+      "name": "audit-clickhouse",
+      "package": "acton-service",
+      "features": "audit,clickhouse",
+      "default_features": true,
+      "runner": "linux",
+      "job_seconds": 194,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232154",
+      "nextest_passed": 284,
+      "nextest_skipped": 0,
+      "nextest_seconds": 1.121,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 00s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 41s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 574287637,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--features",
+          "audit,clickhouse",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--features",
+          "audit,clickhouse"
+        ]
+      ]
+    },
+    {
+      "name": "audit-events",
+      "package": "acton-service-audit",
+      "features": "accounts,login-lockout",
+      "default_features": true,
+      "runner": "linux",
+      "job_seconds": 50,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232209",
+      "nextest_passed": 47,
+      "nextest_skipped": 0,
+      "nextest_seconds": 0.083,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.78s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 7.13s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 258859034,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service-audit",
+          "--features",
+          "accounts,login-lockout",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service-audit",
+          "--features",
+          "accounts,login-lockout"
+        ]
+      ]
+    },
+    {
+      "name": "audit-nodb",
+      "package": "acton-service",
+      "features": "http,audit,crypto-aws-lc-rs",
+      "default_features": false,
+      "runner": "linux",
+      "job_seconds": 184,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232157",
+      "nextest_passed": 265,
+      "nextest_skipped": 0,
+      "nextest_seconds": 1.07,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 54.86s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 32s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 526653787,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,audit,crypto-aws-lc-rs",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,audit,crypto-aws-lc-rs"
+        ]
+      ]
+    },
+    {
+      "name": "audit-otel",
+      "package": "acton-service",
+      "features": "http,audit,observability,crypto-aws-lc-rs",
+      "default_features": false,
+      "runner": "linux",
+      "job_seconds": 195,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232251",
+      "nextest_passed": 267,
+      "nextest_skipped": 0,
+      "nextest_seconds": 1.055,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 58.80s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 39s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 555489818,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,audit,observability,crypto-aws-lc-rs",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,audit,observability,crypto-aws-lc-rs"
+        ]
+      ]
+    },
+    {
+      "name": "audit-surrealdb",
+      "package": "acton-service",
+      "features": "http,audit,surrealdb,auth,jwt,observability,crypto-aws-lc-rs",
+      "default_features": false,
+      "runner": "linux",
+      "job_seconds": 618,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232212",
+      "nextest_passed": 375,
+      "nextest_skipped": 0,
+      "nextest_seconds": 15.178,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 3m 16s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 6m 04s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 928926826,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,audit,surrealdb,auth,jwt,observability,crypto-aws-lc-rs",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,audit,surrealdb,auth,jwt,observability,crypto-aws-lc-rs"
+        ]
+      ]
+    },
+    {
+      "name": "audit-turso",
+      "package": "acton-service",
+      "features": "http,audit,turso,observability,crypto-aws-lc-rs",
+      "default_features": false,
+      "runner": "linux",
+      "job_seconds": 245,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232267",
+      "nextest_passed": 299,
+      "nextest_skipped": 0,
+      "nextest_seconds": 1.499,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 16s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 08s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 708325930,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,audit,turso,observability,crypto-aws-lc-rs",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,audit,turso,observability,crypto-aws-lc-rs"
+        ]
+      ]
+    },
+    {
+      "name": "cli",
+      "package": "acton-cli",
+      "features": "",
+      "default_features": true,
+      "runner": "linux",
+      "job_seconds": 159,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232337",
+      "nextest_passed": 10,
+      "nextest_skipped": 0,
+      "nextest_seconds": 0.02,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 58.39s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 05s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 582577917,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-cli",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-cli"
+        ]
+      ]
+    },
+    {
+      "name": "clickhouse-adapter",
+      "package": "acton-service-clickhouse",
+      "features": "",
+      "default_features": true,
+      "runner": "linux",
+      "job_seconds": 61,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232247",
+      "nextest_passed": 24,
+      "nextest_skipped": 0,
+      "nextest_seconds": 0.056,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 16.96s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 13.12s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s"
+      ],
+      "doctests": [
+        {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 319978644,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service-clickhouse",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service-clickhouse"
+        ],
+        [
+          "cargo",
+          "test",
+          "--doc",
+          "--locked",
+          "-p",
+          "acton-service-clickhouse"
+        ]
+      ]
+    },
+    {
+      "name": "core",
+      "package": "acton-service-core",
+      "features": "",
+      "default_features": true,
+      "runner": "linux",
+      "job_seconds": 32,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232227",
+      "nextest_passed": 22,
+      "nextest_skipped": 0,
+      "nextest_seconds": 0.035,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.24s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 2.25s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s"
+      ],
+      "doctests": [
+        {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 207494870,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service-core",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service-core"
+        ],
+        [
+          "cargo",
+          "test",
+          "--doc",
+          "--locked",
+          "-p",
+          "acton-service-core"
+        ]
+      ]
+    },
+    {
+      "name": "core-mssql",
+      "package": "acton-service-core",
+      "features": "mssql",
+      "default_features": true,
+      "runner": "linux",
+      "job_seconds": 37,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232374",
+      "nextest_passed": 22,
+      "nextest_skipped": 0,
+      "nextest_seconds": 0.035,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.65s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 1.99s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 207485528,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service-core",
+          "--features",
+          "mssql",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service-core",
+          "--features",
+          "mssql"
+        ]
+      ]
+    },
+    {
+      "name": "default",
+      "package": "acton-service",
+      "features": "",
+      "default_features": true,
+      "runner": "linux",
+      "job_seconds": 181,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232318",
+      "nextest_passed": 211,
+      "nextest_skipped": 0,
+      "nextest_seconds": 0.673,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 01s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 31s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s"
+      ],
+      "doctests": [
+        {
+          "passed": 10,
+          "failed": 0,
+          "ignored": 34
+        }
+      ],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 551061700,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service"
+        ],
+        [
+          "cargo",
+          "test",
+          "--doc",
+          "--locked",
+          "-p",
+          "acton-service"
+        ]
+      ]
+    },
+    {
+      "name": "frontend",
+      "package": "acton-service",
+      "features": "http,htmx,askama,sse,session-memory,crypto-aws-lc-rs",
+      "default_features": false,
+      "runner": "linux",
+      "job_seconds": 151,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232406",
+      "nextest_passed": 266,
+      "nextest_skipped": 0,
+      "nextest_seconds": 0.623,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 48.56s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 10s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 560093076,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,htmx,askama,sse,session-memory,crypto-aws-lc-rs",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,htmx,askama,sse,session-memory,crypto-aws-lc-rs"
+        ]
+      ]
+    },
+    {
+      "name": "full",
+      "package": "acton-service",
+      "features": "full",
+      "default_features": true,
+      "runner": "linux",
+      "job_seconds": 675,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232342",
+      "nextest_passed": 1034,
+      "nextest_skipped": 0,
+      "nextest_seconds": 22.816,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 12s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 6m 06s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 2.01s"
+      ],
+      "doctests": [
+        {
+          "passed": 108,
+          "failed": 0,
+          "ignored": 150
+        }
+      ],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 1311158339,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--features",
+          "full",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--features",
+          "full"
+        ],
+        [
+          "cargo",
+          "test",
+          "--doc",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--features",
+          "full"
+        ]
+      ]
+    },
+    {
+      "name": "graphql",
+      "package": "acton-service",
+      "features": "http,graphql,graphql-cedar,cedar-authz,crypto-aws-lc-rs",
+      "default_features": false,
+      "runner": "linux",
+      "job_seconds": 226,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232389",
+      "nextest_passed": 236,
+      "nextest_skipped": 0,
+      "nextest_seconds": 1.703,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 10s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 54s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 800978817,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,graphql,graphql-cedar,cedar-authz,crypto-aws-lc-rs",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,graphql,graphql-cedar,cedar-authz,crypto-aws-lc-rs"
+        ]
+      ]
+    },
+    {
+      "name": "grpc-examples",
+      "package": "acton-service-integration-tests",
+      "features": "grpc,cedar-authz",
+      "default_features": true,
+      "runner": "linux",
+      "job_seconds": 98,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232322",
+      "nextest_passed": 0,
+      "nextest_skipped": 0,
+      "nextest_seconds": null,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 06s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 438761414,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service-integration-tests",
+          "--features",
+          "grpc,cedar-authz",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ]
+      ]
+    },
+    {
+      "name": "grpc-integration",
+      "package": "acton-service-integration-tests",
+      "features": "grpc,tls",
+      "default_features": true,
+      "runner": "linux",
+      "job_seconds": 204,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232382",
+      "nextest_passed": 2,
+      "nextest_skipped": 0,
+      "nextest_seconds": 0.082,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 58.95s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 19s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 684613028,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service-integration-tests",
+          "--features",
+          "grpc,tls",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service-integration-tests",
+          "--features",
+          "grpc,tls"
+        ]
+      ]
+    },
+    {
+      "name": "grpc-integration-ring",
+      "package": "acton-service-integration-tests",
+      "features": "grpc,tls,crypto-ring",
+      "default_features": false,
+      "runner": "linux",
+      "job_seconds": 172,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232513",
+      "nextest_passed": 2,
+      "nextest_skipped": 0,
+      "nextest_seconds": 0.054,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 49.31s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 12s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 639317562,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service-integration-tests",
+          "--no-default-features",
+          "--features",
+          "grpc,tls,crypto-ring",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service-integration-tests",
+          "--no-default-features",
+          "--features",
+          "grpc,tls,crypto-ring"
+        ]
+      ]
+    },
+    {
+      "name": "grpc-no-tls",
+      "package": "acton-service",
+      "features": "http,grpc,crypto-aws-lc-rs",
+      "default_features": false,
+      "runner": "linux",
+      "job_seconds": 198,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232458",
+      "nextest_passed": 232,
+      "nextest_skipped": 0,
+      "nextest_seconds": 0.618,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 57.40s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 36s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 616701363,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,grpc,crypto-aws-lc-rs",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,grpc,crypto-aws-lc-rs"
+        ]
+      ]
+    },
+    {
+      "name": "grpc-tls",
+      "package": "acton-service",
+      "features": "http,grpc,tls,auth,cedar-authz,crypto-aws-lc-rs",
+      "default_features": false,
+      "runner": "linux",
+      "job_seconds": 259,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232402",
+      "nextest_passed": 506,
+      "nextest_skipped": 0,
+      "nextest_seconds": 17.234,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 07s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 03s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 838183718,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,grpc,tls,auth,cedar-authz,crypto-aws-lc-rs",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,grpc,tls,auth,cedar-authz,crypto-aws-lc-rs"
+        ]
+      ]
+    },
+    {
+      "name": "metrics",
+      "package": "acton-service",
+      "features": "http,otel-metrics,prometheus-metrics,tls,crypto-aws-lc-rs",
+      "default_features": false,
+      "runner": "linux",
+      "job_seconds": 209,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232348",
+      "nextest_passed": 415,
+      "nextest_skipped": 0,
+      "nextest_seconds": 1.643,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 01s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 50s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 592281823,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,otel-metrics,prometheus-metrics,tls,crypto-aws-lc-rs",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,otel-metrics,prometheus-metrics,tls,crypto-aws-lc-rs"
+        ]
+      ]
+    },
+    {
+      "name": "minimal",
+      "package": "acton-service",
+      "features": "http,crypto-aws-lc-rs",
+      "default_features": false,
+      "runner": "linux",
+      "job_seconds": 174,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232381",
+      "nextest_passed": 210,
+      "nextest_skipped": 0,
+      "nextest_seconds": 0.556,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 54.83s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 24s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 522223467,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,crypto-aws-lc-rs",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,crypto-aws-lc-rs"
+        ]
+      ]
+    },
+    {
+      "name": "mssql",
+      "package": "acton-service",
+      "features": "http,mssql,grpc,auth,accounts,audit,observability,crypto-aws-lc-rs",
+      "default_features": false,
+      "runner": "linux",
+      "job_seconds": 201,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232463",
+      "nextest_passed": 409,
+      "nextest_skipped": 0,
+      "nextest_seconds": 8.636,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 11s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 26s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 731100746,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,mssql,grpc,auth,accounts,audit,observability,crypto-aws-lc-rs",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,mssql,grpc,auth,accounts,audit,observability,crypto-aws-lc-rs"
+        ]
+      ]
+    },
+    {
+      "name": "mssql-adapter",
+      "package": "acton-service-mssql",
+      "features": "",
+      "default_features": true,
+      "runner": "linux",
+      "job_seconds": 186,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232511",
+      "nextest_passed": 2,
+      "nextest_skipped": 1,
+      "nextest_seconds": 0.006,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 05s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 17.44s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s"
+      ],
+      "doctests": [
+        {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 374476236,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service-mssql",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service-mssql"
+        ],
+        [
+          "cargo",
+          "test",
+          "--doc",
+          "--locked",
+          "-p",
+          "acton-service-mssql"
+        ]
+      ]
+    },
+    {
+      "name": "mssql-integration",
+      "package": "acton-service-integration-tests",
+      "features": "mssql",
+      "default_features": true,
+      "runner": "linux",
+      "job_seconds": 334,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232359",
+      "nextest_passed": 1,
+      "nextest_skipped": 0,
+      "nextest_seconds": 17.88,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 3m 11s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 30s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 718763777,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service-integration-tests",
+          "--features",
+          "mssql",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service-integration-tests",
+          "--features",
+          "mssql"
+        ]
+      ]
+    },
+    {
+      "name": "oauth-no-cache",
+      "package": "acton-service",
+      "features": "http,oauth,crypto-aws-lc-rs",
+      "default_features": false,
+      "runner": "linux",
+      "job_seconds": 213,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232454",
+      "nextest_passed": 312,
+      "nextest_skipped": 0,
+      "nextest_seconds": 20.845,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 03s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 37s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 571740151,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,oauth,crypto-aws-lc-rs",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,oauth,crypto-aws-lc-rs"
+        ]
+      ]
+    },
+    {
+      "name": "oauth-with-cache",
+      "package": "acton-service",
+      "features": "http,oauth,cache,jwt,crypto-aws-lc-rs",
+      "default_features": false,
+      "runner": "linux",
+      "job_seconds": 247,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232432",
+      "nextest_passed": 320,
+      "nextest_skipped": 0,
+      "nextest_seconds": 21.025,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 10s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 58s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 599124805,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,oauth,cache,jwt,crypto-aws-lc-rs",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,oauth,cache,jwt,crypto-aws-lc-rs"
+        ]
+      ]
+    },
+    {
+      "name": "otel-only",
+      "package": "acton-service",
+      "features": "http,otel-metrics,crypto-aws-lc-rs",
+      "default_features": false,
+      "runner": "linux",
+      "job_seconds": 184,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232470",
+      "nextest_passed": 221,
+      "nextest_skipped": 0,
+      "nextest_seconds": 1.472,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 01s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 37s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 551880101,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,otel-metrics,crypto-aws-lc-rs",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,otel-metrics,crypto-aws-lc-rs"
+        ]
+      ]
+    },
+    {
+      "name": "postgres",
+      "package": "acton-service-postgres",
+      "features": "",
+      "default_features": true,
+      "runner": "linux",
+      "job_seconds": 95,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232544",
+      "nextest_passed": 1,
+      "nextest_skipped": 1,
+      "nextest_seconds": 0.004,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 36.73s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 29.62s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s"
+      ],
+      "doctests": [
+        {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 501882846,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service-postgres",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service-postgres"
+        ],
+        [
+          "cargo",
+          "test",
+          "--doc",
+          "--locked",
+          "-p",
+          "acton-service-postgres"
+        ]
+      ]
+    },
+    {
+      "name": "postgres-ring",
+      "package": "acton-service-postgres",
+      "features": "crypto-ring",
+      "default_features": false,
+      "runner": "linux",
+      "job_seconds": 79,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232555",
+      "nextest_passed": 1,
+      "nextest_skipped": 1,
+      "nextest_seconds": 0.004,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 29.13s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 19.25s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 469078823,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service-postgres",
+          "--no-default-features",
+          "--features",
+          "crypto-ring",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service-postgres",
+          "--no-default-features",
+          "--features",
+          "crypto-ring"
+        ]
+      ]
+    },
+    {
+      "name": "ring",
+      "package": "acton-service",
+      "features": "full,crypto-ring",
+      "default_features": false,
+      "runner": "linux",
+      "job_seconds": 553,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232425",
+      "nextest_passed": 1034,
+      "nextest_skipped": 0,
+      "nextest_seconds": 25.335,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 15s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 5m 32s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 1308540414,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "full,crypto-ring",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "full,crypto-ring"
+        ]
+      ]
+    },
+    {
+      "name": "saml",
+      "package": "acton-service",
+      "features": "http,saml,crypto-aws-lc-rs",
+      "default_features": false,
+      "runner": "linux",
+      "job_seconds": 229,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232512",
+      "nextest_passed": 308,
+      "nextest_skipped": 0,
+      "nextest_seconds": 23.333,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 11s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 49s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 569244570,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,saml,crypto-aws-lc-rs",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,saml,crypto-aws-lc-rs"
+        ]
+      ]
+    },
+    {
+      "name": "surrealdb-adapter",
+      "package": "acton-service-surrealdb",
+      "features": "",
+      "default_features": true,
+      "runner": "linux",
+      "job_seconds": 661,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232521",
+      "nextest_passed": 6,
+      "nextest_skipped": 1,
+      "nextest_seconds": 0.176,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 4m 06s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 6m 20s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s"
+      ],
+      "doctests": [
+        {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 805488669,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service-surrealdb",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service-surrealdb"
+        ],
+        [
+          "cargo",
+          "test",
+          "--doc",
+          "--locked",
+          "-p",
+          "acton-service-surrealdb"
+        ]
+      ]
+    },
+    {
+      "name": "tls-no-grpc",
+      "package": "acton-service",
+      "features": "http,tls,crypto-aws-lc-rs",
+      "default_features": false,
+      "runner": "linux",
+      "job_seconds": 183,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232491",
+      "nextest_passed": 375,
+      "nextest_skipped": 0,
+      "nextest_seconds": 1.192,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 56.29s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 32s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 544806787,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,tls,crypto-aws-lc-rs",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,tls,crypto-aws-lc-rs"
+        ]
+      ]
+    },
+    {
+      "name": "tokens",
+      "package": "acton-service",
+      "features": "http,jwt,auth,crypto-aws-lc-rs",
+      "default_features": false,
+      "runner": "linux",
+      "job_seconds": 215,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232499",
+      "nextest_passed": 287,
+      "nextest_skipped": 0,
+      "nextest_seconds": 21.093,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 02s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 39s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 557361975,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,jwt,auth,crypto-aws-lc-rs",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,jwt,auth,crypto-aws-lc-rs"
+        ]
+      ]
+    },
+    {
+      "name": "turso-adapter",
+      "package": "acton-service-turso",
+      "features": "",
+      "default_features": true,
+      "runner": "linux",
+      "job_seconds": 91,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232560",
+      "nextest_passed": 22,
+      "nextest_skipped": 0,
+      "nextest_seconds": 0.198,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 29.53s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 28.84s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s"
+      ],
+      "doctests": [
+        {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 471129554,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service-turso",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service-turso"
+        ],
+        [
+          "cargo",
+          "test",
+          "--doc",
+          "--locked",
+          "-p",
+          "acton-service-turso"
+        ]
+      ]
+    },
+    {
+      "name": "windows",
+      "package": "acton-service",
+      "features": "",
+      "default_features": true,
+      "runner": "windows",
+      "job_seconds": 875,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232551",
+      "nextest_passed": 211,
+      "nextest_skipped": 0,
+      "nextest_seconds": 3.039,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 12s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 3m 26s",
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 4m 20s",
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 41.31s",
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 16.28s",
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 56.03s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 927360132,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service"
+        ],
+        [
+          "cargo",
+          "check",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--features",
+          "full",
+          "--all-targets"
+        ],
+        [
+          "cargo",
+          "check",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,mssql,grpc,auth,accounts,audit,observability,crypto-aws-lc-rs",
+          "--all-targets"
+        ],
+        [
+          "cargo",
+          "check",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,tls,windows-auth,crypto-aws-lc-rs",
+          "--all-targets"
+        ],
+        [
+          "cargo",
+          "check",
+          "--locked",
+          "-p",
+          "acton-service-integration-tests",
+          "--features",
+          "grpc,tls",
+          "--features",
+          "cedar-authz",
+          "--all-targets"
+        ]
+      ]
+    },
+    {
+      "name": "windows-auth",
+      "package": "acton-service",
+      "features": "http,tls,windows-auth,crypto-aws-lc-rs",
+      "default_features": false,
+      "runner": "linux",
+      "job_seconds": 188,
+      "job_url": "https://github.com/Govcraft/acton-service/actions/runs/37550346996/job/112564232641",
+      "nextest_passed": 383,
+      "nextest_skipped": 0,
+      "nextest_seconds": 1.545,
+      "compilation_summaries": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 09s",
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 33s"
+      ],
+      "doctests": [],
+      "cache_restored": false,
+      "cache_uploaded_bytes": 544804210,
+      "commands": [
+        [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,tls,windows-auth,crypto-aws-lc-rs",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "nextest",
+          "run",
+          "--no-fail-fast",
+          "--locked",
+          "-p",
+          "acton-service",
+          "--no-default-features",
+          "--features",
+          "http,tls,windows-auth,crypto-aws-lc-rs"
+        ]
+      ]
+    }
+  ]
+}
