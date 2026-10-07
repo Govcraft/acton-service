@@ -1,3 +1,4 @@
+// Temporary CI latency probe, first example edit.
 //! HTMX Task Manager Example
 //!
 //! A comprehensive example demonstrating HTMX patterns with acton-service:
