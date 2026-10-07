@@ -12,7 +12,7 @@ Start with the [homepage](/) to understand what acton-service is, then explore [
 
 ---
 
-acton-service provides production-ready token authentication middleware with **PASETO as the secure default** and JWT available as a feature-gated option. Both support optional Redis-backed token revocation.
+acton-service provides production-ready token authentication middleware with **PASETO as the secure default** and JWT available as a feature-gated option. Both support token-ID and subject revocation through Redis or the supported authentication databases.
 
 ## Quick Start
 
@@ -281,7 +281,7 @@ Token claims are extracted into a `Claims` struct available in request handlers:
 
 **Optional Claims:**
 - `iat` (issued at) - Token creation timestamp
-- `jti` (token ID) - Unique token identifier (required for revocation)
+- `jti` (token ID) - Unique identifier required for individual-token revocation; subject revocation also covers tokens without it
 - `iss` (issuer) - Token issuer
 - `aud` (audience) - Intended audience
 - `roles` - Array of role identifiers (e.g., ["user", "admin"])
@@ -342,9 +342,7 @@ async fn protected_handler(
 
 ## Token Revocation
 
-acton-service supports immediate token revocation using Redis as a revocation list store. This works with both PASETO and JWT tokens.
-
-### Enabling Token Revocation
+Revocation works with PASETO and JWT on HTTP and gRPC. Select Redis, PostgreSQL, SQL Server, Turso/libsql, or SurrealDB explicitly. Each database backend uses its usual feature and connection configuration; Redis requires `cache`. Token validation alone does not require `auth` or Redis.
 
 ```toml
 [token]
@@ -353,48 +351,62 @@ version = "v4"
 purpose = "local"
 key_path = "./keys/paseto.key"
 
-[redis]
-url = "redis://localhost:6379"
+[revocation]
+backend = "postgres"   # redis | postgres | mssql | turso | surrealdb
+namespace = "my-service"
+
+[database]
+url = "postgres://localhost/my_service"
 ```
 
-When Redis is configured, token revocation is automatically enabled. The middleware checks each token's `jti` claim against the revocation list.
+`ServiceBuilder` installs the configured checker on both transports. Unsupported features, missing connection configuration, or revocation without token authentication fail startup. Disconnected pools, missing schemas, and lookup errors deny protected requests. Infrastructure and configured public paths retain their authentication bypass behavior.
 
-### How Revocation Works
+### Initialize storage before serving
 
-1. **Token Validation**: Middleware extracts `jti` claim from token
-2. **Revocation Check**: Checks Redis for revoked token entry
-3. **Decision**: Rejects request if token is revoked, allows if valid
+Database implementations expose idempotent `initialize()` migrations and `cleanup_expired()` maintenance. They create `token_revocations`, keyed by namespace, record kind, and identifier, with a Unix-seconds value containing either token expiry or a persistent subject cutoff. SurrealDB calls that field `stamp`. SQL Server stores namespace and identifiers as UTF-8 bytes with a nonzero terminator in `VARBINARY` columns, with an identifier limit of 512 bytes, so trailing spaces and NUL bytes remain distinct. Run initialization with DDL credentials during deployment; runtime credentials need read and write access. SurrealDB also requires permission to inspect table metadata with `INFO FOR TABLE`, which the checker uses to refuse an uninitialized schema. Run cleanup periodically to remove expired token records. Subject cutoffs persist so old credentials cannot become valid again.
 
-**Revocation Entry Format:**
-```text
-Key: token:revoked:{jti}
-Value: {reason}
-TTL: Token expiration time - current time
-```
-
-### Revoking Tokens Programmatically
+The shared checker is available from the service's state. Pool agents connect asynchronously, so initialize after the selected pool is ready and before calling `serve()`:
 
 ```rust
-use acton_service::middleware::RedisTokenRevocation;
-use acton_service::middleware::TokenRevocation;
-
-async fn logout(
-    State(state): State<AppState>,
-    Extension(claims): Extension<Claims>,
-) -> Result<impl IntoResponse, Error> {
-    if let (Some(redis), Some(jti)) = (state.redis().await, &claims.jti) {
-        let revocation = RedisTokenRevocation::new(redis);
-
-        // Calculate TTL from token expiration
-        let ttl = (claims.exp - chrono::Utc::now().timestamp()) as u64;
-
-        // Revoke the token
-        revocation.revoke(jti, ttl).await?;
+let service = ServiceBuilder::new()
+    .with_config(config)
+    .with_routes(routes)
+    .try_build()?;
+let revocation = service.state().token_revocation()
+    .ok_or_else(|| Error::Internal("Revocation is required".into()))?;
+// PostgreSQL example. Use the selected backend's state accessor for other pools.
+tokio::time::timeout(std::time::Duration::from_secs(30), async {
+    while service.state().db().await.is_none() {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
+}).await.map_err(|_| Error::Internal("Revocation database startup deadline exceeded".into()))?;
+revocation.initialize().await?;
+service.serve().await?;
+```
 
-    Ok(StatusCode::NO_CONTENT)
+Applications with their own pool can construct `PgTokenRevocation`, `MssqlTokenRevocation`, `TursoTokenRevocation`, or `SurrealTokenRevocation` using that pool and a validated `RevocationNamespace`, initialize it, then inject an `Arc` with `ServiceBuilder::with_token_revocation`. Injection takes precedence over configuration.
+
+### Revoke individual tokens and subjects
+
+`revoke(jti, ttl_secs)` rejects an individual token through its remaining lifetime. Repeating revocation never shortens the stored expiration. A zero lifetime does not revoke an already expired token.
+
+`revoke_subject(subject, not_before)` rejects every token issued at or before the given Unix timestamp, including tokens without `jti`. Repeating it cannot lower the cutoff. Exact timestamp equality is rejected because issue and deactivation times have second precision. A token missing `iat` is also rejected whenever its subject has a cutoff. Tokens with neither a revoked ID nor a subject cutoff keep their existing validation behavior.
+
+```rust
+let revocation = state.token_revocation()
+    .ok_or_else(|| Error::Internal("Revocation is required".into()))?;
+let now = chrono::Utc::now().timestamp();
+revocation.revoke_subject(&claims.sub, now).await?;
+if let Some(jti) = &claims.jti {
+    let remaining = claims.exp.saturating_sub(now).max(0);
+    revocation.revoke(jti, u64::try_from(remaining)
+        .map_err(|error| Error::Internal(error.to_string()))?).await?;
 }
 ```
+
+Use stable, issuer-scoped subjects and keep the namespace identical on writers and validators. Before reporting deactivation or token retirement as complete, persist the revocation successfully. Subject cutoffs revoke existing tokens; the issuer must also prevent new issuance for deactivated principals.
+
+Redis uses expiring token keys and a persistent hash of subject cutoffs. Configured prefixes are `token:revoked:{namespace_byte_length}:{namespace}:`; direct `RedisTokenRevocation::new` preserves `token:revoked:`. Redis reserves the token ID `subject-cutoffs` for the subject hash and refuses it. All participants must use the same prefix.
 
 ### Revocation Use Cases
 
@@ -412,9 +424,9 @@ When the `audit` feature is enabled, the PASETO and JWT middleware automatically
 | `AuthLoginSuccess` | Token validated successfully | Notice |
 | `AuthTokenMissing` | No bearer token, or token header malformed | Informational |
 | `AuthTokenInvalid` | Bearer token present but failed validation | Warning |
-| `AuthTokenRevoked` | Validated token but the JTI is on the revocation list | Warning |
+| `AuthTokenRevoked` | Validated token denied by its token ID or subject cutoff | Warning |
 
-`AuthTokenRevoked` includes the revoked token's `jti` in the event metadata. SIEM rules and forensic queries that ask "which requests presented this revoked token" can anchor on that field directly.
+`AuthTokenRevoked` includes the token's `jti` when present; subject-only revocation can have no token ID. SIEM rules and forensic queries that ask "which requests presented this revoked token" can anchor on that field directly.
 
 The middleware no longer emits `AuthLoginFailed`. That event is reserved for application-level login handlers (typically `POST /auth/login`) where credentials are actually submitted. Emit it yourself from those handlers via `logger.log_auth(AuditEventKind::AuthLoginFailed, ...)`. Treating unauthenticated probes against protected routes as failed logins drowns out real signal — see the [audit docs](/docs/audit) for the rationale.
 
@@ -444,9 +456,10 @@ let services = GrpcServicesBuilder::new()
     .build::<()>(None);
 ```
 
-Tonic interceptors remain available for custom `with_interceptor` stacks
-(note that combining them with the framework-managed layer validates the
-token twice — harmless, but redundant):
+Tonic interceptors remain available for custom `with_interceptor` stacks.
+They validate cryptography synchronously and cannot await storage-backed
+revocation. Use `GrpcTokenAuthLayer` or the configured `ServiceBuilder` when
+revocation is required:
 
 ```rust
 use acton_service::grpc::{paseto_auth_interceptor, request_id_interceptor};
@@ -534,8 +547,13 @@ policy_path = "/path/to/policies.cedar"
 - Ensure token hasn't expired
 
 **401 Unauthorized - Token Revoked**
-- Token's JTI exists in Redis revocation list
-- Issue new token after re-authentication
+- The selected storage contains an unexpired token-ID revocation or a subject cutoff at or after the token's `iat`
+- Tokens missing `iat` are denied if a subject cutoff exists
+- Re-authenticate only when the issuer still permits the principal to receive new tokens
+
+**Storage failure on protected requests**
+- Confirm the configured pool is connected and the revocation schema was initialized
+- Check storage credentials, namespace, and backend logs; failed lookups deny requests
 
 **403 Forbidden After Successful Authentication**
 - Token auth passed but authorization denied

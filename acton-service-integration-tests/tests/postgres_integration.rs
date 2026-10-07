@@ -1,6 +1,9 @@
 //! Production PostgreSQL pool and audit storage, including verified TLS.
 #![cfg(feature = "postgres")]
 
+#[path = "common/revocation.rs"]
+mod revocation_contract;
+
 use acton_service::{
     audit::{
         storage::{pg::PgAuditStorage, AuditOrder, AuditQuery, AuditStorage, AuditVerification},
@@ -83,6 +86,23 @@ async fn postgres_fixture() {
     let pool = acton_service_postgres::database::create_pool(&(&config).into())
         .await
         .expect("verified TLS pool");
+    let revocation = acton_service::middleware::revocation::PgTokenRevocation::new(
+        pool.clone(),
+        acton_service::middleware::revocation::RevocationNamespace::new("fixture-a")
+            .expect("namespace"),
+    );
+    let isolated = acton_service::middleware::revocation::PgTokenRevocation::new(
+        pool.clone(),
+        acton_service::middleware::revocation::RevocationNamespace::new("fixture-b")
+            .expect("namespace"),
+    );
+    assert!(
+        acton_service::middleware::TokenRevocation::is_revoked(&revocation, "before-migration")
+            .await
+            .is_err(),
+        "missing revocation schema must fail closed"
+    );
+    revocation_contract::contract(&revocation, &isolated).await;
     assert!(sqlx::query_scalar::<_, bool>(
         "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()"
     )

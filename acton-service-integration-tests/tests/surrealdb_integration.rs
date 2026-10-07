@@ -1,5 +1,8 @@
 #![cfg(feature = "surrealdb")]
 
+#[path = "common/revocation.rs"]
+mod revocation_contract;
+
 use acton_service::{
     audit::{
         storage::{
@@ -53,6 +56,23 @@ async fn provisioned_surreal_authentication_and_audit_integrity() {
             .await
             .expect("authenticate provisioned root through production helper"),
     );
+    let revocation = acton_service::middleware::revocation::SurrealTokenRevocation::new(
+        client.clone(),
+        acton_service::middleware::revocation::RevocationNamespace::new("fixture-a")
+            .expect("namespace"),
+    );
+    let isolated = acton_service::middleware::revocation::SurrealTokenRevocation::new(
+        client.clone(),
+        acton_service::middleware::revocation::RevocationNamespace::new("fixture-b")
+            .expect("namespace"),
+    );
+    assert!(
+        acton_service::middleware::TokenRevocation::is_revoked(&revocation, "before-migration")
+            .await
+            .is_err(),
+        "missing revocation schema must fail closed"
+    );
+    revocation_contract::contract(&revocation, &isolated).await;
     let http_config = SurrealDbConfig {
         url: format!("http://{host}:{port}"),
         ..config.clone()

@@ -1,5 +1,8 @@
 #![cfg(feature = "mssql")]
 
+#[path = "common/revocation.rs"]
+mod revocation_contract;
+
 use acton_service::{
     accounts::{
         storage::{mssql::MssqlAccountStorage, AccountStorage},
@@ -15,6 +18,7 @@ use acton_service::{
         RefreshTokenStorage,
     },
     config::DatabaseConfig,
+    middleware::TokenRevocation,
     mssql,
 };
 use chrono::{Duration, Utc};
@@ -42,6 +46,68 @@ async fn mssql_fixture() {
     let config=DatabaseConfig{url:format!("Server=tcp:{host},{port};Database=master;User Id=sa;Password={};TrustServerCertificate=True;",MssqlServer::DEFAULT_SA_PASSWORD),max_connections:5,min_connections:1,connection_timeout_secs:30,max_retries:10,retry_delay_secs:2,optional:false,lazy_init:false,mssql_auth:acton_service::config::MssqlAuthMode::ConnectionString};
     let pool = mssql::create_pool(&config).await.expect("SQL Server pool");
     mssql::health_check(&pool).await.expect("health query");
+    {
+        let mut connection = pool.get().await.unwrap();
+        let row = connection
+            .simple_query("SELECT CASE WHEN 0x61=0x6100 THEN 1 ELSE 0 END AS padded")
+            .await
+            .unwrap()
+            .into_row()
+            .await
+            .unwrap()
+            .unwrap();
+        println!(
+            "SQL Server compares trailing zero bytes as equal: {}",
+            row.get::<i32, _>("padded").unwrap()
+        );
+    }
+    let revocation = acton_service::middleware::revocation::MssqlTokenRevocation::new(
+        pool.clone(),
+        acton_service::middleware::revocation::RevocationNamespace::new("fixture-a")
+            .expect("namespace"),
+    );
+    let isolated = acton_service::middleware::revocation::MssqlTokenRevocation::new(
+        pool.clone(),
+        acton_service::middleware::revocation::RevocationNamespace::new("fixture-a ")
+            .expect("namespace"),
+    );
+    assert!(
+        acton_service::middleware::TokenRevocation::is_revoked(&revocation, "before-migration")
+            .await
+            .is_err(),
+        "missing revocation schema must fail closed"
+    );
+    revocation_contract::contract(&revocation, &isolated).await;
+    revocation
+        .revoke("zero-token", 3600)
+        .await
+        .expect("token without NUL");
+    assert!(!revocation
+        .is_revoked("zero-token\0")
+        .await
+        .expect("NUL token differs"));
+    revocation
+        .revoke_subject("zero-subject", 100)
+        .await
+        .expect("subject without NUL");
+    assert_eq!(
+        revocation
+            .subject_not_before("zero-subject\0")
+            .await
+            .expect("NUL subject differs"),
+        None
+    );
+    let nul_namespace = acton_service::middleware::revocation::MssqlTokenRevocation::new(
+        pool.clone(),
+        acton_service::middleware::revocation::RevocationNamespace::new("fixture-a\0").unwrap(),
+    );
+    assert!(
+        !acton_service::middleware::TokenRevocation::is_revoked(&nul_namespace, "revocation-token")
+            .await
+            .unwrap(),
+        "namespace NUL suffix must remain distinct"
+    );
+
     let accounts = MssqlAccountStorage::new(pool.clone())
         .await
         .expect("accounts schema");

@@ -56,6 +56,13 @@ environment = "dev"  # dev, staging, production
 # # audience = "api.mydomain.com"
 # # public_paths = ["/admin/", "/forge/"]  # Skip token auth for these prefixes
 
+# Persistent token revocation, applied automatically to HTTP and gRPC.
+# Initialize the backend schema before serving. Storage failures deny requests.
+# Requires the selected backend feature and its connection config.
+# [revocation]
+# backend = "postgres"                 # redis | postgres | mssql | turso | surrealdb
+# namespace = "my-service"             # Same namespace for revokers and validators
+
 # JWT (RSA, ECDSA, or HMAC) — requires the `jwt` feature
 # [token]
 # format = "jwt"

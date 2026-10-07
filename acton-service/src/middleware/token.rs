@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use axum::http::HeaderMap;
 use serde::{Deserialize, Serialize};
 
-#[cfg(feature = "cache")]
 use async_trait::async_trait;
 
 use crate::error::Error;
@@ -126,9 +125,17 @@ impl Claims {
 /// Token validator trait
 ///
 /// Abstracts token validation for different formats (PASETO, JWT).
+#[async_trait]
 pub trait TokenValidator: Send + Sync + Clone {
-    /// Validate a token and extract claims
+    /// Validate cryptography and expiration, then extract claims.
+    ///
+    /// Callers must await `check_revocation` before authorizing these claims.
     fn validate_token(&self, token: &str) -> Result<Claims, Error>;
+
+    /// Check storage-backed revocation after cryptographic validation.
+    async fn check_revocation(&self, _claims: &Claims) -> Result<(), Error> {
+        Ok(())
+    }
 }
 
 /// Extract token from Authorization header (Bearer scheme)
@@ -149,21 +156,56 @@ pub fn extract_token(headers: &HeaderMap) -> Result<String, Error> {
     }
 }
 
-/// Token revocation trait (requires cache feature)
+/// Storage-backed token and subject revocation, independent of token format.
 ///
-/// Implementations of this trait provide storage for revoked token IDs (jti).
-/// This allows tokens to be invalidated before their expiration time.
-#[cfg(feature = "cache")]
+/// Existing jti-only implementations need only implement `is_revoked` and `revoke`.
 #[async_trait]
 pub trait TokenRevocation: Send + Sync {
-    /// Check if a token ID (jti) has been revoked
+    /// Create the backend schema before accepting traffic (no-op for custom checkers).
+    async fn initialize(&self) -> Result<(), Error> {
+        Ok(())
+    }
+
+    /// Remove expired token records; persistent subject cutoffs are retained.
+    async fn cleanup_expired(&self) -> Result<(), Error> {
+        Ok(())
+    }
+
+    /// Check whether an unexpired revocation exists for this token ID.
     async fn is_revoked(&self, jti: &str) -> Result<bool, Error>;
 
-    /// Revoke a token ID (jti) with a TTL in seconds
-    ///
-    /// The TTL should typically match the token's expiration time to prevent
-    /// the revocation list from growing unbounded.
+    /// Revoke a token for its remaining lifetime in seconds.
     async fn revoke(&self, jti: &str, ttl_secs: u64) -> Result<(), Error>;
+
+    /// Return the persistent subject cutoff, as a Unix timestamp in seconds.
+    async fn subject_not_before(&self, _subject: &str) -> Result<Option<i64>, Error> {
+        Ok(None)
+    }
+
+    /// Revoke all subject tokens issued at or before this timestamp.
+    ///
+    /// Implementations must never lower an existing cutoff. Cutoffs do not expire.
+    async fn revoke_subject(&self, _subject: &str, _not_before: i64) -> Result<(), Error> {
+        Err(Error::Internal(
+            "This revocation backend does not support subject cutoffs".into(),
+        ))
+    }
+
+    /// Check both token ID and subject cutoff, including tokens without a jti.
+    ///
+    /// A missing issued-at claim is rejected when a cutoff exists. Storage errors
+    /// propagate so protected requests fail closed.
+    async fn check_claims(&self, claims: &Claims) -> Result<bool, Error> {
+        if let Some(jti) = &claims.jti {
+            if self.is_revoked(jti).await? {
+                return Ok(true);
+            }
+        }
+        Ok(self
+            .subject_not_before(&claims.sub)
+            .await?
+            .is_some_and(|cutoff| claims.iat.is_none_or(|issued_at| issued_at <= cutoff)))
+    }
 }
 
 #[cfg(test)]
