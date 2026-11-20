@@ -9,7 +9,7 @@ repository = "https://github.com/Govcraft/acton-service"
 homepage = "https://govcraft.github.io/acton-service/"
 documentation = "https://docs.rs/acton-cli"
 readme = "README.md"
-keywords = ["microservice", "cli", "scaffolding", "codegen", "framework"]
+keywords = ["backend", "cli", "scaffolding", "codegen", "framework"]
 categories = ["command-line-utilities", "development-tools::build-utils"]
 
 # The CLI is being deprecated and will not receive further crates.io releases.
