@@ -47,7 +47,7 @@ deadpool-redis = { workspace = true, optional = true }
 async-nats = { workspace = true, optional = true }
 
 # JWT (optional - feature-gated)
-jsonwebtoken = { workspace = true, optional = true }
+jsonwebtoken = { optional = true, version = "12.0.0", features = ["rust_crypto"] }
 
 # Serialization
 serde = { workspace = true }
@@ -124,11 +124,11 @@ clickhouse = { version = "0.14.3", features = ["uuid"], optional = true }
 async-graphql = { version = "7.2.1", features = ["uuid", "chrono", "dataloader", "apollo_tracing", "tracing"], optional = true }
 async-graphql-axum = { version = "7.2.1", optional = true }
 bytes = { version = "1.11.1", optional = true }
-rustls = { version = "0.23.45", default-features = false, features = ["logging", "tls12", "std"], optional = true }
+rustls = { version = "0.23.46", default-features = false, features = ["logging", "tls12", "std"], optional = true }
 rustls-pki-types = { version = "1.14.1", features = ["std"], optional = true }
 arc-swap = { version = "1.9.2", optional = true }
 zeroize = { version = "1.9.0", optional = true }
-webpki-roots = { version = "1.0.9", optional = true }
+webpki-roots = { version = "1.0.12", optional = true }
 hyper-util = { version = "0.1.20", features = ["tokio"], optional = true }
 # Leaf-certificate parsing for mTLS caller authorization. Only the DER/SAN
 # decoding is used: rustls has already verified the chain against the
@@ -156,10 +156,10 @@ surrealdb = { version = "3.3.0", default-features = false, features = ["protocol
 # RustCrypto provider everywhere else. `full` therefore keeps building on
 # Windows and macOS. `build.rs` mirrors the split as `saml_backend_rustcrypto`.
 [target.'cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))'.dependencies]
-saml-rs = { version = "0.5.0", default-features = false, features = ["crypto-aws-lc"], optional = true }
+saml-rs = { version = "0.5.3", default-features = false, features = ["crypto-aws-lc"], optional = true }
 
 [target.'cfg(not(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))'.dependencies]
-saml-rs = { version = "0.5.0", default-features = false, features = ["crypto-rustcrypto"], optional = true }
+saml-rs = { version = "0.5.3", default-features = false, features = ["crypto-rustcrypto"], optional = true }
 
 [features]
 default = ["http", "observability", "crypto-aws-lc-rs"]
