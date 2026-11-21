@@ -83,7 +83,7 @@ impl JwtAuth {
             }
             Algorithm::ES256 | Algorithm::ES384 => DecodingKey::from_ec_pem(&public_key)?,
             Algorithm::HS256 | Algorithm::HS384 | Algorithm::HS512 => {
-                DecodingKey::from_secret(&public_key)
+                DecodingKey::from_secret(&public_key)?
             }
             _ => {
                 return Err(Error::Config(Box::new(figment::Error::from(format!(
@@ -408,7 +408,7 @@ fn create_decoding_key(key_bytes: &[u8], validation: &Validation) -> Result<Deco
             DecodingKey::from_ec_pem(key_bytes).map_err(|e| Error::Jwt(Box::new(e)))
         }
         Algorithm::HS256 | Algorithm::HS384 | Algorithm::HS512 => {
-            Ok(DecodingKey::from_secret(key_bytes))
+            DecodingKey::from_secret(key_bytes).map_err(|e| Error::Jwt(Box::new(e)))
         }
         _ => Err(Error::Internal(format!(
             "unsupported algorithm for key rotation: {:?}",

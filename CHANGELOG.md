@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- `jsonwebtoken` is upgraded from 10 to 12. `Error::Jwt` wraps
+  `jsonwebtoken::errors::Error`, so code that names or matches that type must
+  depend on `jsonwebtoken` 12. HMAC key constructors in 12 return `Result`;
+  acton-service maps those failures to `Error::Jwt`.
+
+### Security
+
+- `rustls` floor raised to 0.23.46 for RUSTSEC-2026-0346, -0347, -0348 and
+  -0349, and `webpki-roots` to 1.0.12 for RUSTSEC-2026-0381. The lockfile also
+  moves `rustls-webpki` to 0.103.16+ (RUSTSEC-2026-0382), `quinn-proto` and
+  `quinn-udp` (RUSTSEC-2026-0338 to -0342, -0523, -0524, -0538), `ctutils`
+  (RUSTSEC-2026-0385), `pulldown-cmark` (RUSTSEC-2026-0414, -0433) and
+  `webpki-root-certs` (RUSTSEC-2026-0383) to patched releases.
+- `jsonwebtoken` 12 moves the JWT RustCrypto backend to `p256`/`p384` 0.14,
+  removing that path to `crypto-bigint` 0.5 (RUSTSEC-2026-0387).
+- Advisories with no non-breaking fix are ignored with recorded rationale:
+  `rustls` 0.22 and `rustls-webpki` 0.102 reached only through optional
+  `libsql` (no upstream release on rustls 0.23 yet), `crypto-bigint` 0.5 on the
+  non-Linux RustCrypto SAML backend (#184), build-time `zip` 3.0 in
+  `utoipa-swagger-ui` (#185), and unmaintained `chrono`.
+
 ## [acton-service-v0.47.0] - 2026-10-07
 
 This release adds persistent token revocation, removes password stretching from

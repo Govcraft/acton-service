@@ -4783,7 +4783,7 @@ mod optional_auth_tests {
         let token = jsonwebtoken::encode(
             &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
             &claims,
-            &jsonwebtoken::EncodingKey::from_secret(&key),
+            &jsonwebtoken::EncodingKey::from_secret(&key).expect("test HMAC secret is valid"),
         )
         .unwrap();
         assert_optional_auth(TokenConfig::Jwt(config), token).await;
@@ -4941,7 +4941,7 @@ mod audit_request_tracking_tests {
         let token = jsonwebtoken::encode(
             &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
             &claims,
-            &jsonwebtoken::EncodingKey::from_secret(&key),
+            &jsonwebtoken::EncodingKey::from_secret(&key).expect("test HMAC secret is valid"),
         )
         .unwrap();
         for audit_http in [true, false] {
@@ -4994,7 +4994,7 @@ mod rate_limit_posture_tests {
         let token = jsonwebtoken::encode(
             &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
             &serde_json::json!({"sub":"user:alice", "exp":chrono::Utc::now().timestamp()+3600}),
-            &jsonwebtoken::EncodingKey::from_secret(&key),
+            &jsonwebtoken::EncodingKey::from_secret(&key).expect("test HMAC secret is valid"),
         )
         .unwrap();
         (config, key_file, token)
@@ -5425,7 +5425,8 @@ mod revocation_tests {
             jsonwebtoken::encode(
                 &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
                 claims,
-                &jsonwebtoken::EncodingKey::from_secret(&[42_u8; 32]),
+                &jsonwebtoken::EncodingKey::from_secret(&[42_u8; 32])
+                    .expect("test HMAC secret is valid"),
             )
             .unwrap()
         })
