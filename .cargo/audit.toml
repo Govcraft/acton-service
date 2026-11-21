@@ -37,4 +37,40 @@ ignore = [
     # and an ignore it cannot match is a line nobody can later verify.
     # Revisit when rust_decimal's optional rkyv moves to 0.8.
     "RUSTSEC-2026-0235",
+    # rustls 0.22.4 / rustls-webpki 0.102.8 advisories published 2026-10/11:
+    # distrusted intermediates accepted (0382), unauthenticated ServerHello
+    # downgrading later connections to classical key exchange (0346), and
+    # client session secrets in `Debug` output (0349). The 0.23 line used by
+    # acton-service is upgraded to the patched 0.23.46. The 0.22 line remains
+    # only through optional libsql 0.9.30 -> hyper-rustls 0.25, and libsql
+    # 0.10.0 (latest) still pins hyper-rustls 0.25. These affect the Turso
+    # client connection only; acton-service never formats libsql's session
+    # values. Re-evaluate with the next libsql release on rustls >=0.23.
+    "RUSTSEC-2026-0346",
+    "RUSTSEC-2026-0349",
+    "RUSTSEC-2026-0382",
+    # crypto-bigint 0.5.5 timing variability. After the jsonwebtoken 12
+    # upgrade it is reached only via saml-rs 0.5 -> bergshamra 0.9 ->
+    # elliptic-curve 0.13, the RustCrypto SAML backend selected on non-Linux
+    # targets (Linux x86_64/aarch64 use aws-lc). The fix needs saml-rs 0.8,
+    # a breaking upgrade tracked in
+    # https://github.com/Govcraft/acton-service/issues/184
+    "RUSTSEC-2026-0387",
+    # zip 3.0.0 extraction advisories. zip is a build dependency of
+    # utoipa-swagger-ui 9.0.2 (latest 9.x), used only to unpack the pinned
+    # Swagger UI archive at build time; it is not linked into binaries and
+    # handles no runtime input. The fix (utoipa-swagger-ui 10) requires the
+    # breaking utoipa 6 upgrade tracked in
+    # https://github.com/Govcraft/acton-service/issues/185
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
+    "RUSTSEC-2026-0429",
+    "RUSTSEC-2026-0545",
+    "RUSTSEC-2026-0548",
+    # libsqlite3-sys 0.30.1 (bundled C SQLite CVE). A lockfile entry only:
+    # `cargo tree -i libsqlite3-sys --all-features --target all` reports
+    # "nothing to print", and cargo-deny's graph-based check does not flag it.
+    # Deliberately not mirrored into deny.toml, as with RUSTSEC-2026-0235.
+    "RUSTSEC-2026-0459",
 ]

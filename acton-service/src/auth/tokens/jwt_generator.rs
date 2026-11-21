@@ -214,7 +214,7 @@ fn create_encoding_key(key_bytes: &[u8], algorithm: Algorithm) -> Result<Encodin
             EncodingKey::from_ec_pem(key_bytes).map_err(|e| Error::Jwt(Box::new(e)))
         }
         Algorithm::HS256 | Algorithm::HS384 | Algorithm::HS512 => {
-            Ok(EncodingKey::from_secret(key_bytes))
+            EncodingKey::from_secret(key_bytes).map_err(|e| Error::Jwt(Box::new(e)))
         }
         _ => Err(Error::Config(Box::new(figment::Error::from(
             "Unsupported algorithm for key creation",
@@ -231,7 +231,9 @@ mod tests {
     fn generated_jti_is_v7_typeid_and_supplied_legacy_jti_is_preserved() {
         let secret = b"synthetic-test-signing-secret-with-enough-bytes";
         let mut generator = JwtGenerator {
-            encoding_key: Arc::new(EncodingKey::from_secret(secret)),
+            encoding_key: Arc::new(
+                EncodingKey::from_secret(secret).expect("test HMAC secret is valid"),
+            ),
             algorithm: Algorithm::HS256,
             config: TokenGenerationConfig::default(),
             issuer: None,
@@ -246,7 +248,7 @@ mod tests {
         let token = generator.generate_token(&claims).unwrap();
         let decoded = decode::<JwtClaims>(
             &token,
-            &DecodingKey::from_secret(secret),
+            &DecodingKey::from_secret(secret).expect("test HMAC secret is valid"),
             &Validation::new(Algorithm::HS256),
         )
         .unwrap();
@@ -258,7 +260,7 @@ mod tests {
         let token = generator.generate_token(&claims).unwrap();
         let decoded = decode::<JwtClaims>(
             &token,
-            &DecodingKey::from_secret(secret),
+            &DecodingKey::from_secret(secret).expect("test HMAC secret is valid"),
             &Validation::new(Algorithm::HS256),
         )
         .unwrap();
