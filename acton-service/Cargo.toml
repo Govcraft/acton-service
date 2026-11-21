@@ -9,7 +9,7 @@ repository = "https://github.com/Govcraft/acton-service"
 homepage = "https://govcraft.github.io/acton-service/"
 documentation = "https://docs.rs/acton-service"
 readme = "../README.md"
-keywords = ["microservice", "framework", "grpc", "rest", "websocket"]
+keywords = ["backend", "framework", "grpc", "graphql", "authentication"]
 categories = ["web-programming::http-server", "asynchronous", "network-programming"]
 
 # These are used by generated protobuf code from tonic::include_proto!
